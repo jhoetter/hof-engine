@@ -2,28 +2,20 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import typer
 from rich.console import Console
 from rich.table import Table as RichTable
+
+from hof.cli.commands import bootstrap
 
 app = typer.Typer()
 console = Console()
 
 
-def _ensure_discovered() -> None:
-    from hof.config import load_config
-    from hof.core.discovery import discover_all
-
-    config = load_config(Path.cwd())
-    discover_all(Path.cwd(), config.discovery_dirs)
-
-
 @app.command("list")
 def list_cron() -> None:
     """List all registered cron jobs."""
-    _ensure_discovered()
+    bootstrap()
     from hof.core.registry import registry
 
     table = RichTable(title="Registered Cron Jobs")
@@ -48,7 +40,7 @@ def run_cron(
     cron_name: str = typer.Argument(help="Cron job name to trigger manually."),
 ) -> None:
     """Manually trigger a cron job."""
-    _ensure_discovered()
+    bootstrap()
     from hof.core.registry import registry
 
     meta = registry.get_cron(cron_name)
@@ -66,7 +58,7 @@ def enable_cron(
     cron_name: str = typer.Argument(help="Cron job name."),
 ) -> None:
     """Enable a cron job."""
-    _ensure_discovered()
+    bootstrap()
     from hof.core.registry import registry
 
     meta = registry.get_cron(cron_name)
@@ -83,7 +75,7 @@ def disable_cron(
     cron_name: str = typer.Argument(help="Cron job name."),
 ) -> None:
     """Disable a cron job."""
-    _ensure_discovered()
+    bootstrap()
     from hof.core.registry import registry
 
     meta = registry.get_cron(cron_name)

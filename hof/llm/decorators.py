@@ -9,12 +9,11 @@ def llm(
     fn: Callable | None = None,
     *,
     provider: Any = None,
-    reasoning_first: bool = False,
+    reasoning_first: bool = True,
     stream: bool = False,
-    max_retries: int = 2,
     langfuse_metadata: dict | None = None,
 ) -> Callable:
-    """LLM decorator that wraps llm-markdown with hof defaults.
+    """LLM decorator that wraps llm-markdown's ``prompt()`` with hof defaults.
 
     If no provider is specified, uses the project's configured default provider.
     """
@@ -38,20 +37,19 @@ def llm(
             return no_provider_wrapper
 
         try:
-            from llm_markdown import llm as llm_decorator
-
-            return llm_decorator(
-                provider=actual_provider,
-                reasoning_first=reasoning_first,
-                stream=stream,
-                max_retries=max_retries,
-                langfuse_metadata=langfuse_metadata or {},
-            )(fn)
+            from llm_markdown import prompt
         except ImportError:
             raise ImportError(
                 "llm-markdown is required for LLM integration. "
                 "Install it with: pip install llm-markdown"
             )
+
+        return prompt(
+            provider=actual_provider,
+            reasoning_first=reasoning_first,
+            stream=stream,
+            langfuse_metadata=langfuse_metadata or {},
+        )(fn)
 
     if fn is not None:
         return decorator(fn)

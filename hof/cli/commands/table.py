@@ -3,22 +3,15 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.table import Table as RichTable
 
+from hof.cli.commands import bootstrap
+
 app = typer.Typer()
 console = Console()
-
-
-def _ensure_discovered() -> None:
-    from hof.config import load_config
-    from hof.core.discovery import discover_all
-
-    config = load_config(Path.cwd())
-    discover_all(Path.cwd(), config.discovery_dirs)
 
 
 @app.callback(invoke_without_command=True)
@@ -41,7 +34,7 @@ def table_root(
         console.print("[dim]Actions: list, get, create, update, delete, count[/]")
         raise typer.Exit()
 
-    _ensure_discovered()
+    bootstrap()
     from hof.core.registry import registry
 
     table_cls = registry.get_table(table_name)
@@ -102,7 +95,7 @@ def table_root(
 @app.command("list-definitions")
 def list_definitions() -> None:
     """List all registered table definitions."""
-    _ensure_discovered()
+    bootstrap()
     from hof.core.registry import registry
 
     table = RichTable(title="Registered Tables")

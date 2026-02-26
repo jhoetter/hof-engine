@@ -75,7 +75,7 @@ def research_online(lead_id: str, name: str, email: str, company: str, title: st
 @enrich_lead_flow.node(depends_on=[research_online])
 @llm(reasoning_first=True)
 def enrich_with_llm(lead_id: str, name: str, company: str, research_summary: str) -> LeadEnrichment:
-    f"""You are a B2B sales intelligence analyst.
+    """You are a B2B sales intelligence analyst.
 
 Given the following research about a lead, extract structured enrichment data.
 Be as specific as possible. If you cannot determine a field with confidence,

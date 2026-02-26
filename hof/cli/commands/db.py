@@ -7,6 +7,8 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
+from hof.cli.commands import bootstrap
+
 app = typer.Typer()
 console = Console()
 
@@ -16,13 +18,13 @@ def migrate(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show SQL without applying."),
 ) -> None:
     """Generate and apply pending migrations."""
-    from hof.config import load_config
-    from hof.core.discovery import discover_all
     from hof.db.migrations import run_migrations
 
+    bootstrap()
+    from hof.config import get_config
+
     project_root = Path.cwd()
-    config = load_config(project_root)
-    discover_all(project_root, config.discovery_dirs)
+    config = get_config()
 
     console.print("[cyan]Running migrations...[/]")
     run_migrations(project_root, config, dry_run=dry_run)
@@ -37,27 +39,25 @@ def rollback(
     steps: int = typer.Option(1, "--steps", "-s", help="Number of migrations to rollback."),
 ) -> None:
     """Rollback the last migration(s)."""
-    from hof.config import load_config
     from hof.db.migrations import rollback_migrations
 
-    project_root = Path.cwd()
-    config = load_config(project_root)
+    bootstrap()
+    from hof.config import get_config
 
     console.print(f"[yellow]Rolling back {steps} migration(s)...[/]")
-    rollback_migrations(project_root, config, steps=steps)
+    rollback_migrations(Path.cwd(), get_config(), steps=steps)
     console.print("[green]Rollback complete.[/]")
 
 
 @app.command("history")
 def history() -> None:
     """Show migration history."""
-    from hof.config import load_config
     from hof.db.migrations import get_migration_history
 
-    project_root = Path.cwd()
-    config = load_config(project_root)
+    bootstrap()
+    from hof.config import get_config
 
-    entries = get_migration_history(project_root, config)
+    entries = get_migration_history(Path.cwd(), get_config())
     if not entries:
         console.print("[dim]No migrations found.[/]")
         return
@@ -69,11 +69,10 @@ def history() -> None:
 @app.command("current")
 def current() -> None:
     """Show current migration state."""
-    from hof.config import load_config
     from hof.db.migrations import get_current_revision
 
-    project_root = Path.cwd()
-    config = load_config(project_root)
+    bootstrap()
+    from hof.config import get_config
 
-    revision = get_current_revision(project_root, config)
+    revision = get_current_revision(Path.cwd(), get_config())
     console.print(f"Current revision: {revision or '[dim]none[/]'}")

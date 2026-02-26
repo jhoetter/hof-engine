@@ -3,22 +3,15 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.table import Table as RichTable
 
+from hof.cli.commands import bootstrap
+
 app = typer.Typer()
 console = Console()
-
-
-def _ensure_discovered() -> None:
-    from hof.config import load_config
-    from hof.core.discovery import discover_all
-
-    config = load_config(Path.cwd())
-    discover_all(Path.cwd(), config.discovery_dirs)
 
 
 @app.command("run")
@@ -27,7 +20,7 @@ def run_flow(
     input_json: str = typer.Option("{}", "--input", "-i", help="JSON input for the flow."),
 ) -> None:
     """Trigger a new flow execution."""
-    _ensure_discovered()
+    bootstrap()
     from hof.core.registry import registry
 
     flow = registry.get_flow(flow_name)
@@ -49,7 +42,7 @@ def list_executions(
     limit: int = typer.Option(20, "--limit", "-l", help="Max results."),
 ) -> None:
     """List flow executions."""
-    _ensure_discovered()
+    bootstrap()
     from hof.flows.state import ExecutionStore
 
     store = ExecutionStore()
@@ -81,7 +74,7 @@ def get_execution(
     logs: bool = typer.Option(False, "--logs", help="Show execution logs."),
 ) -> None:
     """Get details of a flow execution."""
-    _ensure_discovered()
+    bootstrap()
     from hof.flows.state import ExecutionStore
 
     store = ExecutionStore()
@@ -122,7 +115,7 @@ def cancel_execution(
 @app.command("list-definitions")
 def list_definitions() -> None:
     """List all registered flow definitions."""
-    _ensure_discovered()
+    bootstrap()
     from hof.core.registry import registry
 
     table = RichTable(title="Registered Flows")

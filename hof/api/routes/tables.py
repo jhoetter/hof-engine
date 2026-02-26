@@ -1,0 +1,122 @@
+"""Auto-generated CRUD routes for all registered tables."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from hof.api.auth import verify_auth
+from hof.core.registry import registry
+
+router = APIRouter()
+
+
+@router.get("")
+async def list_tables(user: str = Depends(verify_auth)) -> list[dict]:
+    """List all registered tables."""
+    result = []
+    for name, table_cls in registry.tables.items():
+        columns = [
+            {"name": c.name, "type": str(c.type)}
+            for c in table_cls.__table__.columns
+        ]
+        result.append({"name": name, "columns": columns})
+    return result
+
+
+@router.get("/{table_name}")
+async def list_records(
+    table_name: str,
+    filter: str | None = Query(None, description="Filter: key:value,key:value"),
+    order_by: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    search: str | None = Query(None),
+    user: str = Depends(verify_auth),
+) -> list[dict]:
+    """List records from a table with optional filtering and pagination."""
+    table_cls = registry.get_table(table_name)
+    if table_cls is None:
+        raise HTTPException(404, f"Table '{table_name}' not found")
+
+    filters = _parse_filter_string(filter) if filter else {}
+    records = table_cls.query(filters=filters, order_by=order_by, limit=limit, offset=offset)
+    return [r.to_dict() for r in records]
+
+
+@router.post("/{table_name}")
+async def create_record(
+    table_name: str,
+    body: dict[str, Any],
+    user: str = Depends(verify_auth),
+) -> dict:
+    """Create a new record."""
+    table_cls = registry.get_table(table_name)
+    if table_cls is None:
+        raise HTTPException(404, f"Table '{table_name}' not found")
+
+    record = table_cls.create(**body)
+    return record.to_dict()
+
+
+@router.get("/{table_name}/{record_id}")
+async def get_record(
+    table_name: str,
+    record_id: str,
+    user: str = Depends(verify_auth),
+) -> dict:
+    """Get a single record by ID."""
+    table_cls = registry.get_table(table_name)
+    if table_cls is None:
+        raise HTTPException(404, f"Table '{table_name}' not found")
+
+    record = table_cls.get(record_id)
+    if record is None:
+        raise HTTPException(404, f"Record '{record_id}' not found")
+    return record.to_dict()
+
+
+@router.put("/{table_name}/{record_id}")
+async def update_record(
+    table_name: str,
+    record_id: str,
+    body: dict[str, Any],
+    user: str = Depends(verify_auth),
+) -> dict:
+    """Update a record by ID."""
+    table_cls = registry.get_table(table_name)
+    if table_cls is None:
+        raise HTTPException(404, f"Table '{table_name}' not found")
+
+    record = table_cls.update(record_id, **body)
+    if record is None:
+        raise HTTPException(404, f"Record '{record_id}' not found")
+    return record.to_dict()
+
+
+@router.delete("/{table_name}/{record_id}")
+async def delete_record(
+    table_name: str,
+    record_id: str,
+    user: str = Depends(verify_auth),
+) -> dict:
+    """Delete a record by ID."""
+    table_cls = registry.get_table(table_name)
+    if table_cls is None:
+        raise HTTPException(404, f"Table '{table_name}' not found")
+
+    deleted = table_cls.delete(record_id)
+    if not deleted:
+        raise HTTPException(404, f"Record '{record_id}' not found")
+    return {"deleted": True, "id": record_id}
+
+
+def _parse_filter_string(filter_str: str) -> dict:
+    """Parse 'key:value,key:value' filter string."""
+    filters = {}
+    for pair in filter_str.split(","):
+        if ":" in pair:
+            key, val = pair.split(":", 1)
+            filters[key.strip()] = val.strip()
+    return filters

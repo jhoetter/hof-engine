@@ -1,0 +1,12 @@
+{
+  "name": "@hof-engine/react",
+  "version": "0.1.0",
+  "description": "React hooks for hof-engine: tables, functions, flows, and human-in-the-loop nodes.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "peerDependencies": {
+    "react": ">=18.0.0"
+  },
+  "files": ["src"]
+}

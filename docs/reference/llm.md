@@ -1,6 +1,6 @@
 # LLM Integration
 
-hof-engine provides first-class LLM support via the `llm-markdown` library. Define LLM-powered functions using decorators with structured outputs, multimodal inputs, and observability.
+hof-engine provides first-class LLM support via the [`llm-markdown`](https://pypi.org/project/llm-markdown/) library. Define LLM-powered functions using decorators with structured outputs, multimodal inputs, and observability.
 
 ## Setup
 
@@ -14,68 +14,82 @@ config = Config(
     database_url="postgresql://localhost:5432/myapp",
     redis_url="redis://localhost:6379/0",
     llm_provider="openai",
-    llm_model="gpt-5",
-    llm_api_key="${OPENAI_API_KEY}",  # Reads from environment variable
+    llm_model="gpt-4o",
+    llm_api_key="${OPENAI_API_KEY}",
 )
 ```
 
 ## Basic Usage
 
 ```python
-from hof.llm import llm
+from hof.llm import prompt
 
-@llm()
+@prompt()
 def summarize(text: str) -> str:
-    f"""
-    Summarize the following text in 2-3 sentences:
+    """Summarize the following text in 2-3 sentences:
 
-    {text}
-    """
+    {text}"""
 ```
 
-The function's docstring (or triple-quoted f-string) is the prompt. Parameters are interpolated. The return type defines the expected output format.
+Three rules (from `llm-markdown`):
+
+1. The **docstring** is the prompt. Use `{param}` to interpolate function arguments.
+2. The **return type** controls the output format. `-> str` gives plain text. `-> MyModel` gives validated structured output.
+3. **`Image` parameters** are attached as vision inputs automatically.
 
 ## Structured Outputs
 
-Use Pydantic models for structured LLM responses:
+Return a Pydantic model and the response is validated automatically:
 
 ```python
 from pydantic import BaseModel
-from hof.llm import llm
+from hof.llm import prompt
 
 class Category(BaseModel):
     name: str
     confidence: float
     reasoning: str
 
-@llm(reasoning_first=True)
+@prompt()
 def classify(content: str) -> Category:
-    f"""
-    Classify the following document into a category.
+    """Classify the following document into a category.
     Return the category name, your confidence (0-1), and your reasoning.
 
     Document:
-    {content}
-    """
+    {content}"""
 ```
 
-The `reasoning_first=True` option enables chain-of-thought: the LLM reasons in `<reasoning>` tags before producing the structured output.
+The library generates a JSON schema from the Pydantic model and uses the provider's native structured output (e.g. OpenAI's `response_format`). If the provider doesn't support it, it falls back to JSON prompting automatically.
+
+`List[...]` and `Dict[...]` work the same way:
+
+```python
+from typing import List
+
+@prompt()
+def list_steps(task: str) -> List[str]:
+    """List the steps to complete this task: {task}"""
+```
 
 ## Multimodal (Images)
 
+Use `Image` typed parameters for vision inputs:
+
 ```python
-from hof.llm import llm
+from hof.llm import prompt
+from llm_markdown import Image
 
-@llm()
-def describe_image(image_url: str) -> str:
-    f"""
-    Describe what you see in this image:
+@prompt()
+def describe_image(image: Image, question: str) -> str:
+    """Answer this question about the image: {question}"""
 
-    !image[{image_url}]
-    """
+result = describe_image(
+    image=Image("https://example.com/chart.png"),
+    question="What trend does this chart show?",
+)
 ```
 
-The `!image[url_or_base64]` syntax embeds images in the prompt. Supports URLs and base64-encoded images.
+`Image` accepts URLs, base64 strings, or data URIs. Use `List[Image]` for multiple images.
 
 ## Using LLM in Flow Nodes
 
@@ -83,53 +97,58 @@ LLM decorators compose with flow node decorators:
 
 ```python
 from hof import Flow
-from hof.llm import llm
+from hof.llm import prompt
 
 pipeline = Flow("analysis")
 
 @pipeline.node
-@llm(reasoning_first=True)
+@prompt()
 def analyze_sentiment(text: str) -> SentimentResult:
-    f"""
-    Analyze the sentiment of this text:
-    {text}
-    """
+    """Analyze the sentiment of this text: {text}"""
 
 @pipeline.node(depends_on=[analyze_sentiment])
 def store_result(name: str, confidence: float, reasoning: str) -> dict:
-    # Receives the structured output from the LLM node
     return {"stored": True}
+```
+
+## Streaming
+
+```python
+@prompt(stream=True)
+def tell_story(topic: str) -> str:
+    """Tell a short story about {topic}."""
+
+for chunk in tell_story("a robot learning to paint"):
+    print(chunk, end="", flush=True)
 ```
 
 ## LLM Options
 
 ```python
-@llm(
-    reasoning_first=True,       # Enable chain-of-thought reasoning
+@prompt(
     stream=False,               # Enable streaming responses
-    max_retries=2,              # Retry on parsing failures
     provider=custom_provider,   # Override the default provider
+    langfuse_metadata={...},    # Metadata for Langfuse observability
 )
 ```
 
 ## Custom Providers
 
-Implement the `LLMProvider` interface for custom backends:
+Subclass `LLMProvider` from `llm-markdown` for custom backends:
 
 ```python
-from hof.llm import LLMProvider
+from llm_markdown.providers import LLMProvider
 
 class MyProvider(LLMProvider):
-    def query(self, messages, **kwargs):
-        # Call your LLM backend
-        return response_text
+    def complete(self, messages, **kwargs):
+        ...  # return response string
 
-    def query_structured(self, messages, schema, **kwargs):
-        # Call with structured output
-        return parsed_result
+    async def complete_async(self, messages, **kwargs):
+        ...  # return response string
 
-    def supports_structured_output(self):
-        return True
+    # Optional -- enables native structured output
+    def complete_structured(self, messages, schema):
+        ...  # return parsed dict
 ```
 
 Register in config:
@@ -140,7 +159,7 @@ config = Config(
 )
 ```
 
-## Observability
+## Observability with Langfuse
 
 hof integrates with Langfuse for LLM observability (optional):
 
@@ -151,9 +170,4 @@ config = Config(
 )
 ```
 
-When configured, all LLM calls are automatically logged to Langfuse with:
-
-- Prompt and response content
-- Token usage and cost
-- Latency
-- Metadata (flow name, node name, execution ID)
+When configured, all LLM calls are automatically logged to Langfuse with prompt/response content, token usage, latency, and metadata.

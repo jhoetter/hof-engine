@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 
 from hof import Flow, human_node, HofError
-from hof.llm import llm
+from hof.llm import prompt
 from tables.lead import Lead, EnrichmentResult
 
 
@@ -73,7 +73,7 @@ def research_online(lead_id: str, name: str, email: str, company: str, title: st
 
 
 @enrich_lead_flow.node(depends_on=[research_online])
-@llm(reasoning_first=True)
+@prompt()
 def enrich_with_llm(lead_id: str, name: str, company: str, research_summary: str) -> LeadEnrichment:
     """You are a B2B sales intelligence analyst.
 

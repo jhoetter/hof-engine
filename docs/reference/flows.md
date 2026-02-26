@@ -127,11 +127,11 @@ export function ReviewPanel({ document, suggestions, onComplete }) {
 
 ## LLM Nodes
 
-Combine `@flow.node` with `@llm` from hof's LLM integration:
+Combine `@flow.node` with `@prompt` from hof's LLM integration:
 
 ```python
 from hof import Flow
-from hof.llm import llm
+from hof.llm import prompt
 from pydantic import BaseModel
 
 class Category(BaseModel):
@@ -141,17 +141,15 @@ class Category(BaseModel):
 classify_flow = Flow("classification")
 
 @classify_flow.node
-@llm(reasoning_first=True)
+@prompt()
 def classify_document(content: str) -> Category:
-    f"""
-    Classify the following document into a category.
+    """Classify the following document into a category.
 
     Document content:
-    {content}
-    """
+    {content}"""
 ```
 
-The `@llm` decorator turns the function's docstring into an LLM prompt. The return type (`Category`) defines the structured output schema.
+The `@prompt` decorator turns the function's docstring into an LLM prompt. The return type (`Category`) defines the structured output schema automatically.
 
 ## Triggering Flows
 

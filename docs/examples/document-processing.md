@@ -142,7 +142,7 @@ def read_markdown(file_path: str) -> dict:
 
 ```python
 # functions/classification.py
-from hof.llm import llm
+from hof.llm import prompt
 from hof import function
 from pydantic import BaseModel
 
@@ -153,17 +153,15 @@ class DocumentCategory(BaseModel):
     reasoning: str
 
 @function(tags=["ai", "classification"])
-@llm(reasoning_first=True)
+@prompt()
 def classify_document_content(content: str, file_type: str) -> DocumentCategory:
-    f"""
-    Classify the following {file_type} document into a category.
+    """Classify the following {file_type} document into a category.
 
     Choose from: finance, legal, technical, marketing, hr, operations, other.
     Also provide a subcategory.
 
     Document content:
-    {content}
-    """
+    {content}"""
 
 class DataroomMatch(BaseModel):
     dataroom_name: str
@@ -171,21 +169,19 @@ class DataroomMatch(BaseModel):
     reasoning: str
 
 @function(tags=["ai", "matching"])
-@llm(reasoning_first=True)
+@prompt()
 def match_to_dataroom(
     content_summary: str,
     category: str,
     available_datarooms: list[str],
 ) -> DataroomMatch:
-    f"""
-    Match this document to the most appropriate dataroom.
+    """Match this document to the most appropriate dataroom.
 
     Document category: {category}
     Document summary: {content_summary}
 
     Available datarooms:
-    {', '.join(available_datarooms)}
-    """
+    {available_datarooms}"""
 ```
 
 ## Step 4: Define the Flow
@@ -193,7 +189,7 @@ def match_to_dataroom(
 ```python
 # flows/document_processing.py
 from hof import Flow, human_node
-from hof.llm import llm
+from hof.llm import prompt
 from pydantic import BaseModel
 
 from tables.document import Document, Dataroom, DocumentAttribute
@@ -272,17 +268,15 @@ class AttributeList(BaseModel):
     attributes: list[DiscoveredAttribute]
 
 @pipeline.node(depends_on=[classify])
-@llm(reasoning_first=True)
+@prompt()
 def discover_attributes(content_summary: str, category: str) -> AttributeList:
-    f"""
-    Extract structured attributes from this {category} document.
+    """Extract structured attributes from this {category} document.
 
     For example, if it's a financial document, extract: date, amount, currency, parties.
     If it's a legal document, extract: parties, effective_date, jurisdiction, contract_type.
 
     Document content:
-    {content_summary}
-    """
+    {content_summary}"""
 
 # --- Human review (waits for both parallel branches) ---
 @pipeline.node(depends_on=[match_dataroom, discover_attributes])

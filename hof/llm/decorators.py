@@ -1,21 +1,23 @@
-"""Re-export the @llm decorator with hof-aware defaults."""
+"""Thin wrapper around llm-markdown's ``@prompt`` with hof-aware defaults."""
 
 from __future__ import annotations
 
+import functools
 from typing import Any, Callable
 
 
-def llm(
+def prompt(
     fn: Callable | None = None,
     *,
     provider: Any = None,
-    reasoning_first: bool = True,
     stream: bool = False,
     langfuse_metadata: dict | None = None,
 ) -> Callable:
-    """LLM decorator that wraps llm-markdown's ``prompt()`` with hof defaults.
+    """LLM prompt decorator — wraps ``llm_markdown.prompt`` with the project's
+    configured provider so you don't have to pass it every time.
 
-    If no provider is specified, uses the project's configured default provider.
+    Structured output is automatic: return a Pydantic model and the response
+    is validated. Return ``str`` for plain text.
     """
 
     def decorator(fn: Callable) -> Callable:
@@ -26,7 +28,6 @@ def llm(
             actual_provider = get_provider()
 
         if actual_provider is None:
-            import functools
 
             @functools.wraps(fn)
             def no_provider_wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -37,18 +38,17 @@ def llm(
             return no_provider_wrapper
 
         try:
-            from llm_markdown import prompt
+            from llm_markdown import prompt as _prompt
         except ImportError:
             raise ImportError(
-                "llm-markdown is required for LLM integration. "
-                "Install it with: pip install llm-markdown"
+                "llm-markdown[openai] is required for LLM integration. "
+                "Install it with: pip install llm-markdown[openai]"
             )
 
-        return prompt(
-            provider=actual_provider,
-            reasoning_first=reasoning_first,
+        return _prompt(
+            actual_provider,
             stream=stream,
-            langfuse_metadata=langfuse_metadata or {},
+            langfuse_metadata=langfuse_metadata,
         )(fn)
 
     if fn is not None:

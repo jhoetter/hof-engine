@@ -36,6 +36,13 @@ hof/ui/admin/dist/
 
 # Hof generated (per-project)
 migrations/
+_hof_entry.tsx
+ui/index.html
+ui/package.json
+ui/vite.config.ts
+ui/tsconfig.json
+ui/node_modules/
+ui/dist/
 
 # OS
 .DS_Store

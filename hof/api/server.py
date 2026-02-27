@@ -16,6 +16,7 @@ from hof.core.discovery import discover_all
 
 ADMIN_UI_DIR = Path(__file__).resolve().parent.parent / "ui" / "admin"
 ADMIN_VITE_PORT = int(os.environ.get("HOF_ADMIN_VITE_PORT", "0"))
+USER_VITE_PORT = int(os.environ.get("HOF_USER_VITE_PORT", "0"))
 
 
 def create_app() -> FastAPI:
@@ -72,9 +73,77 @@ def create_app() -> FastAPI:
             "registry": registry.summary(),
         }
 
+    _mount_user_ui(app, project_root, config)
     _mount_admin_ui(app)
 
     return app
+
+
+def _mount_user_ui(app: FastAPI, project_root: Path, config: "Any") -> None:
+    """Serve user-defined React components — proxy to Vite in dev, static in prod."""
+    user_ui_dist = project_root / config.ui_dir / "dist"
+
+    if USER_VITE_PORT:
+        import re as _re
+
+        _proxy = httpx.AsyncClient(
+            base_url=f"http://localhost:{USER_VITE_PORT}",
+        )
+
+        _REWRITE_RE = _re.compile(
+            r'(?P<prefix>'
+            r'(?:src|href)\s*=\s*["\']'   # HTML attributes
+            r'|from\s+["\']'               # ES import … from "/…"
+            r'|import\s+["\']'             # ES import "/…" (side-effect)
+            r')'
+            r'(?P<path>/(?:@|_|node_modules/|components/|src/))'
+        )
+
+        def _rewrite_paths(text: str) -> str:
+            return _REWRITE_RE.sub(r'\g<prefix>/user-ui\g<path>', text)
+
+        @app.api_route("/user-ui/{path:path}", methods=["GET", "HEAD"])
+        async def user_ui_proxy(request: Request, path: str = "") -> Response:
+            url = f"/{path}" if path else "/"
+            if request.query_params:
+                url += f"?{request.query_params}"
+            fwd_headers = {
+                k: v
+                for k, v in request.headers.items()
+                if k.lower() not in ("host", "connection")
+            }
+            try:
+                proxy_resp = await _proxy.get(url, headers=fwd_headers)
+                content = proxy_resp.content
+                ct = proxy_resp.headers.get("content-type", "")
+
+                if any(t in ct for t in ("text/html", "text/javascript", "application/javascript")):
+                    text = content.decode("utf-8", errors="replace")
+                    text = _rewrite_paths(text)
+                    content = text.encode("utf-8")
+
+                # #region agent log
+                import json as _dj, time as _dt
+                _log_path = "/Users/jhoetter/repos/hof-engine/.cursor/debug-e035b7.log"
+                _body_preview = content[:800].decode("utf-8", errors="replace") if content else ""
+                with open(_log_path, "a") as _f:
+                    _f.write(_dj.dumps({"sessionId":"e035b7","hypothesisId":"H1-fix","location":"server.py:user_ui_proxy","message":"proxy_request","data":{"request_path":str(request.url.path),"forwarded_url":url,"status":proxy_resp.status_code,"content_type":ct,"body_preview":_body_preview},"timestamp":int(_dt.time()*1000),"runId":"post-fix"}) + "\n")
+                # #endregion
+
+                return Response(
+                    content=content,
+                    status_code=proxy_resp.status_code,
+                    media_type=ct,
+                )
+            except httpx.ConnectError:
+                return Response(content="User UI not ready", status_code=503)
+
+    elif user_ui_dist.is_dir():
+        app.mount(
+            "/user-ui",
+            StaticFiles(directory=str(user_ui_dist)),
+            name="user-ui",
+        )
 
 
 def _mount_admin_ui(app: FastAPI) -> None:

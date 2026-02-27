@@ -76,3 +76,44 @@ def current() -> None:
 
     revision = get_current_revision(Path.cwd(), get_config())
     console.print(f"Current revision: {revision or '[dim]none[/]'}")
+
+
+@app.command("reset")
+def reset(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
+) -> None:
+    """Drop all tables and re-run migrations from scratch."""
+    from sqlalchemy import text
+
+    bootstrap()
+    from hof.config import get_config
+    from hof.db.engine import get_engine
+    from hof.db.migrations import run_migrations
+
+    config = get_config()
+
+    if not yes:
+        confirm = typer.confirm(
+            f"This will DROP ALL TABLES in {config.database_url.split('@')[-1]}. Continue?"
+        )
+        if not confirm:
+            raise typer.Abort()
+
+    console.print("[yellow]Dropping all tables...[/]")
+    engine = get_engine()
+    with engine.connect() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+        conn.commit()
+
+    console.print("[cyan]Re-running migrations...[/]")
+
+    migrations_dir = Path.cwd() / "migrations"
+    versions_dir = migrations_dir / "versions"
+    if versions_dir.is_dir():
+        for f in versions_dir.glob("*.py"):
+            f.unlink()
+        console.print("  [dim]Cleared old migration files[/]")
+
+    run_migrations(Path.cwd(), config)
+    console.print("[green]Database reset complete.[/]")

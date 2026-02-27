@@ -41,6 +41,13 @@ def dev(
         # Admin UI Vite dev server
         _start_admin_vite(processes, env)
 
+        # User UI Vite dev server
+        user_vite_port = 0
+        if not no_ui:
+            user_vite_port = _start_user_vite(project_root, config, processes, env)
+            if user_vite_port:
+                env["HOF_USER_VITE_PORT"] = str(user_vite_port)
+
         # FastAPI server
         uvicorn_cmd = [
             sys.executable, "-m", "uvicorn",
@@ -64,12 +71,6 @@ def dev(
                 f"--concurrency={config.celery_concurrency}",
             ]
             processes.append(subprocess.Popen(celery_cmd, cwd=str(project_root), env=env))
-
-        # User Vite dev server
-        if not no_ui:
-            ui_dir = project_root / config.ui_dir
-            if ui_dir.is_dir():
-                console.print("  [cyan]Vite dev server[/] for user React UI")
 
         display_host = "localhost" if host == "0.0.0.0" else host
         console.print()
@@ -128,3 +129,27 @@ def _start_admin_vite(
             stderr=subprocess.DEVNULL,
         )
     )
+
+
+def _start_user_vite(
+    project_root: Path,
+    config: "Any",
+    processes: list[subprocess.Popen],
+    env: dict[str, str],
+) -> int:
+    """Start the user UI Vite dev server. Returns the port, or 0 if skipped."""
+    from hof.ui.vite import ViteManager, USER_VITE_PORT
+
+    ui_dir = project_root / config.ui_dir
+    components_dir = ui_dir / "components"
+
+    if not components_dir.is_dir():
+        console.print("  [dim]No ui/components/ directory, skipping user UI[/]")
+        return 0
+
+    manager = ViteManager(ui_dir)
+    console.print(f"  [cyan]User UI[/]  (Vite) on port {USER_VITE_PORT}")
+    proc = manager.start_dev_server(port=USER_VITE_PORT, env=env)
+    if proc:
+        processes.append(proc)
+    return USER_VITE_PORT

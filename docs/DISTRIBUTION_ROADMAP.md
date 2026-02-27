@@ -25,7 +25,7 @@
 
 - [ ] **`pyrightconfig.json` python path is hardcoded** — currently `/opt/anaconda3/bin/python3`. Customers on a different Python setup (venv, pyenv, system Python) will need to update this. Consider documenting it in the customer project README or making it a comment in the generated file.
 
-- [ ] **Hetzner server setup per customer** — the deploy workflow (`.github/workflows/deploy.yml`) is scaffolded but needs three GitHub repo secrets per customer: `HETZNER_HOST`, `HETZNER_USER`, `HETZNER_SSH_KEY`. The server also needs `/opt/<project-name>` set up with the repo cloned and Docker running.
+- [x] ~~**Hetzner server setup per customer**~~ — resolved: production deployment is handled entirely by **hof-os** (server provisioning, Docker Compose generation, rsync deploy, DNS, Traefik SSL). Customer repos only need a `Dockerfile`. The `docker-compose.yml` in customer repos is for **local development only**. No GitHub Actions deploy workflow needed.
 
 - [ ] **More modules in hof-components** — currently only `lead-enrichment` exists. Candidates from the roadmap: `stripe-billing`, `email-outreach`. Build these as real customer needs come in and add them to `registry.json`.
 

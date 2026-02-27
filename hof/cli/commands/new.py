@@ -136,7 +136,8 @@ RUN cd ui && npm install && npx vite build
 EXPOSE 8000
 CMD ["hof", "dev", "--host", "0.0.0.0", "--port", "8000"]
 ''',
-    "docker-compose.yml": '''services:
+    "docker-compose.yml": '''# Local development only — production deployment is handled by hof-os.
+services:
   app:
     build: .
     ports:
@@ -168,36 +169,9 @@ CMD ["hof", "dev", "--host", "0.0.0.0", "--port", "8000"]
 volumes:
   pgdata:
 ''',
-    ".github/workflows/deploy.yml": '''name: Deploy
-
-on:
-  push:
-    branches: ["main"]
-
-jobs:
-  deploy:
-    name: Deploy to Hetzner
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{{{ secrets.HETZNER_HOST }}}}
-          username: ${{{{ secrets.HETZNER_USER }}}}
-          key: ${{{{ secrets.HETZNER_SSH_KEY }}}}
-          script: |
-            cd /opt/{name}
-            git pull
-            docker compose pull
-            docker compose up -d --build
-            docker compose exec app hof db migrate
-''',
 }
 
-PROJECT_DIRS = ["tables", "functions", "flows", "cron", "ui/components", "ui/pages", ".github/workflows"]
+PROJECT_DIRS = ["tables", "functions", "flows", "cron", "ui/components", "ui/pages"]
 
 
 @app.command("project")

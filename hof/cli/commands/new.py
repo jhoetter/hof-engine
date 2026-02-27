@@ -87,6 +87,14 @@ export function {class_name}({{ onComplete }}: {class_name}Props) {{
 }
 
 PROJECT_FILES = {
+    ".dockerignore": '''__pycache__
+*.pyc
+.git
+ui/node_modules
+celerybeat-schedule.db
+.env.local
+.env.*.local
+''',
     "pyrightconfig.json": '''{
   "pythonPath": "/opt/anaconda3/bin/python3",
   "typeCheckingMode": "basic",
@@ -126,6 +134,11 @@ RUN apt-get update && apt-get install -y curl && \\
     apt-get install -y nodejs && \\
     rm -rf /var/lib/apt/lists/*
 
+WORKDIR /build/hof-engine
+COPY --from=hof-engine pyproject.toml hatch_build.py README.md ./
+COPY --from=hof-engine hof/ ./hof/
+RUN pip install .
+
 WORKDIR /app
 COPY pyproject.toml .
 RUN pip install .
@@ -134,19 +147,28 @@ COPY . .
 RUN cd ui && npm install && npx vite build
 
 EXPOSE 8001
-CMD ["hof", "dev", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["sh", "-c", "hof db migrate && hof dev --host 0.0.0.0 --port 8001"]
 ''',
     "docker-compose.yml": '''# Local development only — production deployment is handled by hof-os.
 # Ports are offset from hof-os (8000/5432/6379) so both can run simultaneously.
 services:
   app:
-    build: .
+    build:
+      context: .
+      additional_contexts:
+        hof-engine: ../hof-engine
+      dockerfile: Dockerfile
     ports:
       - "8001:8001"
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:${{DB_PASSWORD}}@db:5432/${{DB_NAME}}
+      REDIS_URL: redis://redis:6379/0
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
   db:
     image: postgres:16
@@ -157,19 +179,16 @@ services:
     environment:
       POSTGRES_DB: ${{DB_NAME}}
       POSTGRES_PASSWORD: ${{DB_PASSWORD}}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7-alpine
     ports:
       - "6380:6379"
-
-  worker:
-    build: .
-    command: celery -A hof.tasks.worker worker --loglevel=info
-    env_file: .env
-    depends_on:
-      - db
-      - redis
 
 volumes:
   pgdata:
@@ -205,9 +224,10 @@ def new_project(
         (project_dir / filename).write_text(template.format(name=name))
 
     (project_dir / ".env").write_text(
-        "# Environment variables\n"
+        "# Environment variables — used for local dev outside Docker.\n"
+        "# Inside Docker, DATABASE_URL and REDIS_URL are overridden by docker-compose.yml.\n"
         "# Ports offset from hof-os (5432/6379) so both can run simultaneously.\n"
-        "DATABASE_URL=postgresql://localhost:5433/{name}\n"
+        "DATABASE_URL=postgresql://postgres:changeme@localhost:5433/{name}\n"
         "REDIS_URL=redis://localhost:6380/0\n"
         "HOF_ADMIN_PASSWORD=changeme\n"
         "DB_NAME={name}\n"

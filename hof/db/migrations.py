@@ -37,10 +37,12 @@ def _get_alembic_config(project_root: Path, config: Config) -> AlembicConfig:
 
 
 def run_migrations(project_root: Path, config: Config, *, dry_run: bool = False) -> None:
-    """Generate and apply pending migrations."""
+    """Apply pending migrations, then autogenerate new ones if models changed."""
     alembic_cfg = _get_alembic_config(project_root, config)
 
     from hof.db.engine import Base
+
+    command.upgrade(alembic_cfg, "head")
 
     command.revision(
         alembic_cfg,

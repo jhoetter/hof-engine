@@ -5,6 +5,7 @@ from __future__ import annotations
 import click
 import typer
 
+from hof.cli.commands import add as add_cmd
 from hof.cli.commands import db, dev, flow, fn, new, table, cron_cmd
 
 _typer_app = typer.Typer(
@@ -19,6 +20,7 @@ _typer_app.add_typer(table.app, name="table", help="Interact with tables.")
 _typer_app.add_typer(db.app, name="db", help="Database migration commands.")
 _typer_app.add_typer(cron_cmd.app, name="cron", help="Manage cron jobs.")
 _typer_app.add_typer(new.app, name="new", help="Scaffold new components.")
+_typer_app.add_typer(add_cmd.app, name="add", help="Add modules from hof-components.")
 
 
 @_typer_app.callback(invoke_without_command=True)

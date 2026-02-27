@@ -186,6 +186,7 @@ class ViteManager:
             "dependencies": {
                 "react": "^19.0.0",
                 "react-dom": "^19.0.0",
+                "@hof-engine/react": "^0.1.0",
             },
             "devDependencies": {
                 "@types/react": "^19.0.0",

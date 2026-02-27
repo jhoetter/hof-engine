@@ -91,15 +91,107 @@ PROJECT_FILES = {
 
 config = Config(
     app_name="{name}",
-    database_url="postgresql://localhost:5432/{name}",
-    redis_url="redis://localhost:6379/0",
+    database_url="${{DATABASE_URL}}",
+    redis_url="${{REDIS_URL}}",
     admin_username="admin",
-    admin_password="changeme",
+    admin_password="${{HOF_ADMIN_PASSWORD}}",
 )
+''',
+    "pyproject.toml": '''[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "{name}"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+dependencies = [
+    "hof-engine>=0.1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+''',
+    "Dockerfile": '''FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y curl && \\
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \\
+    apt-get install -y nodejs && \\
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY pyproject.toml .
+RUN pip install .
+
+COPY . .
+RUN cd ui && npm install && npx vite build
+
+EXPOSE 8000
+CMD ["hof", "dev", "--host", "0.0.0.0", "--port", "8000"]
+''',
+    "docker-compose.yml": '''services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:16
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${{DB_NAME}}
+      POSTGRES_PASSWORD: ${{DB_PASSWORD}}
+
+  redis:
+    image: redis:7-alpine
+
+  worker:
+    build: .
+    command: celery -A hof.tasks.worker worker --loglevel=info
+    env_file: .env
+    depends_on:
+      - db
+      - redis
+
+volumes:
+  pgdata:
+''',
+    ".github/workflows/deploy.yml": '''name: Deploy
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  deploy:
+    name: Deploy to Hetzner
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{{{ secrets.HETZNER_HOST }}}}
+          username: ${{{{ secrets.HETZNER_USER }}}}
+          key: ${{{{ secrets.HETZNER_SSH_KEY }}}}
+          script: |
+            cd /opt/{name}
+            git pull
+            docker compose pull
+            docker compose up -d --build
+            docker compose exec app hof db migrate
 ''',
 }
 
-PROJECT_DIRS = ["tables", "functions", "flows", "cron", "ui/components", "ui/pages"]
+PROJECT_DIRS = ["tables", "functions", "flows", "cron", "ui/components", "ui/pages", ".github/workflows"]
 
 
 @app.command("project")
@@ -120,18 +212,29 @@ def new_project(
         parts = dirname.split("/")
         for i in range(len(parts)):
             init_path = project_dir / "/".join(parts[: i + 1]) / "__init__.py"
-            if not init_path.exists() and not dirname.startswith("ui"):
+            non_python = dirname.startswith("ui") or dirname.startswith(".")
+            if not init_path.exists() and not non_python:
                 init_path.touch()
 
     for filename, template in PROJECT_FILES.items():
         (project_dir / filename).write_text(template.format(name=name))
 
-    (project_dir / ".env").write_text("# Environment variables\n")
+    (project_dir / ".env").write_text(
+        "# Environment variables\n"
+        "DATABASE_URL=postgresql://localhost:5432/{name}\n"
+        "REDIS_URL=redis://localhost:6379/0\n"
+        "HOF_ADMIN_PASSWORD=changeme\n"
+        "DB_NAME={name}\n"
+        "DB_PASSWORD=changeme\n".format(name=name)
+    )
 
     console.print(f"[green]Created project:[/] {name}/")
     console.print(f"  cd {name}")
     console.print("  hof db migrate")
     console.print("  hof dev")
+    console.print("")
+    console.print("[dim]To add modules:  hof add --list[/]")
+    console.print("[dim]To deploy:       docker compose up[/]")
 
 
 @app.command("table")

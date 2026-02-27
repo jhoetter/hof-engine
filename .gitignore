@@ -31,7 +31,6 @@ env/
 
 # Node
 node_modules/
-package-lock.json
 hof/ui/admin/dist/
 hof-react/dist/
 

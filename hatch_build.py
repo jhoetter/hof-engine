@@ -19,6 +19,8 @@ class AdminBuildHook(BuildHookInterface):
             return
 
         self.app.display_info("Building admin UI...")
-        subprocess.run(["npm", "ci"], cwd=str(admin_dir), check=True)
+        lock_file = admin_dir / "package-lock.json"
+        install_cmd = ["npm", "ci"] if lock_file.exists() else ["npm", "install"]
+        subprocess.run(install_cmd, cwd=str(admin_dir), check=True)
         subprocess.run(["npm", "run", "build"], cwd=str(admin_dir), check=True)
         self.app.display_success("Admin UI built successfully.")

@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Generator
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
+from sqlalchemy.orm import Session
 
 from hof.api.auth import verify_auth
 from hof.core.registry import registry
+from hof.db.engine import get_session
+from hof.db.schemas import build_create_schema, build_update_schema
 
 router = APIRouter()
+
+
+def _get_sync_session() -> Generator[Session, None, None]:
+    """FastAPI dependency that provides a request-scoped sync session."""
+    with get_session() as session:
+        yield session
 
 
 @router.get("")
@@ -34,6 +44,7 @@ async def list_records(
     offset: int = Query(0, ge=0),
     search: str | None = Query(None),
     user: str = Depends(verify_auth),
+    session: Session = Depends(_get_sync_session),
 ) -> list[dict]:
     """List records from a table with optional filtering and pagination."""
     table_cls = registry.get_table(table_name)
@@ -41,7 +52,9 @@ async def list_records(
         raise HTTPException(404, f"Table '{table_name}' not found")
 
     filters = _parse_filter_string(filter) if filter else {}
-    records = table_cls.query(filters=filters, order_by=order_by, limit=limit, offset=offset)
+    records = table_cls.query(
+        filters=filters, order_by=order_by, limit=limit, offset=offset, session=session
+    )
     return [r.to_dict() for r in records]
 
 
@@ -50,13 +63,20 @@ async def create_record(
     table_name: str,
     body: dict[str, Any],
     user: str = Depends(verify_auth),
+    session: Session = Depends(_get_sync_session),
 ) -> dict:
-    """Create a new record."""
+    """Create a new record. Input is validated against the table schema."""
     table_cls = registry.get_table(table_name)
     if table_cls is None:
         raise HTTPException(404, f"Table '{table_name}' not found")
 
-    record = table_cls.create(**body)
+    schema = build_create_schema(table_cls)
+    try:
+        validated = schema(**body)
+    except ValidationError as exc:
+        raise HTTPException(422, detail=exc.errors())
+
+    record = table_cls.create(**validated.model_dump(exclude_none=False), session=session)
     return record.to_dict()
 
 
@@ -65,13 +85,14 @@ async def get_record(
     table_name: str,
     record_id: str,
     user: str = Depends(verify_auth),
+    session: Session = Depends(_get_sync_session),
 ) -> dict:
     """Get a single record by ID."""
     table_cls = registry.get_table(table_name)
     if table_cls is None:
         raise HTTPException(404, f"Table '{table_name}' not found")
 
-    record = table_cls.get(record_id)
+    record = table_cls.get(record_id, session=session)
     if record is None:
         raise HTTPException(404, f"Record '{record_id}' not found")
     return record.to_dict()
@@ -83,13 +104,22 @@ async def update_record(
     record_id: str,
     body: dict[str, Any],
     user: str = Depends(verify_auth),
+    session: Session = Depends(_get_sync_session),
 ) -> dict:
-    """Update a record by ID."""
+    """Update a record by ID. Only provided fields are changed."""
     table_cls = registry.get_table(table_name)
     if table_cls is None:
         raise HTTPException(404, f"Table '{table_name}' not found")
 
-    record = table_cls.update(record_id, **body)
+    schema = build_update_schema(table_cls)
+    try:
+        validated = schema(**body)
+    except ValidationError as exc:
+        raise HTTPException(422, detail=exc.errors())
+
+    # Only pass fields that were explicitly provided (non-None after validation)
+    updates = {k: v for k, v in validated.model_dump().items() if v is not None}
+    record = table_cls.update(record_id, session=session, **updates)
     if record is None:
         raise HTTPException(404, f"Record '{record_id}' not found")
     return record.to_dict()
@@ -100,13 +130,14 @@ async def delete_record(
     table_name: str,
     record_id: str,
     user: str = Depends(verify_auth),
+    session: Session = Depends(_get_sync_session),
 ) -> dict:
     """Delete a record by ID."""
     table_cls = registry.get_table(table_name)
     if table_cls is None:
         raise HTTPException(404, f"Table '{table_name}' not found")
 
-    deleted = table_cls.delete(record_id)
+    deleted = table_cls.delete(record_id, session=session)
     if not deleted:
         raise HTTPException(404, f"Record '{record_id}' not found")
     return {"deleted": True, "id": record_id}

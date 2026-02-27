@@ -11,8 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from hof.app import HofApp, set_global_app
 from hof.config import load_config
 from hof.core.discovery import discover_all
+from hof.logging_config import configure_logging
 
 ADMIN_UI_DIR = Path(__file__).resolve().parent.parent / "ui" / "admin"
 ADMIN_VITE_PORT = int(os.environ.get("HOF_ADMIN_VITE_PORT", "0"))
@@ -26,7 +28,27 @@ def create_app() -> FastAPI:
     """
     project_root = Path.cwd()
     config = load_config(project_root)
+
+    configure_logging(debug=config.debug, app_name=config.app_name)
+
+    # Create and activate the HofApp context for this process
+    hof_app = HofApp(config=config)
+    set_global_app(hof_app)
+
+    # Discover user modules — decorators register into hof_app.registry via
+    # the global registry singleton (backward compat) and into the module-level
+    # globals for engine/config.
     discover_all(project_root, config.discovery_dirs)
+
+    # Initialize engines (both sync and async)
+    from hof.db.engine import init_engine
+
+    init_engine(
+        config.database_url,
+        pool_size=config.database_pool_size,
+        echo=config.database_echo,
+    )
+    hof_app.init_db()
 
     app = FastAPI(
         title=f"{config.app_name} API",
@@ -47,6 +69,7 @@ def create_app() -> FastAPI:
     from hof.api.routes.flows import router as flows_router
     from hof.api.routes.functions import router as functions_router
     from hof.api.routes.tables import router as tables_router
+    from hof.api.routes.ws import router as ws_router
 
     setup_auth(app, config)
 
@@ -54,14 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(functions_router, prefix="/api/functions", tags=["functions"])
     app.include_router(flows_router, prefix="/api/flows", tags=["flows"])
     app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
-
-    from hof.db.engine import init_engine
-
-    init_engine(
-        config.database_url,
-        pool_size=config.database_pool_size,
-        echo=config.database_echo,
-    )
+    app.include_router(ws_router, tags=["realtime"])
 
     @app.get("/api/health")
     async def health():

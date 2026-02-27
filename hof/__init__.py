@@ -1,6 +1,8 @@
 """hof-engine: Full-stack Python + React framework."""
 
+from hof.app import HofApp
 from hof.config import Config
+from hof.logging_config import configure_logging
 from hof.core.registry import registry
 from hof.core.types import types
 from hof.db.table import Table, Column, ForeignKey
@@ -14,7 +16,9 @@ from hof.errors import HofError
 __version__ = "0.1.0"
 
 __all__ = [
+    "HofApp",
     "Config",
+    "configure_logging",
     "Table",
     "Column",
     "ForeignKey",

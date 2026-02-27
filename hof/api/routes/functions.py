@@ -7,9 +7,11 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
 
 from hof.api.auth import verify_auth
 from hof.core.registry import registry
+from hof.db.schemas import build_function_input_schema
 
 router = APIRouter()
 
@@ -26,12 +28,22 @@ async def call_function(
     body: dict[str, Any] | None = None,
     user: str = Depends(verify_auth),
 ) -> dict:
-    """Execute a registered function."""
+    """Execute a registered function. Input is validated against the function signature."""
     meta = registry.get_function(function_name)
     if meta is None:
         raise HTTPException(404, f"Function '{function_name}' not found")
 
     kwargs = body or {}
+
+    # Validate inputs if the function has declared parameters
+    if meta.parameters:
+        schema = build_function_input_schema(meta)
+        try:
+            validated = schema(**kwargs)
+        except ValidationError as exc:
+            raise HTTPException(422, detail=exc.errors())
+        kwargs = validated.model_dump(exclude_none=False)
+
     start = time.monotonic()
 
     try:

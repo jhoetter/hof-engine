@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Generator
 
 import sqlalchemy as sa
 from sqlalchemy import func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from hof.core.registry import registry
 from hof.db.engine import Base, get_session
@@ -151,31 +152,71 @@ class Table(Base, metaclass=TableMeta):
         class Document(Table):
             name = Column(types.String, required=True)
             status = Column(types.String, default="pending")
+
+    All class methods accept an optional ``session`` keyword argument.  When
+    provided, the operation runs inside the caller's session (enabling
+    multi-table transactions).  When omitted, a new auto-committed session is
+    opened for that call.
+
+    Example — multi-table transaction:
+        with get_session() as session:
+            lead = Lead.create(name="Alice", session=session)
+            EnrichmentResult.create(lead_id=lead.id, session=session)
+            # both committed together when the `with` block exits
     """
 
     __abstract__ = True
+
+    # ------------------------------------------------------------------
+    # Session helper
+    # ------------------------------------------------------------------
+
+    @classmethod
+    @contextmanager
+    def _session_scope(
+        cls, session: Session | None
+    ) -> Generator[Session, None, None]:
+        """Yield the provided session, or open a new auto-commit one."""
+        if session is not None:
+            yield session
+        else:
+            with get_session() as s:
+                yield s
+
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the record to a dictionary."""
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
+    # ------------------------------------------------------------------
+    # CRUD
+    # ------------------------------------------------------------------
+
     @classmethod
-    def create(cls, **kwargs: Any) -> "Table":
-        """Create and persist a new record."""
+    def create(cls, *, session: Session | None = None, **kwargs: Any) -> "Table":
+        """Create and persist a new record.
+
+        Args:
+            session: Optional external session for multi-table transactions.
+            **kwargs: Column values for the new record.
+        """
         if "id" not in kwargs:
             kwargs["id"] = uuid.uuid4()
         instance = cls(**kwargs)
-        with get_session() as session:
-            session.add(instance)
-            session.flush()
-            session.refresh(instance)
+        with cls._session_scope(session) as s:
+            s.add(instance)
+            s.flush()
+            s.refresh(instance)
         return instance
 
     @classmethod
-    def get(cls, record_id: Any) -> "Table | None":
+    def get(cls, record_id: Any, *, session: Session | None = None) -> "Table | None":
         """Get a record by primary key."""
-        with get_session() as session:
-            return session.get(cls, record_id)
+        with cls._session_scope(session) as s:
+            return s.get(cls, record_id)
 
     @classmethod
     def query(
@@ -185,9 +226,10 @@ class Table(Base, metaclass=TableMeta):
         order_by: str | None = None,
         limit: int = 100,
         offset: int = 0,
+        session: Session | None = None,
     ) -> list["Table"]:
         """Query records with optional filtering, sorting, and pagination."""
-        with get_session() as session:
+        with cls._session_scope(session) as s:
             stmt = sa.select(cls)
 
             if filters:
@@ -221,63 +263,86 @@ class Table(Base, metaclass=TableMeta):
                     stmt = stmt.order_by(col.desc() if desc else col.asc())
 
             stmt = stmt.limit(limit).offset(offset)
-            return list(session.scalars(stmt).all())
+            return list(s.scalars(stmt).all())
 
     @classmethod
-    def update(cls, record_id: Any, **kwargs: Any) -> "Table | None":
+    def update(
+        cls,
+        record_id: Any,
+        *,
+        session: Session | None = None,
+        **kwargs: Any,
+    ) -> "Table | None":
         """Update a record by primary key."""
-        with get_session() as session:
-            instance = session.get(cls, record_id)
+        with cls._session_scope(session) as s:
+            instance = s.get(cls, record_id)
             if instance is None:
                 return None
             for key, value in kwargs.items():
                 setattr(instance, key, value)
-            session.flush()
-            session.refresh(instance)
+            s.flush()
+            s.refresh(instance)
             return instance
 
     @classmethod
-    def delete(cls, record_id: Any) -> bool:
+    def delete(
+        cls, record_id: Any, *, session: Session | None = None
+    ) -> bool:
         """Delete a record by primary key."""
-        with get_session() as session:
-            instance = session.get(cls, record_id)
+        with cls._session_scope(session) as s:
+            instance = s.get(cls, record_id)
             if instance is None:
                 return False
-            session.delete(instance)
+            s.delete(instance)
             return True
 
     @classmethod
-    def count(cls, *, filters: dict[str, Any] | None = None) -> int:
+    def count(
+        cls,
+        *,
+        filters: dict[str, Any] | None = None,
+        session: Session | None = None,
+    ) -> int:
         """Count records with optional filtering."""
-        with get_session() as session:
+        with cls._session_scope(session) as s:
             stmt = sa.select(func.count()).select_from(cls)
             if filters:
                 for key, value in filters.items():
                     col = getattr(cls, key, None)
                     if col is not None:
                         stmt = stmt.where(col == value)
-            return session.scalar(stmt) or 0
+            return s.scalar(stmt) or 0
 
     @classmethod
-    def bulk_create(cls, records: list[dict[str, Any]]) -> list["Table"]:
+    def bulk_create(
+        cls,
+        records: list[dict[str, Any]],
+        *,
+        session: Session | None = None,
+    ) -> list["Table"]:
         """Create multiple records at once."""
         instances = []
-        with get_session() as session:
+        with cls._session_scope(session) as s:
             for data in records:
                 if "id" not in data:
                     data["id"] = uuid.uuid4()
                 instance = cls(**data)
-                session.add(instance)
+                s.add(instance)
                 instances.append(instance)
-            session.flush()
+            s.flush()
             for inst in instances:
-                session.refresh(inst)
+                s.refresh(inst)
         return instances
 
     @classmethod
-    def bulk_delete(cls, *, filters: dict[str, Any]) -> int:
+    def bulk_delete(
+        cls,
+        *,
+        filters: dict[str, Any],
+        session: Session | None = None,
+    ) -> int:
         """Delete multiple records matching filters. Returns count deleted."""
-        with get_session() as session:
+        with cls._session_scope(session) as s:
             stmt = sa.delete(cls)
             for key, value in filters.items():
                 if "__" in key:
@@ -289,5 +354,5 @@ class Table(Base, metaclass=TableMeta):
                     col = getattr(cls, key, None)
                     if col is not None:
                         stmt = stmt.where(col == value)
-            result = session.execute(stmt)
+            result = s.execute(stmt)
             return result.rowcount

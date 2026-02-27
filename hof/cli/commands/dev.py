@@ -72,6 +72,15 @@ def dev(
             ]
             processes.append(subprocess.Popen(celery_cmd, cwd=str(project_root), env=env))
 
+            # Celery Beat for cron jobs
+            beat_cmd = [
+                sys.executable, "-m", "celery",
+                "-A", "hof.tasks.celery_app:celery",
+                "beat",
+                "--loglevel=info",
+            ]
+            processes.append(subprocess.Popen(beat_cmd, cwd=str(project_root), env=env))
+
         display_host = "localhost" if host == "0.0.0.0" else host
         console.print()
         console.print("[bold green]All services started.[/] Press Ctrl+C to stop.\n")

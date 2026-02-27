@@ -53,6 +53,12 @@ class Config:
         admin_username: str = "admin",
         admin_password: str = "",
         api_key: str = "",
+        # JWT — set a strong random secret in production
+        jwt_secret_key: str = "",
+        jwt_algorithm: str = "HS256",
+        jwt_access_token_expire_minutes: int = 60,
+        # RBAC: map username → list of roles, e.g. {"alice": ["admin", "viewer"]}
+        user_roles: dict[str, list[str]] | None = None,
         # LLM
         llm_provider: Any = None,
         llm_model: str = "",
@@ -89,6 +95,10 @@ class Config:
         self.admin_username = admin_username
         self.admin_password = admin_password
         self.api_key = api_key
+        self.jwt_secret_key = jwt_secret_key
+        self.jwt_algorithm = jwt_algorithm
+        self.jwt_access_token_expire_minutes = jwt_access_token_expire_minutes
+        self.user_roles: dict[str, list[str]] = user_roles or {}
 
         self.llm_provider = llm_provider
         self.llm_model = llm_model

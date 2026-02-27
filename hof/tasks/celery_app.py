@@ -34,6 +34,15 @@ def create_celery_app() -> Celery:
 celery = create_celery_app()
 
 
+@celery.on_after_finalize.connect
+def _setup_beat_schedule(sender: Celery, **kwargs: object) -> None:
+    """Populate Celery Beat schedule from registered cron jobs after app is ready."""
+    from hof.cron.scheduler import get_celery_beat_schedule
+
+    schedule = get_celery_beat_schedule()
+    sender.conf.beat_schedule = schedule
+
+
 @celery.task(name="hof.execute_node", bind=True, max_retries=3)
 def execute_node_task(self, execution_id: str, node_name: str, input_data: dict) -> dict:
     """Celery task that executes a single flow node."""
@@ -96,3 +105,30 @@ def run_flow_task(flow_name: str, input_data: dict) -> str:
     executor = FlowExecutor(flow)
     execution = executor.start(input_data)
     return execution.id
+
+
+@celery.task(name="hof.execute_cron", bind=True, max_retries=3)
+def execute_cron_task(self, cron_name: str) -> None:
+    """Celery task that executes a registered cron job by name."""
+    from pathlib import Path
+
+    from hof.config import load_config
+    from hof.core.discovery import discover_all
+    from hof.core.registry import registry
+
+    config = load_config()
+    discover_all(Path.cwd(), config.discovery_dirs)
+
+    meta = registry.get_cron(cron_name)
+    if meta is None:
+        raise ValueError(f"Cron job '{cron_name}' not found")
+
+    if not meta.enabled:
+        return
+
+    try:
+        meta.fn()
+    except Exception as exc:
+        if self.request.retries < meta.retries:
+            raise self.retry(exc=exc, countdown=60)
+        raise

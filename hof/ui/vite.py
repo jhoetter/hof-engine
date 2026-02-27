@@ -186,7 +186,7 @@ class ViteManager:
             "dependencies": {
                 "react": "^19.0.0",
                 "react-dom": "^19.0.0",
-                "@hof-engine/react": "^0.1.0",
+                "@hof-engine/react": self._hof_react_version(),
             },
             "devDependencies": {
                 "@types/react": "^19.0.0",
@@ -232,6 +232,18 @@ export default defineConfig({
             "include": ["**/*.ts", "**/*.tsx"],
         }
         path.write_text(json.dumps(tsconfig, indent=2))
+
+    def _hof_react_version(self) -> str:
+        """Return the @hof-engine/react version spec.
+
+        Uses a local file: path when the package hasn't been published to npm yet
+        (i.e. the dist/ directory exists next to the hof-react source).
+        Falls back to the npm registry version otherwise.
+        """
+        hof_react_dir = Path(__file__).resolve().parent.parent.parent / "hof-react"
+        if (hof_react_dir / "dist").exists():
+            return f"file:{hof_react_dir}"
+        return "^0.1.0"
 
     def _install_dependencies(self) -> None:
         subprocess.run(

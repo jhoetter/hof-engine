@@ -87,6 +87,12 @@ export function {class_name}({{ onComplete }}: {class_name}Props) {{
 }
 
 PROJECT_FILES = {
+    "pyrightconfig.json": '''{
+  "pythonPath": "/opt/anaconda3/bin/python3",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "none"
+}
+''',
     "hof.config.py": '''from hof import Config
 
 config = Config(

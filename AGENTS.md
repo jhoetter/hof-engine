@@ -18,11 +18,12 @@ hof-engine is the **core framework** for building full-stack Python + React appl
 - **Customer-specific business logic** — belongs in the customer repo
 - **Reusable modules** (tables, flows, functions, UI for specific use cases like lead enrichment, billing) — belongs in **hof-components**
 - **Deployment, server provisioning, DNS, infrastructure** — belongs in **hof-os**
+- **Design tokens, brand colors, Tailwind themes** — belongs in **design-system-\<customer\>** repos (managed by hof-os)
 - **Application examples** — belong in **hof-components** (as modules or in `docs/examples/`)
 
 ## Ecosystem
 
-This repo is one of four in the bithof platform. For the full ecosystem map, repo boundaries, and ownership rules, see:
+This repo is part of the bithof platform (hof-os, hof-engine, hof-components, design-system-\<customer\>, customer-\<name\>). For the full ecosystem map, repo boundaries, and ownership rules, see:
 
 ```
 ~/repos/hof-os/docs/ecosystem.md

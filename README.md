@@ -95,7 +95,8 @@ hof-engine is part of the bithof platform:
 |---|---|
 | **hof-engine** (this repo) | Core framework (pip package) |
 | [hof-components](https://github.com/jhoetter/hof-components) | Reusable modules and templates, copied via `hof add` |
-| [hof-os](https://github.com/jhoetter/hof-os) | Agency operations: deployment, provisioning, billing |
+| [hof-os](https://github.com/jhoetter/hof-os) | Agency operations: deployment, provisioning, billing, design system generation |
+| **design-system-\<customer\>** | Per-customer design tokens + Tailwind theme (git submodule in project repos) |
 | [customer-acme-test](https://github.com/jhoetter/customer-acme-test) | Example customer project |
 
 For application examples, see [hof-components/docs/examples/](https://github.com/jhoetter/hof-components/tree/main/docs/examples).

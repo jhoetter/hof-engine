@@ -47,6 +47,6 @@ COPY --from=node-builder /app/hof/ui/admin/dist ./hof/ui/admin/dist
 RUN useradd --create-home --shell /bin/bash hof
 USER hof
 
-EXPOSE 8000
+EXPOSE 8001
 
-CMD ["uvicorn", "hof.api.server:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "hof.api.server:create_app", "--factory", "--host", "0.0.0.0", "--port", "8001"]

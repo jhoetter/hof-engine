@@ -20,7 +20,7 @@ ADMIN_VITE_PORT = 5174
 
 @app.callback(invoke_without_command=True)
 def dev(
-    port: int = typer.Option(8000, "--port", "-p", help="Server port."),
+    port: int = typer.Option(8001, "--port", "-p", help="Server port."),
     host: str = typer.Option("0.0.0.0", "--host", help="Server host."),
     no_worker: bool = typer.Option(False, "--no-worker", help="Skip Celery worker."),
     no_ui: bool = typer.Option(False, "--no-ui", help="Skip Vite dev server."),

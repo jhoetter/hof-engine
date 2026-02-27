@@ -39,15 +39,15 @@ class Config:
         debug: bool = False,
         secret_key: str = "",
         # Database
-        database_url: str = "postgresql://localhost:5432/hof",
+        database_url: str = "postgresql://localhost:5433/hof",
         database_pool_size: int = 10,
         database_echo: bool = False,
         # Redis / Celery
-        redis_url: str = "redis://localhost:6379/0",
+        redis_url: str = "redis://localhost:6380/0",
         celery_concurrency: int = 4,
         # Server
         host: str = "0.0.0.0",
-        port: int = 8000,
+        port: int = 8001,
         cors_origins: list[str] | None = None,
         # Auth
         admin_username: str = "admin",

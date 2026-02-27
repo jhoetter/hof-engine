@@ -133,15 +133,16 @@ RUN pip install .
 COPY . .
 RUN cd ui && npm install && npx vite build
 
-EXPOSE 8000
-CMD ["hof", "dev", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8001
+CMD ["hof", "dev", "--host", "0.0.0.0", "--port", "8001"]
 ''',
     "docker-compose.yml": '''# Local development only — production deployment is handled by hof-os.
+# Ports are offset from hof-os (8000/5432/6379) so both can run simultaneously.
 services:
   app:
     build: .
     ports:
-      - "8000:8000"
+      - "8001:8001"
     env_file: .env
     depends_on:
       - db
@@ -151,12 +152,16 @@ services:
     image: postgres:16
     volumes:
       - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
     environment:
       POSTGRES_DB: ${{DB_NAME}}
       POSTGRES_PASSWORD: ${{DB_PASSWORD}}
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "6380:6379"
 
   worker:
     build: .
@@ -201,8 +206,9 @@ def new_project(
 
     (project_dir / ".env").write_text(
         "# Environment variables\n"
-        "DATABASE_URL=postgresql://localhost:5432/{name}\n"
-        "REDIS_URL=redis://localhost:6379/0\n"
+        "# Ports offset from hof-os (5432/6379) so both can run simultaneously.\n"
+        "DATABASE_URL=postgresql://localhost:5433/{name}\n"
+        "REDIS_URL=redis://localhost:6380/0\n"
         "HOF_ADMIN_PASSWORD=changeme\n"
         "DB_NAME={name}\n"
         "DB_PASSWORD=changeme\n".format(name=name)
@@ -213,8 +219,9 @@ def new_project(
     console.print("  hof db migrate")
     console.print("  hof dev")
     console.print("")
-    console.print("[dim]To add modules:  hof add --list[/]")
-    console.print("[dim]To deploy:       docker compose up[/]")
+    console.print("[dim]To add modules:        hof add --list[/]")
+    console.print("[dim]To add design system:  (via hof-os) add git submodule at ./design-system/[/]")
+    console.print("[dim]Local dev:             docker compose up[/]")
 
 
 @app.command("table")

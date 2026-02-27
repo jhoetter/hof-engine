@@ -1,7 +1,7 @@
 """Flow execution state management.
 
-Tracks the status of flow executions and individual node runs. Persists to
-the database for durability and queryability.
+Tracks the status of flow executions and individual node runs.
+Persisted to PostgreSQL via SQLAlchemy for durability and cross-process visibility.
 """
 
 from __future__ import annotations
@@ -106,45 +106,140 @@ class FlowExecution:
 
 
 class ExecutionStore:
-    """In-memory execution store (will be backed by PostgreSQL in production).
+    """Database-backed execution store.
 
-    This provides the interface that the executor and API use. The in-memory
-    implementation is suitable for development; the DB-backed implementation
-    shares the same interface.
+    All mutations are immediately persisted to PostgreSQL so that the API
+    server, CLI, Celery workers, and admin dashboard share the same state.
     """
 
-    _executions: dict[str, FlowExecution] = {}
+    def _row_to_execution(self, row: Any) -> FlowExecution:
+        """Convert a FlowExecutionRow ORM object to a FlowExecution dataclass."""
+        node_states = [
+            NodeState(
+                node_name=ns.node_name,
+                status=ns.status,
+                input_data=ns.input_data or {},
+                output_data=ns.output_data or {},
+                error=ns.error,
+                started_at=ns.started_at,
+                completed_at=ns.completed_at,
+                duration_ms=ns.duration_ms,
+                retries_used=ns.retries_used,
+            )
+            for ns in row.node_states
+        ]
+        return FlowExecution(
+            id=row.id,
+            flow_name=row.flow_name,
+            status=row.status,
+            input_data=row.input_data or {},
+            output_data=row.output_data or {},
+            node_states=node_states,
+            flow_snapshot=row.flow_snapshot or {},
+            started_at=row.started_at,
+            completed_at=row.completed_at,
+            duration_ms=row.duration_ms,
+            error=row.error,
+        )
 
     def create_execution(self, flow_name: str, input_data: dict, flow_snapshot: dict) -> FlowExecution:
-        execution = FlowExecution(
+        from hof.db.engine import get_session
+        from hof.flows.models import FlowExecutionRow
+
+        row = FlowExecutionRow(
             flow_name=flow_name,
             input_data=input_data,
             flow_snapshot=flow_snapshot,
+            status=ExecutionStatus.PENDING,
             started_at=datetime.now(timezone.utc),
         )
-        self._executions[execution.id] = execution
-        return execution
+        with get_session() as session:
+            session.add(row)
+            session.flush()
+            session.refresh(row)
+            return self._row_to_execution(row)
 
     def get_execution(self, execution_id: str) -> FlowExecution | None:
-        return self._executions.get(execution_id)
+        from hof.db.engine import get_session
+        from hof.flows.models import FlowExecutionRow
+
+        with get_session() as session:
+            row = session.get(FlowExecutionRow, execution_id)
+            if row is None:
+                return None
+            return self._row_to_execution(row)
+
+    def save_execution(self, execution: FlowExecution) -> None:
+        """Persist the full in-memory execution state back to the database."""
+        from hof.db.engine import get_session
+        from hof.flows.models import FlowExecutionRow, NodeStateRow
+
+        with get_session() as session:
+            row = session.get(FlowExecutionRow, execution.id)
+            if row is None:
+                return
+
+            row.status = execution.status
+            row.input_data = execution.input_data
+            row.output_data = execution.output_data
+            row.error = execution.error
+            row.started_at = execution.started_at
+            row.completed_at = execution.completed_at
+            row.duration_ms = execution.duration_ms
+
+            existing_nodes = {ns.node_name: ns for ns in row.node_states}
+            for ns in execution.node_states:
+                if ns.node_name in existing_nodes:
+                    db_ns = existing_nodes[ns.node_name]
+                    db_ns.status = ns.status
+                    db_ns.input_data = ns.input_data
+                    db_ns.output_data = ns.output_data
+                    db_ns.error = ns.error
+                    db_ns.started_at = ns.started_at
+                    db_ns.completed_at = ns.completed_at
+                    db_ns.duration_ms = ns.duration_ms
+                    db_ns.retries_used = ns.retries_used
+                else:
+                    row.node_states.append(NodeStateRow(
+                        node_name=ns.node_name,
+                        status=ns.status,
+                        input_data=ns.input_data,
+                        output_data=ns.output_data,
+                        error=ns.error,
+                        started_at=ns.started_at,
+                        completed_at=ns.completed_at,
+                        duration_ms=ns.duration_ms,
+                        retries_used=ns.retries_used,
+                    ))
 
     def update_execution(self, execution_id: str, **updates: Any) -> FlowExecution | None:
-        execution = self._executions.get(execution_id)
-        if execution is None:
-            return None
-        for key, value in updates.items():
-            setattr(execution, key, value)
-        return execution
+        from hof.db.engine import get_session
+        from hof.flows.models import FlowExecutionRow
+
+        with get_session() as session:
+            row = session.get(FlowExecutionRow, execution_id)
+            if row is None:
+                return None
+            for key, value in updates.items():
+                setattr(row, key, value)
+            session.flush()
+            session.refresh(row)
+            return self._row_to_execution(row)
 
     def update_status(self, execution_id: str, status: str) -> None:
-        execution = self._executions.get(execution_id)
-        if execution:
-            execution.status = status
+        from hof.db.engine import get_session
+        from hof.flows.models import FlowExecutionRow
+
+        with get_session() as session:
+            row = session.get(FlowExecutionRow, execution_id)
+            if row is None:
+                return
+            row.status = status
             if status in (ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.CANCELLED):
-                execution.completed_at = datetime.now(timezone.utc)
-                if execution.started_at:
-                    delta = execution.completed_at - execution.started_at
-                    execution.duration_ms = int(delta.total_seconds() * 1000)
+                row.completed_at = datetime.now(timezone.utc)
+                if row.started_at:
+                    delta = row.completed_at - row.started_at
+                    row.duration_ms = int(delta.total_seconds() * 1000)
 
     def list_executions(
         self,
@@ -153,32 +248,41 @@ class ExecutionStore:
         status: str | None = None,
         limit: int = 20,
     ) -> list[FlowExecution]:
-        results = list(self._executions.values())
-        if flow_name:
-            results = [e for e in results if e.flow_name == flow_name]
-        if status:
-            results = [e for e in results if e.status == status]
-        results.sort(key=lambda e: e.started_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-        return results[:limit]
+        import sqlalchemy as sa
+        from hof.db.engine import get_session
+        from hof.flows.models import FlowExecutionRow
+
+        with get_session() as session:
+            stmt = sa.select(FlowExecutionRow)
+            if flow_name:
+                stmt = stmt.where(FlowExecutionRow.flow_name == flow_name)
+            if status:
+                stmt = stmt.where(FlowExecutionRow.status == status)
+            stmt = stmt.order_by(FlowExecutionRow.started_at.desc()).limit(limit)
+            rows = session.scalars(stmt).unique().all()
+            return [self._row_to_execution(r) for r in rows]
 
     def submit_human_input(self, execution_id: str, node_name: str, data: dict) -> bool:
         """Submit human input for a waiting node."""
-        execution = self._executions.get(execution_id)
-        if execution is None:
+        from hof.db.engine import get_session
+        from hof.flows.models import FlowExecutionRow
+
+        with get_session() as session:
+            row = session.get(FlowExecutionRow, execution_id)
+            if row is None:
+                return False
+
+            for ns in row.node_states:
+                if ns.node_name == node_name and ns.status == NodeStatus.WAITING_FOR_HUMAN:
+                    ns.output_data = data
+                    ns.status = NodeStatus.COMPLETED
+                    ns.completed_at = datetime.now(timezone.utc)
+                    if ns.started_at:
+                        delta = ns.completed_at - ns.started_at
+                        ns.duration_ms = int(delta.total_seconds() * 1000)
+                    return True
+
             return False
-
-        ns = execution.get_node_state(node_name)
-        if ns is None or ns.status != NodeStatus.WAITING_FOR_HUMAN:
-            return False
-
-        ns.output_data = data
-        ns.status = NodeStatus.COMPLETED
-        ns.completed_at = datetime.now(timezone.utc)
-        if ns.started_at:
-            delta = ns.completed_at - ns.started_at
-            ns.duration_ms = int(delta.total_seconds() * 1000)
-
-        return True
 
 
 execution_store = ExecutionStore()

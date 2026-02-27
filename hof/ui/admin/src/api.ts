@@ -1,10 +1,37 @@
 const BASE_URL = "/api";
 
+let _authHeader: string | null = sessionStorage.getItem("hof_auth");
+
+export function setAuth(username: string, password: string) {
+  _authHeader = "Basic " + btoa(`${username}:${password}`);
+  sessionStorage.setItem("hof_auth", _authHeader);
+}
+
+export function clearAuth() {
+  _authHeader = null;
+  sessionStorage.removeItem("hof_auth");
+}
+
+export function isAuthenticated(): boolean {
+  return _authHeader !== null;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (_authHeader) {
+    headers["Authorization"] = _authHeader;
+  }
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers,
     ...options,
   });
+  if (res.status === 401) {
+    clearAuth();
+    window.location.reload();
+    throw new Error("Unauthorized");
+  }
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(error.detail || res.statusText);
@@ -13,6 +40,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // Auth check
+  checkAuth: () => request<{ status: string }>("/health"),
+
   // Admin
   overview: () => request<AdminOverview>("/admin/overview"),
   flowDag: (name: string) => request<FlowDag>(`/admin/flows/${name}/dag`),

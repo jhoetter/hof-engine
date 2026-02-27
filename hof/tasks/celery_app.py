@@ -38,6 +38,7 @@ celery = create_celery_app()
 def execute_node_task(self, execution_id: str, node_name: str, input_data: dict) -> dict:
     """Celery task that executes a single flow node."""
     from hof.core.registry import registry
+    from hof.flows.executor import _normalize_result
     from hof.flows.state import execution_store, NodeStatus
     from datetime import datetime, timezone
 
@@ -61,8 +62,7 @@ def execute_node_task(self, execution_id: str, node_name: str, input_data: dict)
 
     try:
         result = meta.execute(**input_data)
-        if not isinstance(result, dict):
-            result = {"result": result}
+        result = _normalize_result(result)
 
         ns.output_data = result
         ns.status = NodeStatus.COMPLETED
@@ -71,11 +71,13 @@ def execute_node_task(self, execution_id: str, node_name: str, input_data: dict)
             delta = ns.completed_at - ns.started_at
             ns.duration_ms = int(delta.total_seconds() * 1000)
 
+        execution_store.save_execution(execution)
         return result
 
     except Exception as exc:
         ns.status = NodeStatus.FAILED
         ns.error = str(exc)
+        execution_store.save_execution(execution)
         if self.request.retries < meta.retries:
             raise self.retry(exc=exc, countdown=meta.retry_delay)
         raise

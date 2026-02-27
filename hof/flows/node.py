@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -25,10 +26,11 @@ class NodeMetadata:
     is_async: bool = False
 
     def execute(self, **kwargs: Any) -> Any:
-        """Execute the node function, handling async transparently."""
+        """Execute the node function, filtering kwargs to only accepted params."""
+        filtered = _filter_kwargs(self.fn, kwargs)
         if self.is_async:
-            return asyncio.run(self.fn(**kwargs))
-        return self.fn(**kwargs)
+            return asyncio.run(self.fn(**filtered))
+        return self.fn(**filtered)
 
     def to_dict(self) -> dict:
         return {
@@ -40,6 +42,47 @@ class NodeMetadata:
             "is_human": self.is_human,
             "human_ui": self.human_ui,
         }
+
+
+def _filter_kwargs(fn: Callable, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Keep only kwargs the function accepts. Pass all if it has **kwargs."""
+    sig = _get_real_signature(fn)
+    has_var_keyword = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
+    if has_var_keyword:
+        return kwargs
+    accepted = set(sig.parameters.keys())
+    return {k: v for k, v in kwargs.items() if k in accepted}
+
+
+def _get_real_signature(fn: Callable) -> inspect.Signature:
+    """Get the signature of the actual function, unwrapping decorator wrappers.
+
+    Handles cases like llm-markdown's @prompt where the wrapper uses (*args, **kwargs)
+    but the original function has a concrete signature in the closure.
+    """
+    if hasattr(fn, "__wrapped__"):
+        return inspect.signature(fn.__wrapped__)
+
+    sig = inspect.signature(fn)
+    params = list(sig.parameters.values())
+    is_generic_wrapper = (
+        len(params) == 2
+        and params[0].kind == inspect.Parameter.VAR_POSITIONAL
+        and params[1].kind == inspect.Parameter.VAR_KEYWORD
+    )
+
+    if is_generic_wrapper and hasattr(fn, "__closure__") and fn.__closure__:
+        for cell in fn.__closure__:
+            try:
+                obj = cell.cell_contents
+                if callable(obj) and hasattr(obj, "__name__") and obj.__name__ == fn.__name__:
+                    return inspect.signature(obj)
+            except ValueError:
+                continue
+
+    return sig
 
 
 def node(

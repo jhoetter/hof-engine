@@ -2,26 +2,26 @@
 
 from __future__ import annotations
 
+import click
 import typer
 
 from hof.cli.commands import db, dev, flow, fn, new, table, cron_cmd
 
-app = typer.Typer(
+_typer_app = typer.Typer(
     name="hof",
     help="hof-engine: Full-stack Python + React framework.",
     no_args_is_help=True,
 )
 
-app.add_typer(dev.app, name="dev", help="Start the development server.")
-app.add_typer(flow.app, name="flow", help="Manage and run flows.")
-app.add_typer(fn.app, name="fn", help="Call and manage functions.")
-app.add_typer(table.app, name="table", help="Interact with tables.")
-app.add_typer(db.app, name="db", help="Database migration commands.")
-app.add_typer(cron_cmd.app, name="cron", help="Manage cron jobs.")
-app.add_typer(new.app, name="new", help="Scaffold new components.")
+_typer_app.add_typer(dev.app, name="dev", help="Start the development server.")
+_typer_app.add_typer(flow.app, name="flow", help="Manage and run flows.")
+_typer_app.add_typer(table.app, name="table", help="Interact with tables.")
+_typer_app.add_typer(db.app, name="db", help="Database migration commands.")
+_typer_app.add_typer(cron_cmd.app, name="cron", help="Manage cron jobs.")
+_typer_app.add_typer(new.app, name="new", help="Scaffold new components.")
 
 
-@app.callback(invoke_without_command=True)
+@_typer_app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
     version: bool = typer.Option(False, "--version", "-v", help="Show version."),
@@ -31,6 +31,10 @@ def main(
 
         typer.echo(f"hof-engine {__version__}")
         raise typer.Exit()
+
+
+app: click.Group = typer.main.get_group(_typer_app)
+app.add_command(fn.app, "fn")
 
 
 if __name__ == "__main__":

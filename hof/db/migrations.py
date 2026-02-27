@@ -96,6 +96,7 @@ from alembic import context
 config = context.config
 
 from hof.db.engine import Base
+import hof.flows.models  # noqa: F401 — register flow execution tables
 target_metadata = Base.metadata
 
 

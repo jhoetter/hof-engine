@@ -122,14 +122,6 @@ def _mount_user_ui(app: FastAPI, project_root: Path, config: "Any") -> None:
                     text = _rewrite_paths(text)
                     content = text.encode("utf-8")
 
-                # #region agent log
-                import json as _dj, time as _dt
-                _log_path = "/Users/jhoetter/repos/hof-engine/.cursor/debug-e035b7.log"
-                _body_preview = content[:800].decode("utf-8", errors="replace") if content else ""
-                with open(_log_path, "a") as _f:
-                    _f.write(_dj.dumps({"sessionId":"e035b7","hypothesisId":"H1-fix","location":"server.py:user_ui_proxy","message":"proxy_request","data":{"request_path":str(request.url.path),"forwarded_url":url,"status":proxy_resp.status_code,"content_type":ct,"body_preview":_body_preview},"timestamp":int(_dt.time()*1000),"runId":"post-fix"}) + "\n")
-                # #endregion
-
                 return Response(
                     content=content,
                     status_code=proxy_resp.status_code,

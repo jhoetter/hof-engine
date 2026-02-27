@@ -13,15 +13,9 @@ export function UserComponent({ componentName, props, onComplete }: UserComponen
   const stableOnComplete = useCallback(onComplete, []);
 
   useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7345/ingest/403b2b0a-43ec-4bbc-b69d-a75588fe09bf',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e035b7'},body:JSON.stringify({sessionId:'e035b7',location:'UserComponent.tsx:useEffect',message:'iframe_mounted',data:{componentName,iframeSrc:'/user-ui/',props},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     const handler = (event: MessageEvent) => {
       const { type, data, error } = event.data || {};
 
-      // #region agent log
-      fetch('http://127.0.0.1:7345/ingest/403b2b0a-43ec-4bbc-b69d-a75588fe09bf',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e035b7'},body:JSON.stringify({sessionId:'e035b7',location:'UserComponent.tsx:handler',message:'postMessage_received',data:{type,hasData:!!data,hasError:!!error},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       switch (type) {
         case "hof:loaded":
           iframeRef.current?.contentWindow?.postMessage(

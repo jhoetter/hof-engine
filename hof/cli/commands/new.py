@@ -150,7 +150,7 @@ COPY pyproject.toml .
 RUN pip install .
 
 COPY . .
-RUN cd ui && npm install && npx vite build
+RUN if [ -f ui/package.json ]; then cd ui && npm install && npx vite build; fi
 
 EXPOSE 8001
 CMD ["sh", "-c", "hof db migrate && hof dev --host 0.0.0.0 --port 8001"]

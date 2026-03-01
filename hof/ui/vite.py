@@ -37,10 +37,6 @@ class ViteManager:
         if not node_modules.is_dir():
             self._install_dependencies()
 
-        vite_config = self.ui_dir / "vite.config.ts"
-        if not vite_config.exists():
-            self._create_vite_config(vite_config)
-
         tsconfig = self.ui_dir / "tsconfig.json"
         if not tsconfig.exists():
             self._create_tsconfig(tsconfig)
@@ -50,6 +46,8 @@ class ViteManager:
         if self.has_pages():
             self._generate_pages_entry()
             self._generate_pages_host_page()
+
+        self._create_vite_config(self.ui_dir / "vite.config.ts")
 
     def start_dev_server(
         self,
@@ -291,7 +289,32 @@ class ViteManager:
         path.write_text(json.dumps(package, indent=2))
 
     def _create_vite_config(self, path: Path) -> None:
-        path.write_text("""\
+        pages_html = self.ui_dir / "_pages.html"
+        if pages_html.exists():
+            config = """\
+import { resolve } from "path";
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, "index.html"),
+        pages: resolve(__dirname, "_pages.html"),
+      },
+    },
+  },
+  server: {
+    proxy: {
+      "/api": "http://localhost:8001",
+    },
+  },
+});
+"""
+        else:
+            config = """\
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -303,7 +326,10 @@ export default defineConfig({
     },
   },
 });
-""")
+"""
+        existing = path.read_text() if path.exists() else ""
+        if existing != config:
+            path.write_text(config)
 
     def _create_tsconfig(self, path: Path) -> None:
         tsconfig = {

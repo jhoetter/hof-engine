@@ -248,8 +248,28 @@ def _mount_user_pages(app: FastAPI, project_root: Path, config: "Any") -> None:
                 return Response(content="App not ready", status_code=503)
 
     elif user_ui_dist.is_dir():
-        app.mount(
-            "/",
-            StaticFiles(directory=str(user_ui_dist), html=True),
-            name="user-pages",
-        )
+        _static = StaticFiles(directory=str(user_ui_dist))
+        _pages_html = user_ui_dist / "_pages.html"
+        _index_html = user_ui_dist / "index.html"
+        _spa_shell = _pages_html if _pages_html.exists() else _index_html
+
+        @app.api_route("/{path:path}", methods=["GET", "HEAD"])
+        @app.api_route("/", methods=["GET", "HEAD"])
+        async def pages_static(request: Request, path: str = "") -> Response:
+            """Serve built assets directly; non-asset paths get the SPA shell."""
+            last_segment = path.rsplit("/", 1)[-1] if path else ""
+            is_asset = (
+                "." in last_segment
+                or path.startswith("assets/")
+            )
+
+            if is_asset:
+                scope = request.scope.copy()
+                scope["path"] = f"/{path}"
+                try:
+                    resp = await _static.get_response(path, scope)
+                    return resp
+                except Exception:
+                    return Response(content="Not found", status_code=404)
+
+            return HTMLResponse(content=_spa_shell.read_text())

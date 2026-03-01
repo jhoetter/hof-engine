@@ -12,6 +12,7 @@ from hof.flows.node import node
 from hof.functions import function
 from hof.cron.scheduler import cron
 from hof.errors import HofError
+from hof.scaffold import get_project_files
 
 __version__ = "0.1.0"
 
@@ -30,4 +31,5 @@ __all__ = [
     "types",
     "registry",
     "HofError",
+    "get_project_files",
 ]

@@ -18,6 +18,41 @@ ADMIN_UI_DIR = Path(__file__).resolve().parent.parent.parent / "ui" / "admin"
 ADMIN_VITE_PORT = 5174
 
 
+def _docker_compose_up(project_root: Path) -> bool:
+    """Start Docker Compose services if a docker-compose.yml exists.
+
+    Returns True if compose was started, False if no compose file found.
+    """
+    compose_file = project_root / "docker-compose.yml"
+    if not compose_file.is_file():
+        return False
+    console.print("  [cyan]Starting Docker services...[/]")
+    result = subprocess.run(
+        ["docker", "compose", "up", "-d", "--wait"],
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        console.print(f"  [red]Docker Compose failed:[/] {result.stderr.strip()}")
+        raise typer.Exit(1)
+    console.print("  [green]Docker services ready.[/]")
+    return True
+
+
+def _docker_compose_down(project_root: Path) -> None:
+    """Stop Docker Compose services if a docker-compose.yml exists."""
+    compose_file = project_root / "docker-compose.yml"
+    if not compose_file.is_file():
+        return
+    console.print("  [cyan]Stopping Docker services...[/]")
+    subprocess.run(
+        ["docker", "compose", "down"],
+        cwd=str(project_root),
+        capture_output=True,
+    )
+
+
 @app.callback(invoke_without_command=True)
 def dev(
     port: int = typer.Option(8001, "--port", "-p", help="Server port."),
@@ -25,6 +60,7 @@ def dev(
     no_worker: bool = typer.Option(False, "--no-worker", help="Skip Celery worker."),
     no_ui: bool = typer.Option(False, "--no-ui", help="Skip Vite dev server."),
     reload: bool = typer.Option(True, "--reload/--no-reload", help="Auto-reload on changes."),
+    fresh: bool = typer.Option(False, "--fresh", help="Wipe Docker volumes and start with a clean database."),
 ) -> None:
     """Start all development services: FastAPI, Celery worker, Vite."""
     from hof.config import load_config
@@ -33,6 +69,27 @@ def dev(
     config = load_config(project_root)
 
     console.print(f"\n[bold green]hof dev[/] starting [bold]{config.app_name}[/]...\n")
+
+    if fresh:
+        compose_file = project_root / "docker-compose.yml"
+        if compose_file.is_file():
+            console.print("  [yellow]Wiping Docker volumes for a fresh start...[/]")
+            subprocess.run(
+                ["docker", "compose", "down", "-v"],
+                cwd=str(project_root),
+                capture_output=True,
+            )
+
+    compose_started = _docker_compose_up(project_root)
+
+    if compose_started:
+        console.print("  [cyan]Running migrations...[/]")
+        from hof.cli.commands import bootstrap
+        bootstrap()
+        from hof.config import get_config
+        from hof.db.migrations import run_migrations
+        run_migrations(project_root, get_config())
+        console.print("  [green]Migrations complete.[/]")
 
     processes: list[subprocess.Popen] = []
     env = {**os.environ, "HOF_ADMIN_VITE_PORT": str(ADMIN_VITE_PORT)}
@@ -84,9 +141,11 @@ def dev(
         display_host = "localhost" if host == "0.0.0.0" else host
         console.print()
         console.print("[bold green]All services started.[/] Press Ctrl+C to stop.\n")
-        console.print(f"  [bold]API[/]        http://{display_host}:{port}/api/health")
+        console.print(f"  [bold]App[/]        http://{display_host}:{port}/")
         console.print(f"  [bold]Admin UI[/]   http://{display_host}:{port}/admin/")
         console.print(f"  [bold]API docs[/]   http://{display_host}:{port}/docs")
+        if user_vite_port:
+            console.print(f"  [bold]User UI[/]    http://{display_host}:{port}/user-ui/")
         if config.admin_username:
             console.print(
                 f"\n  [dim]Admin credentials: {config.admin_username} / ****[/]"
@@ -105,6 +164,8 @@ def dev(
                 p.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 p.kill()
+        if compose_started:
+            _docker_compose_down(project_root)
         console.print("[green]Stopped.[/]")
 
 
@@ -150,10 +211,11 @@ def _start_user_vite(
     from hof.ui.vite import ViteManager, USER_VITE_PORT
 
     ui_dir = project_root / config.ui_dir
-    components_dir = ui_dir / "components"
+    has_components = (ui_dir / "components").is_dir()
+    has_pages = any((ui_dir / "pages").glob("*.tsx")) if (ui_dir / "pages").is_dir() else False
 
-    if not components_dir.is_dir():
-        console.print("  [dim]No ui/components/ directory, skipping user UI[/]")
+    if not has_components and not has_pages:
+        console.print("  [dim]No ui/components/ or ui/pages/, skipping user UI[/]")
         return 0
 
     manager = ViteManager(ui_dir)

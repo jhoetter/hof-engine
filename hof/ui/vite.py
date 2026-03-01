@@ -11,11 +11,18 @@ USER_VITE_PORT = 5175
 
 
 class ViteManager:
-    """Manages the Vite dev server for user-defined React components."""
+    """Manages the Vite dev server for user-defined React components and pages."""
 
     def __init__(self, ui_dir: Path) -> None:
         self.ui_dir = ui_dir
         self.process: subprocess.Popen | None = None
+
+    def has_pages(self) -> bool:
+        """Return True if the project has at least one page in ui/pages/."""
+        pages_dir = self.ui_dir / "pages"
+        if not pages_dir.is_dir():
+            return False
+        return any(pages_dir.glob("*.tsx"))
 
     def ensure_setup(self) -> None:
         """Ensure the UI directory has package.json, node_modules, and entry point."""
@@ -40,6 +47,9 @@ class ViteManager:
 
         self._generate_host_page()
         self._generate_entry_point()
+        if self.has_pages():
+            self._generate_pages_entry()
+            self._generate_pages_host_page()
 
     def start_dev_server(
         self,
@@ -171,6 +181,89 @@ class ViteManager:
         existing = index_path.read_text() if index_path.exists() else ""
         if existing != html:
             index_path.write_text(html)
+
+    def _generate_pages_entry(self) -> None:
+        """Auto-generate _hof_pages_entry.tsx with file-system routing for pages."""
+        pages_dir = self.ui_dir / "pages"
+        if not pages_dir.is_dir():
+            return
+
+        tsx_files = sorted(pages_dir.glob("*.tsx"))
+        if not tsx_files:
+            return
+
+        imports: list[str] = []
+        route_entries: list[str] = []
+
+        for f in tsx_files:
+            stem = f.stem
+            var_name = f"Page_{stem.replace('-', '_')}"
+            imports.append(f'import {var_name} from "./pages/{stem}";')
+            route_path = "/" if stem == "index" else f"/{stem}"
+            route_entries.append(f'  {{ path: "{route_path}", component: {var_name} }},')
+
+        entry = (
+            'import React, { useState, useEffect } from "react";\n'
+            'import { createRoot } from "react-dom/client";\n'
+            + "\n".join(imports)
+            + "\n\n"
+            + "const routes: { path: string; component: React.ComponentType }[] = [\n"
+            + "\n".join(route_entries)
+            + "\n];\n\n"
+            + "function App() {\n"
+            + "  const [path, setPath] = useState(window.location.pathname);\n"
+            + "\n"
+            + "  useEffect(() => {\n"
+            + "    const onPop = () => setPath(window.location.pathname);\n"
+            + '    window.addEventListener("popstate", onPop);\n'
+            + '    return () => window.removeEventListener("popstate", onPop);\n'
+            + "  }, []);\n"
+            + "\n"
+            + "  const match = routes.find((r) => r.path === path);\n"
+            + "  if (!match) {\n"
+            + "    return (\n"
+            + "      <div style={{ textAlign: 'center', padding: '4rem' }}>\n"
+            + "        <h1>404</h1>\n"
+            + "        <p>Page not found</p>\n"
+            + "      </div>\n"
+            + "    );\n"
+            + "  }\n"
+            + "\n"
+            + "  const Page = match.component;\n"
+            + "  return <Page />;\n"
+            + "}\n\n"
+            + 'createRoot(document.getElementById("hof-root")!).render(\n'
+            + "  <React.StrictMode>\n"
+            + "    <App />\n"
+            + "  </React.StrictMode>\n"
+            + ");\n"
+        )
+
+        entry_path = self.ui_dir / "_hof_pages_entry.tsx"
+        existing = entry_path.read_text() if entry_path.exists() else ""
+        if existing != entry:
+            entry_path.write_text(entry)
+
+    def _generate_pages_host_page(self) -> None:
+        """Generate _pages.html that loads the pages entry point."""
+        html = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>hof app</title>
+</head>
+<body>
+  <div id="hof-root"></div>
+  <script type="module" src="/_hof_pages_entry.tsx"></script>
+</body>
+</html>
+"""
+        pages_html_path = self.ui_dir / "_pages.html"
+        existing = pages_html_path.read_text() if pages_html_path.exists() else ""
+        if existing != html:
+            pages_html_path.write_text(html)
 
     def _create_package_json(self, path: Path) -> None:
         package = {

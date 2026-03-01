@@ -91,6 +91,7 @@ def create_app() -> FastAPI:
 
     _mount_user_ui(app, project_root, config)
     _mount_admin_ui(app)
+    _mount_user_pages(app, project_root, config)
 
     return app
 
@@ -191,3 +192,59 @@ def _mount_admin_ui(app: FastAPI) -> None:
                 "or build with <code>cd hof/ui/admin && npm run build</code>.</p>",
                 status_code=503,
             )
+
+
+def _mount_user_pages(app: FastAPI, project_root: Path, config: "Any") -> None:
+    """Serve user-defined pages at the root — proxy to Vite in dev, static in prod.
+
+    Pages live in ui/pages/*.tsx and are rendered as a standalone SPA at /.
+    This catch-all is registered last so /api/*, /admin/*, /user-ui/* take priority.
+    """
+    user_ui_dist = project_root / config.ui_dir / "dist"
+
+    if USER_VITE_PORT:
+        _proxy = httpx.AsyncClient(
+            base_url=f"http://localhost:{USER_VITE_PORT}",
+        )
+
+        @app.api_route("/{path:path}", methods=["GET", "HEAD"])
+        @app.api_route("/", methods=["GET", "HEAD"])
+        async def pages_proxy(request: Request, path: str = "") -> Response:
+            """Proxy page requests to the user Vite dev server.
+
+            Asset requests (containing a dot in the last segment) are forwarded
+            as-is. All other paths get the _pages.html SPA shell so client-side
+            routing can take over.
+            """
+            last_segment = path.rsplit("/", 1)[-1] if path else ""
+            is_asset = "." in last_segment
+
+            if is_asset:
+                url = f"/{path}"
+            else:
+                url = "/_pages.html"
+
+            if request.query_params:
+                url += f"?{request.query_params}"
+
+            fwd_headers = {
+                k: v
+                for k, v in request.headers.items()
+                if k.lower() not in ("host", "connection")
+            }
+            try:
+                proxy_resp = await _proxy.get(url, headers=fwd_headers)
+                return Response(
+                    content=proxy_resp.content,
+                    status_code=proxy_resp.status_code,
+                    media_type=proxy_resp.headers.get("content-type"),
+                )
+            except httpx.ConnectError:
+                return Response(content="App not ready", status_code=503)
+
+    elif user_ui_dist.is_dir():
+        app.mount(
+            "/",
+            StaticFiles(directory=str(user_ui_dist), html=True),
+            name="user-pages",
+        )

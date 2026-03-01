@@ -1,4 +1,10 @@
-"""hof new -- scaffold new components."""
+"""hof new -- scaffold new components.
+
+The ``get_project_files`` function is the **single source of truth** for the
+file layout of a new hof project.  It is used by both the ``hof new project``
+CLI command (writes to local disk) and by hof-os (pushes to GitHub via the
+Trees API).  Importable from ``hof.scaffold``.
+"""
 
 from __future__ import annotations
 
@@ -86,7 +92,7 @@ export function {class_name}({{ onComplete }}: {class_name}Props) {{
     ),
 }
 
-PROJECT_FILES = {
+_PROJECT_FILES = {
     ".dockerignore": '''__pycache__
 *.pyc
 .git
@@ -105,10 +111,10 @@ celerybeat-schedule.db
 
 config = Config(
     app_name="{name}",
-    database_url="${{DATABASE_URL}}",
-    redis_url="${{REDIS_URL}}",
+    database_url="${DATABASE_URL}",
+    redis_url="${REDIS_URL}",
     admin_username="admin",
-    admin_password="${{HOF_ADMIN_PASSWORD}}",
+    admin_password="${HOF_ADMIN_PASSWORD}",
 )
 ''',
     "pyproject.toml": '''[build-system]
@@ -162,7 +168,7 @@ services:
       - "8001:8001"
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://postgres:${{DB_PASSWORD}}@db:5432/${{DB_NAME}}
+      DATABASE_URL: postgresql://postgres:${DB_PASSWORD}@db:5432/${DB_NAME}
       REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
@@ -177,8 +183,8 @@ services:
     ports:
       - "5433:5432"
     environment:
-      POSTGRES_DB: ${{DB_NAME}}
-      POSTGRES_PASSWORD: ${{DB_PASSWORD}}
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 2s
@@ -195,7 +201,108 @@ volumes:
 ''',
 }
 
-PROJECT_DIRS = ["tables", "functions", "flows", "cron", "ui/components", "ui/pages"]
+_PROJECT_DIRS = ["tables", "functions", "flows", "cron", "ui/components", "ui/pages"]
+
+_DEFAULT_INDEX_PAGE = '''\
+export default function IndexPage() {
+  return (
+    <div style={{
+      minHeight: "100vh",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontFamily: "system-ui, -apple-system, sans-serif",
+      background: "#0f1117",
+      color: "#e4e6eb",
+    }}>
+      <div style={{ textAlign: "center", maxWidth: 480, padding: "2rem" }}>
+        <h1 style={{ fontSize: "2.5rem", fontWeight: 700, marginBottom: "0.5rem" }}>
+          {name}
+        </h1>
+        <p style={{ color: "#9ca3af", fontSize: "1.1rem", lineHeight: 1.6, marginBottom: "2rem" }}>
+          Your hof app is running. Edit{" "}
+          <code style={{ color: "#60a5fa", background: "#1e293b", padding: "2px 6px", borderRadius: 4 }}>
+            ui/pages/index.tsx
+          </code>
+          {" "}to get started.
+        </p>
+        <div style={{ display: "flex", gap: "1rem", justifyContent: "center" }}>
+          <a
+            href="/admin"
+            style={{
+              color: "#e4e6eb",
+              background: "#1e293b",
+              padding: "0.5rem 1.25rem",
+              borderRadius: 6,
+              textDecoration: "none",
+              fontSize: "0.9rem",
+            }}
+          >
+            Admin Panel
+          </a>
+          <a
+            href="/docs"
+            style={{
+              color: "#e4e6eb",
+              background: "#1e293b",
+              padding: "0.5rem 1.25rem",
+              borderRadius: 6,
+              textDecoration: "none",
+              fontSize: "0.9rem",
+            }}
+          >
+            API Docs
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+'''
+
+_ENV_TEMPLATE = (
+    "# Environment variables — used for local dev outside Docker.\n"
+    "# Inside Docker, DATABASE_URL and REDIS_URL are overridden by docker-compose.yml.\n"
+    "# Ports offset from hof-os (5432/6379) so both can run simultaneously.\n"
+    "DATABASE_URL=postgresql://postgres:changeme@localhost:5433/{name}\n"
+    "REDIS_URL=redis://localhost:6380/0\n"
+    "HOF_ADMIN_PASSWORD=changeme\n"
+    "DB_NAME={name}\n"
+    "DB_PASSWORD=changeme\n"
+)
+
+
+# ---------------------------------------------------------------------------
+# Public API — single source of truth for project file layout
+# ---------------------------------------------------------------------------
+
+
+def get_project_files(name: str) -> dict[str, str]:
+    """Return ``{relative_path: content}`` for a new hof project.
+
+    This is the **single source of truth** for the file structure of a hof
+    project.  Used by ``hof new project`` (local) and by hof-os (remote push
+    via the GitHub Trees API).
+    """
+    files: dict[str, str] = {}
+
+    for filename, template in _PROJECT_FILES.items():
+        files[filename] = template.replace("{name}", name)
+
+    files[".env"] = _ENV_TEMPLATE.replace("{name}", name)
+    files["ui/pages/index.tsx"] = _DEFAULT_INDEX_PAGE.replace("{name}", name)
+
+    for dirname in _PROJECT_DIRS:
+        parts = dirname.split("/")
+        for i in range(len(parts)):
+            sub = "/".join(parts[: i + 1])
+            non_python = sub.startswith("ui") or sub.startswith(".")
+            if not non_python:
+                files[f"{sub}/__init__.py"] = ""
+        if dirname.startswith("ui"):
+            files[f"{dirname}/.gitkeep"] = ""
+
+    return files
 
 
 @app.command("project")
@@ -211,28 +318,10 @@ def new_project(
 
     project_dir.mkdir(parents=True)
 
-    for dirname in PROJECT_DIRS:
-        (project_dir / dirname).mkdir(parents=True, exist_ok=True)
-        parts = dirname.split("/")
-        for i in range(len(parts)):
-            init_path = project_dir / "/".join(parts[: i + 1]) / "__init__.py"
-            non_python = dirname.startswith("ui") or dirname.startswith(".")
-            if not init_path.exists() and not non_python:
-                init_path.touch()
-
-    for filename, template in PROJECT_FILES.items():
-        (project_dir / filename).write_text(template.format(name=name))
-
-    (project_dir / ".env").write_text(
-        "# Environment variables — used for local dev outside Docker.\n"
-        "# Inside Docker, DATABASE_URL and REDIS_URL are overridden by docker-compose.yml.\n"
-        "# Ports offset from hof-os (5432/6379) so both can run simultaneously.\n"
-        "DATABASE_URL=postgresql://postgres:changeme@localhost:5433/{name}\n"
-        "REDIS_URL=redis://localhost:6380/0\n"
-        "HOF_ADMIN_PASSWORD=changeme\n"
-        "DB_NAME={name}\n"
-        "DB_PASSWORD=changeme\n".format(name=name)
-    )
+    for rel_path, content in get_project_files(name).items():
+        full_path = project_dir / rel_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content)
 
     console.print(f"[green]Created project:[/] {name}/")
     console.print(f"  cd {name}")

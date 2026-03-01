@@ -266,6 +266,14 @@ class ViteManager:
             pages_html_path.write_text(html)
 
     def _create_package_json(self, path: Path) -> None:
+        deps: dict[str, str] = {
+            "react": "^19.0.0",
+            "react-dom": "^19.0.0",
+        }
+        hof_react = self._hof_react_version()
+        if hof_react is not None:
+            deps["@hof-engine/react"] = hof_react
+
         package = {
             "name": "hof-ui",
             "private": True,
@@ -276,11 +284,7 @@ class ViteManager:
                 "build": "vite build",
                 "preview": "vite preview",
             },
-            "dependencies": {
-                "react": "^19.0.0",
-                "react-dom": "^19.0.0",
-                "@hof-engine/react": self._hof_react_version(),
-            },
+            "dependencies": deps,
             "devDependencies": {
                 "@types/react": "^19.0.0",
                 "@types/react-dom": "^19.0.0",
@@ -326,23 +330,23 @@ export default defineConfig({
         }
         path.write_text(json.dumps(tsconfig, indent=2))
 
-    def _hof_react_version(self) -> str:
-        """Return the @hof-engine/react version spec.
+    def _hof_react_version(self) -> str | None:
+        """Return the @hof-engine/react version spec, or None if unavailable.
 
-        Uses a local file: path when the package hasn't been published to npm yet
-        (i.e. the dist/ directory exists next to the hof-react source).
-        Falls back to the npm registry version otherwise.
+        Uses a local file: path when the package exists locally (i.e. the
+        dist/ directory exists next to the hof-react source in the repo).
+        Returns None when running from a pip-installed package (e.g. inside
+        Docker) where the hof-react directory isn't present — the package
+        is not published to npm so we can't fall back to a registry version.
         """
         hof_react_dir = Path(__file__).resolve().parent.parent.parent / "hof-react"
         if (hof_react_dir / "dist").exists():
             return f"file:{hof_react_dir}"
-        return "^0.1.0"
+        return None
 
     def _install_dependencies(self) -> None:
         subprocess.run(
             ["npm", "install"],
             cwd=str(self.ui_dir),
             check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
         )

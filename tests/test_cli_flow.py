@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from hof.cli.commands.flow import app
 from hof.flows.flow import Flow
-from hof.flows.state import ExecutionStatus, FlowExecution
+from hof.flows.state import FlowExecution
 
 
 @pytest.fixture
@@ -70,9 +70,7 @@ class TestFlowListDefinitions:
 
     def test_via_api_client(self, runner):
         mock_client = MagicMock()
-        mock_client.list_flows.return_value = [
-            {"name": "remote_flow", "nodes": {"a": {}, "b": {}}}
-        ]
+        mock_client.list_flows.return_value = [{"name": "remote_flow", "nodes": {"a": {}, "b": {}}}]
         with patch("hof.cli.api_client.get_client", return_value=mock_client):
             result = runner.invoke(app, ["list-definitions"])
         assert result.exit_code == 0
@@ -116,10 +114,13 @@ class TestFlowList:
 
     def test_list_shows_executions(self, runner, no_api_client, sample_execution_dict):
         mock_store = MagicMock()
-        ex = FlowExecution(**{
-            k: v for k, v in sample_execution_dict.items()
-            if k in ("id", "flow_name", "status", "input_data", "output_data", "error")
-        })
+        ex = FlowExecution(
+            **{
+                k: v
+                for k, v in sample_execution_dict.items()
+                if k in ("id", "flow_name", "status", "input_data", "output_data", "error")
+            }
+        )
         mock_store.list_executions.return_value = [ex]
         with patch("hof.cli.commands.flow.bootstrap"):
             with patch("hof.flows.state.execution_store", mock_store):

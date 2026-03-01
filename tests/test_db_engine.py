@@ -62,7 +62,9 @@ class TestGetSession:
 
         # Create a simple in-memory table for testing
         with get_session() as session:
-            session.execute(sa.text("CREATE TABLE IF NOT EXISTS _test_tbl (id INTEGER PRIMARY KEY)"))
+            session.execute(
+                sa.text("CREATE TABLE IF NOT EXISTS _test_tbl (id INTEGER PRIMARY KEY)")
+            )
 
         with get_session() as session:
             session.execute(sa.text("INSERT INTO _test_tbl VALUES (1)"))
@@ -75,7 +77,9 @@ class TestGetSession:
         init_engine("sqlite:///:memory:", pool_size=1)
 
         with get_session() as session:
-            session.execute(sa.text("CREATE TABLE IF NOT EXISTS _rollback_tbl (id INTEGER PRIMARY KEY)"))
+            session.execute(
+                sa.text("CREATE TABLE IF NOT EXISTS _rollback_tbl (id INTEGER PRIMARY KEY)")
+            )
 
         with pytest.raises(Exception):
             with get_session() as session:
@@ -101,4 +105,5 @@ class TestGetSessionFactory:
 class TestBase:
     def test_base_is_declarative_base(self):
         from sqlalchemy.orm import DeclarativeBase
+
         assert issubclass(Base, DeclarativeBase)

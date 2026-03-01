@@ -32,7 +32,7 @@ Custom roles can be defined and checked with ``require_role()``.
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from fastapi import Depends, HTTPException, Request, Security, status
@@ -46,6 +46,7 @@ from fastapi.security import (
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+
     from hof.config import Config
 
 _config: Config | None = None
@@ -60,7 +61,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=Fals
 # ---------------------------------------------------------------------------
 
 
-def setup_auth(app: "FastAPI", config: "Config") -> None:
+def setup_auth(app: FastAPI, config: Config) -> None:
     """Configure authentication on the FastAPI app and register the token endpoint."""
     global _config
     _config = config
@@ -117,7 +118,7 @@ def _create_access_token(
     except ImportError:
         raise ImportError("python-jose[cryptography] is required for JWT auth.")
 
-    expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
+    expire = datetime.now(UTC) + timedelta(minutes=expires_minutes)
     payload = {
         "sub": subject,
         "roles": roles,
@@ -133,7 +134,7 @@ def _decode_jwt(token: str) -> dict[str, Any] | None:
     if not secret:
         return None
     try:
-        from jose import JWTError, jwt
+        from jose import jwt
 
         return jwt.decode(token, secret, algorithms=[_config.jwt_algorithm])
     except Exception:

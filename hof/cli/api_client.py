@@ -33,6 +33,7 @@ class _ApiClient:
     def _load_auth(self) -> None:
         try:
             from hof.config import get_config
+
             cfg = get_config()
             if cfg.admin_username and cfg.admin_password:
                 self._auth = (cfg.admin_username, cfg.admin_password)
@@ -69,7 +70,9 @@ class _ApiClient:
         r.raise_for_status()
         return r.json()
 
-    def list_executions(self, flow_name: str, status: str | None = None, limit: int = 20) -> list[dict]:
+    def list_executions(
+        self, flow_name: str, status: str | None = None, limit: int = 20
+    ) -> list[dict]:
         params: dict[str, Any] = {"limit": limit}
         if status:
             params["status"] = status

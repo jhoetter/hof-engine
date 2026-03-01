@@ -5,9 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
-
-from hof.core.discovery import DEFAULT_DIRS, _import_directory, discover_all
+from hof.core.discovery import DEFAULT_DIRS, discover_all
 from hof.core.registry import registry
 
 
@@ -26,6 +24,7 @@ class TestDiscoverAll:
     def test_skips_missing_directories(self, tmp_project: Path):
         # Remove all subdirs — discover_all should not raise
         import shutil
+
         for d in ("tables", "functions", "flows", "cron"):
             shutil.rmtree(tmp_project / d, ignore_errors=True)
         discover_all(tmp_project)  # should not raise

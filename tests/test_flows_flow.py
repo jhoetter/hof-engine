@@ -6,7 +6,6 @@ import pytest
 
 from hof.core.registry import registry
 from hof.flows.flow import Flow
-from hof.flows.node import node
 
 
 class TestFlowConstruction:

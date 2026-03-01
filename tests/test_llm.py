@@ -35,6 +35,7 @@ class TestPromptDecorator:
 
         with patch("hof.llm.provider.get_provider", return_value=mock_provider):
             with patch("llm_markdown.prompt", mock_prompt_fn):
+
                 @prompt(provider=mock_provider)
                 def my_fn(text: str) -> str:
                     """Summarize: {text}"""

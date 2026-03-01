@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -54,7 +54,9 @@ def _load_template_meta(template_path: Path) -> dict:
     return json.loads(meta_path.read_text())
 
 
-def _update_modules_json(project_root: Path, module_name: str, meta: dict, copied: list[str]) -> None:
+def _update_modules_json(
+    project_root: Path, module_name: str, meta: dict, copied: list[str]
+) -> None:
     """Track installed module in .hof/modules.json."""
     hof_dir = project_root / ".hof"
     hof_dir.mkdir(exist_ok=True)
@@ -66,7 +68,7 @@ def _update_modules_json(project_root: Path, module_name: str, meta: dict, copie
 
     data["installed_modules"][module_name] = {
         "version": meta.get("version", "unknown"),
-        "installed_at": datetime.now(timezone.utc).isoformat(),
+        "installed_at": datetime.now(UTC).isoformat(),
         "files": copied,
     }
 
@@ -76,7 +78,9 @@ def _update_modules_json(project_root: Path, module_name: str, meta: dict, copie
 def _install_module(module_name: str, registry: dict, project_root: Path, force: bool) -> None:
     """Copy a module's files into the current project."""
     if module_name not in registry["modules"]:
-        console.print(f"[red]Module '{module_name}' not found. Use --list to see available modules.[/]")
+        console.print(
+            f"[red]Module '{module_name}' not found. Use --list to see available modules.[/]"
+        )
         raise typer.Exit(1)
 
     module_rel_path = registry["modules"][module_name]["path"]
@@ -89,11 +93,15 @@ def _install_module(module_name: str, registry: dict, project_root: Path, force:
         modules_file = project_root / ".hof" / "modules.json"
         installed: set[str] = set()
         if modules_file.exists():
-            installed = set(json.loads(modules_file.read_text()).get("installed_modules", {}).keys())
+            installed = set(
+                json.loads(modules_file.read_text()).get("installed_modules", {}).keys()
+            )
         missing = [m for m in dep_modules if m not in installed]
         if missing:
             console.print(f"[yellow]Module '{module_name}' requires: {', '.join(missing)}[/]")
-            console.print("Install them first with: " + " && ".join(f"hof add {m}" for m in missing))
+            console.print(
+                "Install them first with: " + " && ".join(f"hof add {m}" for m in missing)
+            )
             raise typer.Exit(1)
 
     copied: list[str] = []
@@ -146,7 +154,7 @@ def _install_module(module_name: str, registry: dict, project_root: Path, force:
         additions: list[str] = []
         for var in env_vars:
             if var["name"] not in existing_env:
-                additions.append(f'# {var["description"]}\n{var["name"]}=\n')
+                additions.append(f"# {var['description']}\n{var['name']}=\n")
         if additions:
             with open(env_file, "a") as f:
                 f.write("\n" + "\n".join(additions))
@@ -173,8 +181,12 @@ def _install_module(module_name: str, registry: dict, project_root: Path, force:
 def add(
     ctx: typer.Context,
     module_name: str = typer.Argument(None, help="Module name to add."),
-    list_modules: bool = typer.Option(False, "--list", "-l", help="List available modules and templates."),
-    template: str = typer.Option(None, "--template", "-t", help="Scaffold a project from a template."),
+    list_modules: bool = typer.Option(
+        False, "--list", "-l", help="List available modules and templates."
+    ),
+    template: str = typer.Option(
+        None, "--template", "-t", help="Scaffold a project from a template."
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files."),
 ) -> None:
     """Add modules or templates from hof-components into the current project."""
@@ -227,7 +239,9 @@ def _print_list(registry: dict) -> None:
 def _install_template(template_name: str, registry: dict, project_root: Path, force: bool) -> None:
     """Scaffold a project from a template (installs all its modules)."""
     if template_name not in registry.get("templates", {}):
-        console.print(f"[red]Template '{template_name}' not found. Use --list to see available templates.[/]")
+        console.print(
+            f"[red]Template '{template_name}' not found. Use --list to see available templates.[/]"
+        )
         raise typer.Exit(1)
 
     template_rel_path = registry["templates"][template_name]["path"]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -39,8 +38,6 @@ def _get_alembic_config(project_root: Path, config: Config) -> AlembicConfig:
 def run_migrations(project_root: Path, config: Config, *, dry_run: bool = False) -> None:
     """Apply pending migrations, then autogenerate new ones if models changed."""
     alembic_cfg = _get_alembic_config(project_root, config)
-
-    from hof.db.engine import Base
 
     command.upgrade(alembic_cfg, "head")
 
@@ -90,7 +87,7 @@ def get_current_revision(project_root: Path, config: Config) -> str | None:
 
 def _create_env_py(path: Path) -> None:
     """Create the Alembic env.py for auto-generated migrations."""
-    path.write_text('''\
+    path.write_text("""\
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
@@ -125,7 +122,7 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
-''')
+""")
 
 
 def _create_script_mako(path: Path) -> None:

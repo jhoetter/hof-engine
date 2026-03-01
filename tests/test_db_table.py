@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 import pytest
 import sqlalchemy as sa
 
 import hof.db.engine as engine_module
 from hof.core.registry import registry
-from hof.db.engine import Base, init_engine
-from hof.db.table import Column, ForeignKey, Table
 from hof.core.types import types
-
+from hof.db.engine import Base
+from hof.db.table import Column, ForeignKey, Table
 
 # ---------------------------------------------------------------------------
 # Test table definitions (defined once at module level)
@@ -46,10 +44,11 @@ def db(monkeypatch):
         connect_args={"check_same_thread": False},
     )
     from sqlalchemy.orm import sessionmaker
-    Session = sessionmaker(bind=engine, expire_on_commit=False)
+
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
 
     monkeypatch.setattr(engine_module, "_engine", engine)
-    monkeypatch.setattr(engine_module, "_SessionLocal", Session)
+    monkeypatch.setattr(engine_module, "_SessionLocal", session_factory)
 
     Base.metadata.create_all(engine)
     yield engine
@@ -132,11 +131,13 @@ class TestCreate:
         assert item.created_at is not None
 
     def test_bulk_create(self):
-        items = Item.bulk_create([
-            {"name": "A", "score": 1},
-            {"name": "B", "score": 2},
-            {"name": "C", "score": 3},
-        ])
+        items = Item.bulk_create(
+            [
+                {"name": "A", "score": 1},
+                {"name": "B", "score": 2},
+                {"name": "C", "score": 3},
+            ]
+        )
         assert len(items) == 3
         assert {i.name for i in items} == {"A", "B", "C"}
 

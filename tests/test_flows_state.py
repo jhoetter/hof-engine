@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from hof.flows.state import (
     ExecutionStatus,
@@ -27,7 +25,7 @@ class TestNodeState:
         assert ns.retries_used == 0
 
     def test_to_dict(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ns = NodeState(
             node_name="test_node",
             status=NodeStatus.COMPLETED,
@@ -112,7 +110,7 @@ class TestFlowExecution:
         assert d["node_states"][0]["node_name"] == "step_a"
 
     def test_to_dict_with_datetimes(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ex = FlowExecution(started_at=now, completed_at=now, duration_ms=500)
         d = ex.to_dict()
         assert d["started_at"] is not None

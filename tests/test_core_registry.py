@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
-from hof.core.registry import _Registry, registry
+from hof.core.registry import registry
 
 
 def _make_table(name: str):

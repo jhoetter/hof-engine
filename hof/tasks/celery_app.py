@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 from celery import Celery
 
 from hof.config import get_config
@@ -46,10 +48,11 @@ def _setup_beat_schedule(sender: Celery, **kwargs: object) -> None:
 @celery.task(name="hof.execute_node", bind=True, max_retries=3)
 def execute_node_task(self, execution_id: str, node_name: str, input_data: dict) -> dict:
     """Celery task that executes a single flow node."""
+    from datetime import datetime
+
     from hof.core.registry import registry
     from hof.flows.executor import _normalize_result
-    from hof.flows.state import execution_store, NodeStatus
-    from datetime import datetime, timezone
+    from hof.flows.state import NodeStatus, execution_store
 
     execution = execution_store.get_execution(execution_id)
     if execution is None:
@@ -66,7 +69,7 @@ def execute_node_task(self, execution_id: str, node_name: str, input_data: dict)
     ns = execution.set_node_state(
         node_name,
         status=NodeStatus.RUNNING,
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
     )
 
     try:
@@ -75,7 +78,7 @@ def execute_node_task(self, execution_id: str, node_name: str, input_data: dict)
 
         ns.output_data = result
         ns.status = NodeStatus.COMPLETED
-        ns.completed_at = datetime.now(timezone.utc)
+        ns.completed_at = datetime.now(UTC)
         if ns.started_at:
             delta = ns.completed_at - ns.started_at
             ns.duration_ms = int(delta.total_seconds() * 1000)

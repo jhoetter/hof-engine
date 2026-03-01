@@ -84,6 +84,7 @@ def get_execution(
     else:
         bootstrap()
         from hof.flows.state import execution_store
+
         ex = execution_store.get_execution(execution_id)
         if ex is None:
             console.print(f"[red]Execution '{execution_id}' not found.[/]")

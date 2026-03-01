@@ -7,8 +7,8 @@ Two engines are maintained:
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import AsyncGenerator, Generator
 
 import sqlalchemy as sa
 from sqlalchemy import create_engine
@@ -126,8 +126,7 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     """Provide a transactional async session scope."""
     if _AsyncSessionLocal is None:
         raise RuntimeError(
-            "Async database engine not initialized. "
-            "Call init_engine() with a PostgreSQL URL first."
+            "Async database engine not initialized. Call init_engine() with a PostgreSQL URL first."
         )
     async with _AsyncSessionLocal() as session:
         try:

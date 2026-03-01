@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Generator
+from collections.abc import Generator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import ValidationError
@@ -27,10 +28,7 @@ async def list_tables(user: str = Depends(verify_auth)) -> list[dict]:
     """List all registered tables."""
     result = []
     for name, table_cls in registry.tables.items():
-        columns = [
-            {"name": c.name, "type": str(c.type)}
-            for c in table_cls.__table__.columns
-        ]
+        columns = [{"name": c.name, "type": str(c.type)} for c in table_cls.__table__.columns]
         result.append({"name": name, "columns": columns})
     return result
 

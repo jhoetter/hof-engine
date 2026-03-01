@@ -93,6 +93,7 @@ def list_functions() -> None:
     else:
         bootstrap()
         from hof.core.registry import registry
+
         functions = [meta.to_dict() for meta in registry.functions.values()]
 
     table = RichTable(title="Registered Functions")
@@ -125,6 +126,7 @@ def show_schema(function_name: str) -> None:
     else:
         bootstrap()
         from hof.core.registry import registry
+
         meta = registry.get_function(function_name)
         if meta is None:
             console.print(f"[red]Function '{function_name}' not found.[/]")

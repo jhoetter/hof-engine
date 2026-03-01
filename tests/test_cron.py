@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from hof.core.registry import registry
 from hof.cron.scheduler import CronMetadata, cron, get_celery_beat_schedule

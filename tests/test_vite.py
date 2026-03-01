@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -54,16 +55,20 @@ class TestGenerateHostPage:
 
 
 class TestGenerateEntryPoint:
-    def test_skips_if_no_components_dir(self, tmp_path):
+    def test_generates_empty_entry_if_no_components_dir(self, tmp_path):
         ui = tmp_path / "empty_ui"
         ui.mkdir()
         manager = ViteManager(ui)
         manager._generate_entry_point()
-        assert not (ui / "_hof_entry.tsx").exists()
+        entry = ui / "_hof_entry.tsx"
+        assert entry.exists()
+        assert "const components" in entry.read_text()
 
-    def test_skips_if_no_tsx_files(self, manager, ui_dir):
+    def test_generates_empty_entry_if_no_tsx_files(self, manager, ui_dir):
         manager._generate_entry_point()
-        assert not (ui_dir / "_hof_entry.tsx").exists()
+        entry = ui_dir / "_hof_entry.tsx"
+        assert entry.exists()
+        assert "const components" in entry.read_text()
 
     def test_creates_entry_with_components(self, manager, ui_dir):
         (ui_dir / "components" / "MyComponent.tsx").write_text(
@@ -91,18 +96,14 @@ class TestGenerateEntryPoint:
         assert '"ReviewForm": ReviewForm' in content
 
     def test_entry_has_message_listener(self, manager, ui_dir):
-        (ui_dir / "components" / "Comp.tsx").write_text(
-            "export function Comp() { return null; }\n"
-        )
+        (ui_dir / "components" / "Comp.tsx").write_text("export function Comp() { return null; }\n")
         manager._generate_entry_point()
         content = (ui_dir / "_hof_entry.tsx").read_text()
         assert "hof:render" in content
         assert "hof:loaded" in content
 
     def test_entry_has_resize_observer(self, manager, ui_dir):
-        (ui_dir / "components" / "Comp.tsx").write_text(
-            "export function Comp() { return null; }\n"
-        )
+        (ui_dir / "components" / "Comp.tsx").write_text("export function Comp() { return null; }\n")
         manager._generate_entry_point()
         content = (ui_dir / "_hof_entry.tsx").read_text()
         assert "ResizeObserver" in content
@@ -201,6 +202,7 @@ class TestEnsureSetup:
         )
         # Mock npm install to avoid running it
         import subprocess
+
         original_run = subprocess.run
 
         def mock_run(cmd, **kwargs):
@@ -209,6 +211,7 @@ class TestEnsureSetup:
             return original_run(cmd, **kwargs)
 
         from unittest.mock import patch
+
         with patch("subprocess.run", side_effect=mock_run):
             with patch.object(manager, "_install_dependencies"):
                 manager.ensure_setup()

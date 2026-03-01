@@ -50,7 +50,7 @@ def run_cron(
 
     console.print(f"[cyan]Running {cron_name}...[/]")
     meta.fn()
-    console.print(f"[green]Completed.[/]")
+    console.print("[green]Completed.[/]")
 
 
 @app.command("enable")

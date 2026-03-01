@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import inspect
 
-import pytest
-
 from hof.core.registry import registry
 from hof.functions import FunctionMetadata, ParameterInfo, _extract_parameters, function
 
@@ -178,7 +176,9 @@ class TestExtractParameters:
 
 class TestParameterInfoToDict:
     def test_to_dict_required(self):
-        p = ParameterInfo(name="x", type_annotation=int, default=inspect.Parameter.empty, required=True)
+        p = ParameterInfo(
+            name="x", type_annotation=int, default=inspect.Parameter.empty, required=True
+        )
         d = p.to_dict()
         assert d["name"] == "x"
         assert d["type"] == "int"

@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 
 @dataclass
@@ -47,9 +48,7 @@ class NodeMetadata:
 def _filter_kwargs(fn: Callable, kwargs: dict[str, Any]) -> dict[str, Any]:
     """Keep only kwargs the function accepts. Pass all if it has **kwargs."""
     sig = _get_real_signature(fn)
-    has_var_keyword = any(
-        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-    )
+    has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
     if has_var_keyword:
         return kwargs
     accepted = set(sig.parameters.keys())

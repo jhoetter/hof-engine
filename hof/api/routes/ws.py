@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 
@@ -55,22 +54,24 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
 async def notify_execution_update(execution_id: str, status: str, **extra: Any) -> None:
     """Broadcast an execution status update to all connected clients."""
-    await manager.broadcast({
-        "type": "execution_update",
-        "execution_id": execution_id,
-        "status": status,
-        **extra,
-    })
+    await manager.broadcast(
+        {
+            "type": "execution_update",
+            "execution_id": execution_id,
+            "status": status,
+            **extra,
+        }
+    )
 
 
-async def notify_node_update(
-    execution_id: str, node_name: str, status: str, **extra: Any
-) -> None:
+async def notify_node_update(execution_id: str, node_name: str, status: str, **extra: Any) -> None:
     """Broadcast a node status update."""
-    await manager.broadcast({
-        "type": "node_update",
-        "execution_id": execution_id,
-        "node_name": node_name,
-        "status": status,
-        **extra,
-    })
+    await manager.broadcast(
+        {
+            "type": "node_update",
+            "execution_id": execution_id,
+            "node_name": node_name,
+            "status": status,
+            **extra,
+        }
+    )

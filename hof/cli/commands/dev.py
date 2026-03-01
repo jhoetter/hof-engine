@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -60,7 +61,9 @@ def dev(
     no_worker: bool = typer.Option(False, "--no-worker", help="Skip Celery worker."),
     no_ui: bool = typer.Option(False, "--no-ui", help="Skip Vite dev server."),
     reload: bool = typer.Option(True, "--reload/--no-reload", help="Auto-reload on changes."),
-    fresh: bool = typer.Option(False, "--fresh", help="Wipe Docker volumes and start with a clean database."),
+    fresh: bool = typer.Option(
+        False, "--fresh", help="Wipe Docker volumes and start with a clean database."
+    ),
 ) -> None:
     """Start all development services: FastAPI, Celery worker, Vite."""
     from hof.config import load_config
@@ -85,9 +88,11 @@ def dev(
     if compose_started:
         console.print("  [cyan]Running migrations...[/]")
         from hof.cli.commands import bootstrap
+
         bootstrap()
         from hof.config import get_config
         from hof.db.migrations import run_migrations
+
         run_migrations(project_root, get_config())
         console.print("  [green]Migrations complete.[/]")
 
@@ -107,11 +112,15 @@ def dev(
 
         # FastAPI server
         uvicorn_cmd = [
-            sys.executable, "-m", "uvicorn",
+            sys.executable,
+            "-m",
+            "uvicorn",
             "hof.api.server:create_app",
             "--factory",
-            "--host", host,
-            "--port", str(port),
+            "--host",
+            host,
+            "--port",
+            str(port),
         ]
         if reload:
             uvicorn_cmd.append("--reload")
@@ -121,8 +130,11 @@ def dev(
         # Celery worker
         if not no_worker:
             celery_cmd = [
-                sys.executable, "-m", "celery",
-                "-A", "hof.tasks.celery_app:celery",
+                sys.executable,
+                "-m",
+                "celery",
+                "-A",
+                "hof.tasks.celery_app:celery",
                 "worker",
                 "--loglevel=info",
                 f"--concurrency={config.celery_concurrency}",
@@ -131,8 +143,11 @@ def dev(
 
             # Celery Beat for cron jobs
             beat_cmd = [
-                sys.executable, "-m", "celery",
-                "-A", "hof.tasks.celery_app:celery",
+                sys.executable,
+                "-m",
+                "celery",
+                "-A",
+                "hof.tasks.celery_app:celery",
                 "beat",
                 "--loglevel=info",
             ]
@@ -147,9 +162,7 @@ def dev(
         if user_vite_port:
             console.print(f"  [bold]User UI[/]    http://{display_host}:{port}/user-ui/")
         if config.admin_username:
-            console.print(
-                f"\n  [dim]Admin credentials: {config.admin_username} / ****[/]"
-            )
+            console.print(f"\n  [dim]Admin credentials: {config.admin_username} / ****[/]")
         console.print()
 
         for p in processes:
@@ -203,12 +216,12 @@ def _start_admin_vite(
 
 def _start_user_vite(
     project_root: Path,
-    config: "Any",
+    config: Any,
     processes: list[subprocess.Popen],
     env: dict[str, str],
 ) -> int:
     """Start the user UI Vite dev server. Returns the port, or 0 if skipped."""
-    from hof.ui.vite import ViteManager, USER_VITE_PORT
+    from hof.ui.vite import USER_VITE_PORT, ViteManager
 
     ui_dir = project_root / config.ui_dir
     has_components = (ui_dir / "components").is_dir()

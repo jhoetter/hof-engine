@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 
-class ExecutionStatus(str, Enum):
+class ExecutionStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     WAITING_FOR_HUMAN = "waiting_for_human"
@@ -22,7 +22,7 @@ class ExecutionStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class NodeStatus(str, Enum):
+class NodeStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     WAITING_FOR_HUMAN = "waiting_for_human"
@@ -142,7 +142,9 @@ class ExecutionStore:
             error=row.error,
         )
 
-    def create_execution(self, flow_name: str, input_data: dict, flow_snapshot: dict) -> FlowExecution:
+    def create_execution(
+        self, flow_name: str, input_data: dict, flow_snapshot: dict
+    ) -> FlowExecution:
         from hof.db.engine import get_session
         from hof.flows.models import FlowExecutionRow
 
@@ -151,7 +153,7 @@ class ExecutionStore:
             input_data=input_data,
             flow_snapshot=flow_snapshot,
             status=ExecutionStatus.PENDING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         with get_session() as session:
             session.add(row)
@@ -200,17 +202,19 @@ class ExecutionStore:
                     db_ns.duration_ms = ns.duration_ms
                     db_ns.retries_used = ns.retries_used
                 else:
-                    row.node_states.append(NodeStateRow(
-                        node_name=ns.node_name,
-                        status=ns.status,
-                        input_data=ns.input_data,
-                        output_data=ns.output_data,
-                        error=ns.error,
-                        started_at=ns.started_at,
-                        completed_at=ns.completed_at,
-                        duration_ms=ns.duration_ms,
-                        retries_used=ns.retries_used,
-                    ))
+                    row.node_states.append(
+                        NodeStateRow(
+                            node_name=ns.node_name,
+                            status=ns.status,
+                            input_data=ns.input_data,
+                            output_data=ns.output_data,
+                            error=ns.error,
+                            started_at=ns.started_at,
+                            completed_at=ns.completed_at,
+                            duration_ms=ns.duration_ms,
+                            retries_used=ns.retries_used,
+                        )
+                    )
 
     def update_execution(self, execution_id: str, **updates: Any) -> FlowExecution | None:
         from hof.db.engine import get_session
@@ -235,8 +239,12 @@ class ExecutionStore:
             if row is None:
                 return
             row.status = status
-            if status in (ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.CANCELLED):
-                row.completed_at = datetime.now(timezone.utc)
+            if status in (
+                ExecutionStatus.COMPLETED,
+                ExecutionStatus.FAILED,
+                ExecutionStatus.CANCELLED,
+            ):
+                row.completed_at = datetime.now(UTC)
                 if row.started_at:
                     delta = row.completed_at - row.started_at
                     row.duration_ms = int(delta.total_seconds() * 1000)
@@ -249,6 +257,7 @@ class ExecutionStore:
         limit: int = 20,
     ) -> list[FlowExecution]:
         import sqlalchemy as sa
+
         from hof.db.engine import get_session
         from hof.flows.models import FlowExecutionRow
 
@@ -276,7 +285,7 @@ class ExecutionStore:
                 if ns.node_name == node_name and ns.status == NodeStatus.WAITING_FOR_HUMAN:
                     ns.output_data = data
                     ns.status = NodeStatus.COMPLETED
-                    ns.completed_at = datetime.now(timezone.utc)
+                    ns.completed_at = datetime.now(UTC)
                     if ns.started_at:
                         delta = ns.completed_at - ns.started_at
                         ns.duration_ms = int(delta.total_seconds() * 1000)

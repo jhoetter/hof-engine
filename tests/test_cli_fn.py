@@ -8,8 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from hof.cli.commands.fn import app, _call_function
-from hof.core.registry import registry
+from hof.cli.commands.fn import app
 from hof.functions import function
 
 

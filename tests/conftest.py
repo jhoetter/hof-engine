@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 import sqlalchemy as sa
@@ -13,8 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from hof.core.registry import registry
 from hof.db.engine import Base
 from hof.flows.flow import Flow
-from hof.flows.state import ExecutionStatus, FlowExecution, NodeState, NodeStatus
-
+from hof.flows.state import ExecutionStatus, FlowExecution
 
 # ---------------------------------------------------------------------------
 # Registry isolation
@@ -65,8 +62,8 @@ def sqlite_engine():
 @pytest.fixture
 def sqlite_session(sqlite_engine):
     """Provide a transactional SQLite session that rolls back after each test."""
-    Session = sessionmaker(bind=sqlite_engine, expire_on_commit=False)
-    session = Session()
+    session_factory = sessionmaker(bind=sqlite_engine, expire_on_commit=False)
+    session = session_factory()
     yield session
     session.rollback()
     session.close()
@@ -77,10 +74,10 @@ def mock_db(sqlite_engine, monkeypatch):
     """Patch hof.db.engine to use the in-memory SQLite engine."""
     import hof.db.engine as engine_module
 
-    Session = sessionmaker(bind=sqlite_engine, expire_on_commit=False)
+    session_factory = sessionmaker(bind=sqlite_engine, expire_on_commit=False)
 
     monkeypatch.setattr(engine_module, "_engine", sqlite_engine)
-    monkeypatch.setattr(engine_module, "_SessionLocal", Session)
+    monkeypatch.setattr(engine_module, "_SessionLocal", session_factory)
     yield sqlite_engine
 
 

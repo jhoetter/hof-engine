@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from hof.flows.state import (
@@ -40,6 +40,7 @@ def _broadcast(coro: Any) -> None:
     except RuntimeError:
         # No running event loop — close the coroutine cleanly
         coro.close()
+
 
 # Maximum threads used for in-process parallel execution
 _MAX_WORKERS = 8
@@ -99,7 +100,7 @@ class FlowExecutor:
         except Exception as exc:
             execution.status = ExecutionStatus.FAILED
             execution.error = str(exc)
-            execution.completed_at = datetime.now(timezone.utc)
+            execution.completed_at = datetime.now(UTC)
             if execution.started_at:
                 delta = execution.completed_at - execution.started_at
                 execution.duration_ms = int(delta.total_seconds() * 1000)
@@ -117,6 +118,7 @@ class FlowExecutor:
         execution.status = ExecutionStatus.RUNNING
         execution_store.save_execution(execution)
         from hof.api.routes.ws import notify_execution_update
+
         _broadcast(notify_execution_update(execution.id, ExecutionStatus.RUNNING))
 
         waves = self.flow.get_execution_order()
@@ -145,7 +147,7 @@ class FlowExecutor:
                 ns = execution.set_node_state(
                     node_name,
                     status=NodeStatus.WAITING_FOR_HUMAN,
-                    started_at=datetime.now(timezone.utc),
+                    started_at=datetime.now(UTC),
                 )
                 meta = self.flow.nodes[node_name]
                 ns.input_data = self._gather_input(meta, execution.input_data, node_outputs)
@@ -160,12 +162,9 @@ class FlowExecutor:
                 return
 
         all_completed = all(
-            ns.status in (NodeStatus.COMPLETED, NodeStatus.SKIPPED)
-            for ns in execution.node_states
+            ns.status in (NodeStatus.COMPLETED, NodeStatus.SKIPPED) for ns in execution.node_states
         )
-        has_waiting = any(
-            ns.status == NodeStatus.WAITING_FOR_HUMAN for ns in execution.node_states
-        )
+        has_waiting = any(ns.status == NodeStatus.WAITING_FOR_HUMAN for ns in execution.node_states)
 
         if all_completed:
             last_wave = waves[-1] if waves else []
@@ -174,7 +173,7 @@ class FlowExecutor:
                 final_output.update(node_outputs.get(node_name, {}))
             execution.output_data = final_output
             execution.status = ExecutionStatus.COMPLETED
-            execution.completed_at = datetime.now(timezone.utc)
+            execution.completed_at = datetime.now(UTC)
             if execution.started_at:
                 delta = execution.completed_at - execution.started_at
                 execution.duration_ms = int(delta.total_seconds() * 1000)
@@ -183,6 +182,7 @@ class FlowExecutor:
 
         execution_store.save_execution(execution)
         from hof.api.routes.ws import notify_execution_update
+
         _broadcast(notify_execution_update(execution.id, execution.status))
 
     # ------------------------------------------------------------------
@@ -237,7 +237,7 @@ class FlowExecutor:
         ns = execution.set_node_state(
             node_name,
             status=NodeStatus.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
 
         node_input = self._gather_input(meta, execution.input_data, node_outputs)
@@ -249,7 +249,7 @@ class FlowExecutor:
 
             ns.output_data = result
             ns.status = NodeStatus.COMPLETED
-            ns.completed_at = datetime.now(timezone.utc)
+            ns.completed_at = datetime.now(UTC)
             if ns.started_at:
                 delta = ns.completed_at - ns.started_at
                 ns.duration_ms = int(delta.total_seconds() * 1000)
@@ -257,16 +257,20 @@ class FlowExecutor:
             execution_store.save_execution(execution)
             logger.info("Node '%s' completed in %dms", node_name, ns.duration_ms or 0)
             from hof.api.routes.ws import notify_node_update
+
             _broadcast(notify_node_update(execution.id, node_name, NodeStatus.COMPLETED))
             return result
 
         except Exception as exc:
             ns.status = NodeStatus.FAILED
             ns.error = str(exc)
-            ns.completed_at = datetime.now(timezone.utc)
+            ns.completed_at = datetime.now(UTC)
             execution_store.save_execution(execution)
             from hof.api.routes.ws import notify_node_update
-            _broadcast(notify_node_update(execution.id, node_name, NodeStatus.FAILED, error=str(exc)))
+
+            _broadcast(
+                notify_node_update(execution.id, node_name, NodeStatus.FAILED, error=str(exc))
+            )
             raise
 
     # ------------------------------------------------------------------
@@ -392,7 +396,7 @@ class FlowExecutor:
                 ns = execution.set_node_state(
                     next_human,
                     status=NodeStatus.WAITING_FOR_HUMAN,
-                    started_at=datetime.now(timezone.utc),
+                    started_at=datetime.now(UTC),
                 )
                 meta = self.flow.nodes[next_human]
                 ns.input_data = self._gather_input(meta, execution.input_data, node_outputs)
@@ -401,12 +405,11 @@ class FlowExecutor:
                 return execution
 
         all_done = all(
-            ns.status in (NodeStatus.COMPLETED, NodeStatus.SKIPPED)
-            for ns in execution.node_states
+            ns.status in (NodeStatus.COMPLETED, NodeStatus.SKIPPED) for ns in execution.node_states
         )
         if all_done:
             execution.status = ExecutionStatus.COMPLETED
-            execution.completed_at = datetime.now(timezone.utc)
+            execution.completed_at = datetime.now(UTC)
             if execution.started_at:
                 delta = execution.completed_at - execution.started_at
                 execution.duration_ms = int(delta.total_seconds() * 1000)

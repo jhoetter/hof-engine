@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
@@ -96,7 +97,7 @@ def create_app() -> FastAPI:
     return app
 
 
-def _mount_user_ui(app: FastAPI, project_root: Path, config: "Any") -> None:
+def _mount_user_ui(app: FastAPI, project_root: Path, config: Any) -> None:
     """Serve user-defined React components — proxy to Vite in dev, static in prod."""
     user_ui_dist = project_root / config.ui_dir / "dist"
 
@@ -107,17 +108,17 @@ def _mount_user_ui(app: FastAPI, project_root: Path, config: "Any") -> None:
             base_url=f"http://localhost:{USER_VITE_PORT}",
         )
 
-        _REWRITE_RE = _re.compile(
-            r'(?P<prefix>'
-            r'(?:src|href)\s*=\s*["\']'   # HTML attributes
-            r'|from\s+["\']'               # ES import … from "/…"
-            r'|import\s+["\']'             # ES import "/…" (side-effect)
-            r')'
-            r'(?P<path>/(?:@|_|node_modules/|components/|src/))'
+        _rewrite_re = _re.compile(
+            r"(?P<prefix>"
+            r'(?:src|href)\s*=\s*["\']'  # HTML attributes
+            r'|from\s+["\']'  # ES import … from "/…"
+            r'|import\s+["\']'  # ES import "/…" (side-effect)
+            r")"
+            r"(?P<path>/(?:@|_|node_modules/|components/|src/))"
         )
 
         def _rewrite_paths(text: str) -> str:
-            return _REWRITE_RE.sub(r'\g<prefix>/user-ui\g<path>', text)
+            return _rewrite_re.sub(r"\g<prefix>/user-ui\g<path>", text)
 
         @app.api_route("/user-ui/{path:path}", methods=["GET", "HEAD"])
         async def user_ui_proxy(request: Request, path: str = "") -> Response:
@@ -125,9 +126,7 @@ def _mount_user_ui(app: FastAPI, project_root: Path, config: "Any") -> None:
             if request.query_params:
                 url += f"?{request.query_params}"
             fwd_headers = {
-                k: v
-                for k, v in request.headers.items()
-                if k.lower() not in ("host", "connection")
+                k: v for k, v in request.headers.items() if k.lower() not in ("host", "connection")
             }
             try:
                 proxy_resp = await _proxy.get(url, headers=fwd_headers)
@@ -183,6 +182,7 @@ def _mount_admin_ui(app: FastAPI) -> None:
         )
 
     else:
+
         @app.get("/admin")
         @app.get("/admin/{path:path}")
         async def admin_not_built(path: str = "") -> HTMLResponse:
@@ -194,7 +194,7 @@ def _mount_admin_ui(app: FastAPI) -> None:
             )
 
 
-def _mount_user_pages(app: FastAPI, project_root: Path, config: "Any") -> None:
+def _mount_user_pages(app: FastAPI, project_root: Path, config: Any) -> None:
     """Serve user-defined pages at the root — proxy to Vite in dev, static in prod.
 
     Pages live in ui/pages/*.tsx and are rendered as a standalone SPA at /.
@@ -233,9 +233,7 @@ def _mount_user_pages(app: FastAPI, project_root: Path, config: "Any") -> None:
                 url += f"?{request.query_params}"
 
             fwd_headers = {
-                k: v
-                for k, v in request.headers.items()
-                if k.lower() not in ("host", "connection")
+                k: v for k, v in request.headers.items() if k.lower() not in ("host", "connection")
             }
             try:
                 proxy_resp = await _proxy.get(url, headers=fwd_headers)
@@ -258,10 +256,7 @@ def _mount_user_pages(app: FastAPI, project_root: Path, config: "Any") -> None:
         async def pages_static(request: Request, path: str = "") -> Response:
             """Serve built assets directly; non-asset paths get the SPA shell."""
             last_segment = path.rsplit("/", 1)[-1] if path else ""
-            is_asset = (
-                "." in last_segment
-                or path.startswith("assets/")
-            )
+            is_asset = "." in last_segment or path.startswith("assets/")
 
             if is_asset:
                 scope = request.scope.copy()

@@ -45,9 +45,7 @@ def table_root(
     filters = _parse_filters(filter_str) if filter_str else {}
 
     if action == "list":
-        records = table_cls.query(
-            filters=filters, order_by=order_by, limit=limit, offset=offset
-        )
+        records = table_cls.query(filters=filters, order_by=order_by, limit=limit, offset=offset)
         if not records:
             console.print("[dim]No records found.[/]")
             return
@@ -88,7 +86,9 @@ def table_root(
         console.print(f"Count: {count}")
 
     else:
-        console.print(f"[red]Unknown action '{action}'. Use: list, get, create, update, delete, count[/]")
+        console.print(
+            f"[red]Unknown action '{action}'. Use: list, get, create, update, delete, count[/]"
+        )
         raise typer.Exit(1)
 
 

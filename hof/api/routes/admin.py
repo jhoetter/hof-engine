@@ -40,14 +40,16 @@ async def flow_dag(
     edges = []
 
     for name, meta in flow.nodes.items():
-        nodes.append({
-            "id": name,
-            "label": name,
-            "description": meta.fn.__doc__ or "",
-            "is_human": meta.is_human,
-            "human_ui": meta.human_ui,
-            "tags": meta.tags,
-        })
+        nodes.append(
+            {
+                "id": name,
+                "label": name,
+                "description": meta.fn.__doc__ or "",
+                "is_human": meta.is_human,
+                "human_ui": meta.human_ui,
+                "tags": meta.tags,
+            }
+        )
         for dep in meta.depends_on:
             edges.append({"source": dep, "target": name})
 
@@ -73,13 +75,15 @@ async def pending_actions(user: str = Depends(verify_auth)) -> list[dict]:
                 flow = registry.get_flow(execution.flow_name)
                 node_meta = flow.nodes.get(ns.node_name) if flow else None
 
-                actions.append({
-                    "execution_id": execution.id,
-                    "flow_name": execution.flow_name,
-                    "node_name": ns.node_name,
-                    "ui_component": node_meta.human_ui if node_meta else None,
-                    "input_data": ns.input_data,
-                    "started_at": ns.started_at.isoformat() if ns.started_at else None,
-                })
+                actions.append(
+                    {
+                        "execution_id": execution.id,
+                        "flow_name": execution.flow_name,
+                        "node_name": ns.node_name,
+                        "ui_component": node_meta.human_ui if node_meta else None,
+                        "input_data": ns.input_data,
+                        "started_at": ns.started_at.isoformat() if ns.started_at else None,
+                    }
+                )
 
     return actions

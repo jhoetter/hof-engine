@@ -10,10 +10,8 @@ from fastapi.testclient import TestClient
 
 from hof.api.auth import verify_auth
 from hof.core.registry import registry
-from hof.functions import function
 from hof.flows.flow import Flow
-from hof.flows.state import ExecutionStatus, FlowExecution
-
+from hof.functions import function
 
 # ---------------------------------------------------------------------------
 # Minimal app factory for tests (no DB, no Vite, no discovery)

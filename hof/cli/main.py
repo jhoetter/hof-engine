@@ -6,7 +6,7 @@ import click
 import typer
 
 from hof.cli.commands import add as add_cmd
-from hof.cli.commands import build, db, dev, flow, fn, new, table, cron_cmd
+from hof.cli.commands import build, cron_cmd, db, dev, flow, fn, new, table
 
 _typer_app = typer.Typer(
     name="hof",

@@ -27,7 +27,7 @@ class _TypeNamespace:
     File = sa.String(1024)
 
     @staticmethod
-    def Enum(*values: str) -> sa.String:
+    def Enum(*values: str) -> sa.String:  # noqa: N802
         """Validated string column constrained to a set of allowed values.
 
         Stored as VARCHAR with a CHECK constraint generated at migration time.
@@ -37,7 +37,7 @@ class _TypeNamespace:
         return col_type
 
     @staticmethod
-    def String_(length: int = 255) -> sa.String:
+    def String_(length: int = 255) -> sa.String:  # noqa: N802
         """String with custom max length."""
         return sa.String(length)
 

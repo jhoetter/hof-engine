@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any, Generator
+from datetime import UTC, datetime
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy import func
-from sqlalchemy.orm import Mapped, Session, mapped_column
+from sqlalchemy.orm import Session, mapped_column
 
 from hof.core.registry import registry
 from hof.db.engine import Base, get_session
@@ -106,18 +107,22 @@ class TableMeta(type(Base)):  # type: ignore[misc]
 
             if col.auto_now:
                 sa_kwargs["server_default"] = func.now()
-                sa_kwargs["default"] = lambda: datetime.now(timezone.utc)
+                sa_kwargs["default"] = lambda: datetime.now(UTC)
             elif col.auto_now_update:
                 sa_kwargs["server_default"] = func.now()
                 sa_kwargs["onupdate"] = func.now()
-                sa_kwargs["default"] = lambda: datetime.now(timezone.utc)
+                sa_kwargs["default"] = lambda: datetime.now(UTC)
             elif col.default is not None:
                 sa_kwargs["default"] = col.default
 
             namespace[attr_name] = mapped_column(col.type_, **sa_kwargs)
 
         for attr_name, fk in hof_fks.items():
-            target_table = fk.target.__tablename__ if hasattr(fk.target, "__tablename__") else fk.target.__name__.lower()
+            target_table = (
+                fk.target.__tablename__
+                if hasattr(fk.target, "__tablename__")
+                else fk.target.__name__.lower()
+            )
             namespace[attr_name] = mapped_column(
                 sa.Uuid(),
                 sa.ForeignKey(f"{target_table}.id", ondelete=fk.on_delete),
@@ -128,7 +133,7 @@ class TableMeta(type(Base)):  # type: ignore[misc]
             namespace["created_at"] = mapped_column(
                 sa.DateTime(timezone=True),
                 server_default=func.now(),
-                default=lambda: datetime.now(timezone.utc),
+                default=lambda: datetime.now(UTC),
             )
 
         if not has_updated_at:
@@ -136,7 +141,7 @@ class TableMeta(type(Base)):  # type: ignore[misc]
                 sa.DateTime(timezone=True),
                 server_default=func.now(),
                 onupdate=func.now(),
-                default=lambda: datetime.now(timezone.utc),
+                default=lambda: datetime.now(UTC),
             )
 
         cls = super().__new__(mcs, name, bases, namespace, **kwargs)
@@ -173,9 +178,7 @@ class Table(Base, metaclass=TableMeta):
 
     @classmethod
     @contextmanager
-    def _session_scope(
-        cls, session: Session | None
-    ) -> Generator[Session, None, None]:
+    def _session_scope(cls, session: Session | None) -> Generator[Session, None, None]:
         """Yield the provided session, or open a new auto-commit one."""
         if session is not None:
             yield session
@@ -196,7 +199,7 @@ class Table(Base, metaclass=TableMeta):
     # ------------------------------------------------------------------
 
     @classmethod
-    def create(cls, *, session: Session | None = None, **kwargs: Any) -> "Table":
+    def create(cls, *, session: Session | None = None, **kwargs: Any) -> Table:
         """Create and persist a new record.
 
         Args:
@@ -213,7 +216,7 @@ class Table(Base, metaclass=TableMeta):
         return instance
 
     @classmethod
-    def get(cls, record_id: Any, *, session: Session | None = None) -> "Table | None":
+    def get(cls, record_id: Any, *, session: Session | None = None) -> Table | None:
         """Get a record by primary key."""
         with cls._session_scope(session) as s:
             return s.get(cls, record_id)
@@ -227,7 +230,7 @@ class Table(Base, metaclass=TableMeta):
         limit: int = 100,
         offset: int = 0,
         session: Session | None = None,
-    ) -> list["Table"]:
+    ) -> list[Table]:
         """Query records with optional filtering, sorting, and pagination."""
         with cls._session_scope(session) as s:
             stmt = sa.select(cls)
@@ -272,7 +275,7 @@ class Table(Base, metaclass=TableMeta):
         *,
         session: Session | None = None,
         **kwargs: Any,
-    ) -> "Table | None":
+    ) -> Table | None:
         """Update a record by primary key."""
         with cls._session_scope(session) as s:
             instance = s.get(cls, record_id)
@@ -285,9 +288,7 @@ class Table(Base, metaclass=TableMeta):
             return instance
 
     @classmethod
-    def delete(
-        cls, record_id: Any, *, session: Session | None = None
-    ) -> bool:
+    def delete(cls, record_id: Any, *, session: Session | None = None) -> bool:
         """Delete a record by primary key."""
         with cls._session_scope(session) as s:
             instance = s.get(cls, record_id)
@@ -319,7 +320,7 @@ class Table(Base, metaclass=TableMeta):
         records: list[dict[str, Any]],
         *,
         session: Session | None = None,
-    ) -> list["Table"]:
+    ) -> list[Table]:
         """Create multiple records at once."""
         instances = []
         with cls._session_scope(session) as s:

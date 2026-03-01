@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,10 +11,8 @@ from hof.flows.flow import Flow
 from hof.flows.state import (
     ExecutionStatus,
     FlowExecution,
-    NodeState,
     NodeStatus,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -283,9 +280,7 @@ class TestFlowExecutorResume:
 
         with patch("hof.flows.executor.execution_store", store):
             executor = FlowExecutor(flow)
-            result = executor.resume_after_human(
-                "exec-001", "human_step", {"approved": True}
-            )
+            result = executor.resume_after_human("exec-001", "human_step", {"approved": True})
 
         assert result is not None
         # After resume, step_c should be completed and the flow should be done

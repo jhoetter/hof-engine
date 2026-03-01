@@ -14,8 +14,11 @@ def start_worker(project_root: Path | None = None) -> subprocess.Popen:
     config = get_config()
 
     cmd = [
-        sys.executable, "-m", "celery",
-        "-A", "hof.tasks.celery_app:celery",
+        sys.executable,
+        "-m",
+        "celery",
+        "-A",
+        "hof.tasks.celery_app:celery",
         "worker",
         "--loglevel=info",
         f"--concurrency={config.celery_concurrency}",
@@ -30,8 +33,11 @@ def start_worker(project_root: Path | None = None) -> subprocess.Popen:
 def start_beat(project_root: Path | None = None) -> subprocess.Popen:
     """Start the Celery Beat scheduler for cron jobs."""
     cmd = [
-        sys.executable, "-m", "celery",
-        "-A", "hof.tasks.celery_app:celery",
+        sys.executable,
+        "-m",
+        "celery",
+        "-A",
+        "hof.tasks.celery_app:celery",
         "beat",
         "--loglevel=info",
     ]

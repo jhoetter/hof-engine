@@ -6,7 +6,7 @@ Used by the API routes to validate request bodies before passing data to the ORM
 from __future__ import annotations
 
 import inspect
-from typing import Any, Optional
+from typing import Any
 
 import sqlalchemy as sa
 from pydantic import BaseModel, create_model
@@ -52,7 +52,7 @@ def build_create_schema(table_cls: Any) -> type[BaseModel]:
         py_type = _sa_type_to_python(col.type)
 
         if col.nullable or col.default is not None or col.server_default is not None:
-            fields[col.name] = (Optional[py_type], None)
+            fields[col.name] = (py_type | None, None)
         else:
             fields[col.name] = (py_type, ...)
 
@@ -73,7 +73,7 @@ def build_update_schema(table_cls: Any) -> type[BaseModel]:
             continue
 
         py_type = _sa_type_to_python(col.type)
-        fields[col.name] = (Optional[py_type], None)
+        fields[col.name] = (py_type | None, None)
 
     model_name = f"{table_cls.__name__}UpdateSchema"
     return create_model(model_name, **fields)
@@ -84,7 +84,7 @@ def build_function_input_schema(metadata: Any) -> type[BaseModel]:
 
     Uses the ParameterInfo list already extracted by the @function decorator.
     """
-    _PY_TYPE_MAP = {
+    py_type_map = {
         "str": str,
         "int": int,
         "float": float,
@@ -97,7 +97,7 @@ def build_function_input_schema(metadata: Any) -> type[BaseModel]:
     fields: dict[str, Any] = {}
     for param in metadata.parameters:
         raw = getattr(param.type_annotation, "__name__", str(param.type_annotation))
-        py_type = _PY_TYPE_MAP.get(raw, Any)
+        py_type = py_type_map.get(raw, Any)
 
         if param.required:
             fields[param.name] = (py_type, ...)
@@ -108,7 +108,7 @@ def build_function_input_schema(metadata: Any) -> type[BaseModel]:
                     default_val = param.default
                 except Exception:
                     default_val = None
-            fields[param.name] = (Optional[py_type], default_val)
+            fields[param.name] = (py_type | None, default_val)
 
     model_name = f"{metadata.name.replace('_', ' ').title().replace(' ', '')}InputSchema"
     return create_model(model_name, **fields)

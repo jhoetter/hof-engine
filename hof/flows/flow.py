@@ -6,7 +6,8 @@ import asyncio
 import copy
 import functools
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from hof.core.registry import registry
 from hof.flows.node import NodeMetadata, _resolve_dep_names
@@ -192,19 +193,19 @@ class Flow:
 
     def _has_cycle(self) -> bool:
         """Detect cycles using DFS."""
-        WHITE, GRAY, BLACK = 0, 1, 2
-        color = {name: WHITE for name in self.nodes}
+        white, gray, black = 0, 1, 2
+        color = {name: white for name in self.nodes}
 
         def dfs(name: str) -> bool:
-            color[name] = GRAY
+            color[name] = gray
             for dep_name in self.nodes[name].depends_on:
                 if dep_name not in color:
                     continue
-                if color[dep_name] == GRAY:
+                if color[dep_name] == gray:
                     return True
-                if color[dep_name] == WHITE and dfs(dep_name):
+                if color[dep_name] == white and dfs(dep_name):
                     return True
-            color[name] = BLACK
+            color[name] = black
             return False
 
-        return any(color[name] == WHITE and dfs(name) for name in self.nodes)
+        return any(color[name] == white and dfs(name) for name in self.nodes)

@@ -19,13 +19,13 @@ console = Console()
 TEMPLATES = {
     "table": (
         "tables/{name}.py",
-        '''from hof import Table, Column, types
+        """from hof import Table, Column, types
 
 
 class {class_name}(Table):
     name = Column(types.String, required=True)
     created_at = Column(types.DateTime, auto_now=True)
-''',
+""",
     ),
     "function": (
         "functions/{name}.py",
@@ -64,7 +64,7 @@ def {name}():
     ),
     "component": (
         "ui/components/{class_name}.tsx",
-        '''interface {class_name}Props {{
+        """interface {class_name}Props {{
   onComplete?: (result: unknown) => void;
 }}
 
@@ -76,11 +76,11 @@ export function {class_name}({{ onComplete }}: {class_name}Props) {{
     </div>
   );
 }}
-''',
+""",
     ),
     "page": (
         "ui/pages/{name}.tsx",
-        '''export default function {class_name}Page() {{
+        """export default function {class_name}Page() {{
   return (
     <div>
       <h1>{class_name}</h1>
@@ -88,26 +88,26 @@ export function {class_name}({{ onComplete }}: {class_name}Props) {{
     </div>
   );
 }}
-''',
+""",
     ),
 }
 
 _PROJECT_FILES = {
-    ".dockerignore": '''__pycache__
+    ".dockerignore": """__pycache__
 *.pyc
 .git
 ui/node_modules
 celerybeat-schedule.db
 .env.local
 .env.*.local
-''',
-    "pyrightconfig.json": '''{
+""",
+    "pyrightconfig.json": """{
   "pythonPath": "/opt/anaconda3/bin/python3",
   "typeCheckingMode": "basic",
   "reportMissingImports": "none"
 }
-''',
-    "hof.config.py": '''from hof import Config
+""",
+    "hof.config.py": """from hof import Config
 
 config = Config(
     app_name="{name}",
@@ -116,8 +116,8 @@ config = Config(
     admin_username="admin",
     admin_password="${HOF_ADMIN_PASSWORD}",
 )
-''',
-    "pyproject.toml": '''[build-system]
+""",
+    "pyproject.toml": """[build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
@@ -132,8 +132,8 @@ dependencies = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
-''',
-    "Dockerfile": '''FROM python:3.11-slim
+""",
+    "Dockerfile": """FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl git && \\
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \\
@@ -148,12 +148,17 @@ COPY pyproject.toml .
 RUN pip install .
 
 COPY . .
-RUN python -c "import sys; from pathlib import Path; from hof.ui.vite import ViteManager; ViteManager(Path(sys.argv[1])).build()" ui
+RUN python -c "import sys; from pathlib import Path; \\
+    from hof.ui.vite import ViteManager; \\
+    ViteManager(Path(sys.argv[1])).build()" ui
 
 EXPOSE 8001
-CMD ["sh", "-c", "hof db migrate && python -m uvicorn hof.api.server:create_app --factory --host 0.0.0.0 --port 8001"]
-''',
-    "docker-compose.yml": '''# Local development — start Postgres + Redis, then run "hof dev" on the host.
+CMD ["sh", "-c", "hof db migrate && \\
+    python -m uvicorn hof.api.server:create_app \\
+    --factory --host 0.0.0.0 --port 8001"]
+""",
+    "docker-compose.yml": """# Local development — start Postgres + Redis,
+# then run "hof dev" on the host.
 # Production deployment is handled by hof-os (generates its own compose file).
 # Ports are offset from hof-os (5432/6379) to avoid conflicts.
 services:
@@ -179,12 +184,12 @@ services:
 
 volumes:
   pgdata:
-''',
+""",
 }
 
 _PROJECT_DIRS = ["tables", "functions", "flows", "cron", "ui/components", "ui/pages"]
 
-_DEFAULT_INDEX_PAGE = '''\
+_DEFAULT_INDEX_PAGE = """\
 export default function IndexPage() {
   return (
     <div style={{
@@ -202,7 +207,10 @@ export default function IndexPage() {
         </h1>
         <p style={{ color: "#9ca3af", fontSize: "1.1rem", lineHeight: 1.6, marginBottom: "2rem" }}>
           Your hof app is running. Edit{" "}
-          <code style={{ color: "#60a5fa", background: "#1e293b", padding: "2px 6px", borderRadius: 4 }}>
+          <code style={{
+            color: "#60a5fa", background: "#1e293b",
+            padding: "2px 6px", borderRadius: 4,
+          }}>
             ui/pages/index.tsx
           </code>
           {" "}to get started.
@@ -239,7 +247,7 @@ export default function IndexPage() {
     </div>
   );
 }
-'''
+"""
 
 _ENV_TEMPLATE = (
     "# Environment variables — used for local dev outside Docker.\n"
@@ -327,7 +335,9 @@ def new_project(
     console.print("  hof dev")
     console.print("")
     console.print("[dim]To add modules:        hof add --list[/]")
-    console.print("[dim]To add design system:  (via hof-os) add git submodule at ./design-system/[/]")
+    console.print(
+        "[dim]To add design system:  (via hof-os) add git submodule at ./design-system/[/]"
+    )
     console.print("[dim]Local dev:             docker compose up[/]")
 
 

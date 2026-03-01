@@ -6,7 +6,6 @@ import json
 import subprocess
 from pathlib import Path
 
-
 USER_VITE_PORT = 5175
 
 
@@ -116,7 +115,9 @@ class ViteManager:
             + "  const Component = components[componentName];\n"
             + "  const target = document.getElementById('hof-root');\n"
             + "  if (!Component || !target) {\n"
-            + "    window.parent.postMessage({ type: 'hof:error', error: `Component ${componentName} not found` }, '*');\n"
+            + "    window.parent.postMessage("
+            + "{ type: 'hof:error', error: `Component ${componentName} not found` }"
+            + ", '*');\n"
             + "    return;\n"
             + "  }\n"
             + "\n"
@@ -137,7 +138,9 @@ class ViteManager:
             + "});\n"
             + "observer.observe(document.body);\n\n"
             + "// Signal that the entry script has loaded\n"
-            + "window.parent.postMessage({ type: 'hof:loaded', components: Object.keys(components) }, '*');\n"
+            + "window.parent.postMessage("
+            + "{ type: 'hof:loaded', components: Object.keys(components) }"
+            + ", '*');\n"
         )
 
         entry_path = self.ui_dir / "_hof_entry.tsx"

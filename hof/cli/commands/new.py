@@ -161,7 +161,7 @@ COPY . .
 RUN if [ -f ui/package.json ]; then cd ui && npm install && npx vite build; fi
 
 EXPOSE 8001
-CMD ["sh", "-c", "hof db migrate && hof dev --host 0.0.0.0 --port 8001"]
+CMD ["sh", "-c", "hof db migrate && python -m uvicorn hof.api.server:create_app --factory --host 0.0.0.0 --port 8001"]
 ''',
     "docker-compose.yml": '''# Local development only — production deployment is handled by hof-os.
 # Ports are offset from hof-os (8000/5432/6379) so both can run simultaneously.

@@ -133,7 +133,11 @@ dependencies = [
 [tool.hatch.build.targets.wheel]
 packages = ["."]
 ''',
-    "Dockerfile": '''FROM python:3.11-slim
+    "Dockerfile": '''# Fallback stage — overridden by additional_contexts in local docker-compose.
+# On the server (no additional_contexts), this produces an empty stage.
+FROM scratch AS hof-engine
+
+FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl git && \\
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \\
@@ -141,7 +145,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl git && \\
     rm -rf /var/lib/apt/lists/*
 
 ARG GITHUB_TOKEN
-RUN pip install "hof-engine @ git+https://${GITHUB_TOKEN}@github.com/jhoetter/hof-engine.git"
+RUN if [ -n "$GITHUB_TOKEN" ]; then \\
+      pip install "hof-engine @ git+https://${GITHUB_TOKEN}@github.com/jhoetter/hof-engine.git"; \\
+    fi
+
+WORKDIR /build/hof-engine
+COPY --from=hof-engine . .
+RUN if [ -z "$GITHUB_TOKEN" ] && [ -f pyproject.toml ]; then pip install .; fi
 
 WORKDIR /app
 COPY pyproject.toml .
@@ -159,9 +169,9 @@ services:
   app:
     build:
       context: .
+      additional_contexts:
+        hof-engine: ../hof-engine
       dockerfile: Dockerfile
-      args:
-        - GITHUB_TOKEN=${GITHUB_TOKEN}
     ports:
       - "8001:8001"
     env_file: .env

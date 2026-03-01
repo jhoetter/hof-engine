@@ -133,11 +133,7 @@ dependencies = [
 [tool.hatch.build.targets.wheel]
 packages = ["."]
 ''',
-    "Dockerfile": '''# Fallback stage — overridden by additional_contexts in local docker-compose.
-# On the server (no additional_contexts), this produces an empty stage.
-FROM scratch AS hof-engine
-
-FROM python:3.11-slim
+    "Dockerfile": '''FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl git && \\
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \\
@@ -145,13 +141,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl git && \\
     rm -rf /var/lib/apt/lists/*
 
 ARG GITHUB_TOKEN
-RUN if [ -n "$GITHUB_TOKEN" ]; then \\
-      pip install "hof-engine @ git+https://${GITHUB_TOKEN}@github.com/jhoetter/hof-engine.git"; \\
-    fi
-
-WORKDIR /build/hof-engine
-COPY --from=hof-engine . .
-RUN if [ -z "$GITHUB_TOKEN" ] && [ -f pyproject.toml ]; then pip install .; fi
+RUN pip install "hof-engine @ git+https://${GITHUB_TOKEN}@github.com/jhoetter/hof-engine.git"
 
 WORKDIR /app
 COPY pyproject.toml .
@@ -163,27 +153,10 @@ RUN if [ -f ui/package.json ]; then cd ui && npm install && npx vite build; fi
 EXPOSE 8001
 CMD ["sh", "-c", "hof db migrate && python -m uvicorn hof.api.server:create_app --factory --host 0.0.0.0 --port 8001"]
 ''',
-    "docker-compose.yml": '''# Local development only — production deployment is handled by hof-os.
-# Ports are offset from hof-os (8000/5432/6379) so both can run simultaneously.
+    "docker-compose.yml": '''# Local development — start Postgres + Redis, then run "hof dev" on the host.
+# Production deployment is handled by hof-os (generates its own compose file).
+# Ports are offset from hof-os (5432/6379) to avoid conflicts.
 services:
-  app:
-    build:
-      context: .
-      additional_contexts:
-        hof-engine: ../hof-engine
-      dockerfile: Dockerfile
-    ports:
-      - "8001:8001"
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql://postgres:${DB_PASSWORD}@db:5432/${DB_NAME}
-      REDIS_URL: redis://redis:6379/0
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
-
   db:
     image: postgres:16
     volumes:

@@ -135,15 +135,13 @@ packages = ["."]
 ''',
     "Dockerfile": '''FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y curl && \\
+RUN apt-get update && apt-get install -y --no-install-recommends curl git && \\
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \\
     apt-get install -y nodejs && \\
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /build/hof-engine
-COPY --from=hof-engine pyproject.toml hatch_build.py README.md ./
-COPY --from=hof-engine hof/ ./hof/
-RUN pip install .
+ARG GITHUB_TOKEN
+RUN pip install "hof-engine @ git+https://${GITHUB_TOKEN}@github.com/jhoetter/hof-engine.git"
 
 WORKDIR /app
 COPY pyproject.toml .
@@ -161,9 +159,9 @@ services:
   app:
     build:
       context: .
-      additional_contexts:
-        hof-engine: ../hof-engine
       dockerfile: Dockerfile
+      args:
+        - GITHUB_TOKEN=${GITHUB_TOKEN}
     ports:
       - "8001:8001"
     env_file: .env

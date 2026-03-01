@@ -122,7 +122,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "{name}"
+name = "{slug}"
 version = "0.1.0"
 requires-python = ">=3.11"
 
@@ -264,10 +264,10 @@ _ENV_TEMPLATE = (
     "# Environment variables — used for local dev outside Docker.\n"
     "# Inside Docker, DATABASE_URL and REDIS_URL are overridden by docker-compose.yml.\n"
     "# Ports offset from hof-os (5432/6379) so both can run simultaneously.\n"
-    "DATABASE_URL=postgresql://postgres:changeme@localhost:5433/{name}\n"
+    "DATABASE_URL=postgresql://postgres:changeme@localhost:5433/{slug}\n"
     "REDIS_URL=redis://localhost:6380/0\n"
     "HOF_ADMIN_PASSWORD=changeme\n"
-    "DB_NAME={name}\n"
+    "DB_NAME={slug}\n"
     "DB_PASSWORD=changeme\n"
 )
 
@@ -277,19 +277,36 @@ _ENV_TEMPLATE = (
 # ---------------------------------------------------------------------------
 
 
-def get_project_files(name: str) -> dict[str, str]:
+def _to_slug(name: str) -> str:
+    """Convert a project name to a valid Python package / DB-safe slug."""
+    import re
+
+    s = name.lower().strip()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")
+
+
+def get_project_files(name: str, *, slug: str | None = None) -> dict[str, str]:
     """Return ``{relative_path: content}`` for a new hof project.
+
+    *name* is the human-readable project name (used in hof.config.py and the
+    index page heading).  *slug* is the machine-safe identifier used for the
+    Python package name, database name, and env vars.  If omitted it is derived
+    from *name*.
 
     This is the **single source of truth** for the file structure of a hof
     project.  Used by ``hof new project`` (local) and by hof-os (remote push
     via the GitHub Trees API).
     """
+    if slug is None:
+        slug = _to_slug(name)
+
     files: dict[str, str] = {}
 
     for filename, template in _PROJECT_FILES.items():
-        files[filename] = template.replace("{name}", name)
+        files[filename] = template.replace("{name}", name).replace("{slug}", slug)
 
-    files[".env"] = _ENV_TEMPLATE.replace("{name}", name)
+    files[".env"] = _ENV_TEMPLATE.replace("{slug}", slug)
     files["ui/pages/index.tsx"] = _DEFAULT_INDEX_PAGE.replace("{name}", name)
 
     for dirname in _PROJECT_DIRS:

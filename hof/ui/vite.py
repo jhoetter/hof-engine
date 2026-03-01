@@ -92,12 +92,7 @@ class ViteManager:
     def _generate_entry_point(self) -> None:
         """Auto-generate _hof_entry.tsx that registers all components."""
         components_dir = self.ui_dir / "components"
-        if not components_dir.is_dir():
-            return
-
-        tsx_files = sorted(components_dir.glob("*.tsx"))
-        if not tsx_files:
-            return
+        tsx_files = sorted(components_dir.glob("*.tsx")) if components_dir.is_dir() else []
 
         imports: list[str] = []
         registry_entries: list[str] = []
@@ -110,8 +105,8 @@ class ViteManager:
         entry = (
             'import React from "react";\n'
             'import { createRoot } from "react-dom/client";\n'
-            + "\n".join(imports)
-            + "\n\n"
+            + ("\n".join(imports) + "\n" if imports else "")
+            + "\n"
             + "const components: Record<string, React.ComponentType<any>> = {\n"
             + "\n".join(registry_entries)
             + "\n};\n\n"

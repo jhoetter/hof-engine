@@ -6,7 +6,7 @@ import click
 import typer
 
 from hof.cli.commands import add as add_cmd
-from hof.cli.commands import db, dev, flow, fn, new, table, cron_cmd
+from hof.cli.commands import build, db, dev, flow, fn, new, table, cron_cmd
 
 _typer_app = typer.Typer(
     name="hof",
@@ -14,6 +14,7 @@ _typer_app = typer.Typer(
     no_args_is_help=True,
 )
 
+_typer_app.add_typer(build.app, name="build", help="Build the UI for production.")
 _typer_app.add_typer(dev.app, name="dev", help="Start the development server.")
 _typer_app.add_typer(flow.app, name="flow", help="Manage and run flows.")
 _typer_app.add_typer(table.app, name="table", help="Interact with tables.")

@@ -217,7 +217,12 @@ def _mount_user_pages(app: FastAPI, project_root: Path, config: "Any") -> None:
             routing can take over.
             """
             last_segment = path.rsplit("/", 1)[-1] if path else ""
-            is_asset = "." in last_segment
+            is_asset = (
+                "." in last_segment
+                or path.startswith("@")
+                or path.startswith("node_modules/")
+                or path.startswith("_hof_")
+            )
 
             if is_asset:
                 url = f"/{path}"

@@ -148,9 +148,9 @@ COPY pyproject.toml .
 RUN pip install .
 
 COPY . .
-RUN python -c "import sys; from pathlib import Path; \\
-    from hof.ui.vite import ViteManager; \\
-    ViteManager(Path(sys.argv[1])).build()" ui
+RUN python -c "from pathlib import Path; from hof.config import load_config; \\
+    from hof.ui.vite import ViteManager; c = load_config(Path('.')); \\
+    ViteManager(Path(c.ui_dir), app_name=c.app_name, project_root=Path('.')).build()"
 
 EXPOSE 8001
 CMD ["sh", "-c", "hof db migrate && \\
@@ -207,21 +207,13 @@ export default function IndexPage() {
         <div className="flex gap-4 justify-center">
           <a
             href="/admin"
-            className={
-              "bg-hover text-foreground rounded-md px-5 py-2 "
-              + "text-sm font-medium hover:bg-divider "
-              + "border border-divider no-underline"
-            }
+            className="bg-hover text-foreground rounded-md px-5 py-2 text-sm font-medium hover:bg-divider border border-divider no-underline"
           >
             Admin Panel
           </a>
           <a
             href="/docs"
-            className={
-              "bg-hover text-foreground rounded-md px-5 py-2 "
-              + "text-sm font-medium hover:bg-divider "
-              + "border border-divider no-underline"
-            }
+            className="bg-hover text-foreground rounded-md px-5 py-2 text-sm font-medium hover:bg-divider border border-divider no-underline"
           >
             API Docs
           </a>

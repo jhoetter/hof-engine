@@ -19,6 +19,45 @@ ADMIN_UI_DIR = Path(__file__).resolve().parent.parent.parent / "ui" / "admin"
 ADMIN_VITE_PORT = 5174
 
 
+def _init_submodules(project_root: Path) -> None:
+    """Initialize git submodules if a .gitmodules file exists.
+
+    A no-op for projects without submodules. Ensures the design-system
+    submodule (and any others) are populated before Vite tries to import them.
+    """
+    if not (project_root / ".gitmodules").is_file():
+        return
+    result = subprocess.run(
+        ["git", "submodule", "update", "--init"],
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        console.print(f"  [yellow]Warning: git submodule init failed:[/] {result.stderr.strip()}")
+
+
+def _kill_port(port: int) -> None:
+    """Kill any process currently listening on the given port.
+
+    Uses lsof to find the PID(s) and sends SIGTERM. Silently skips if
+    lsof is unavailable or no process is found.
+    """
+    result = subprocess.run(
+        ["lsof", "-ti", f":{port}"],
+        capture_output=True,
+        text=True,
+    )
+    pids = result.stdout.strip()
+    if not pids:
+        return
+    for pid_str in pids.splitlines():
+        try:
+            os.kill(int(pid_str), signal.SIGTERM)
+        except (ProcessLookupError, ValueError):
+            pass
+
+
 def _docker_compose_up(project_root: Path) -> bool:
     """Start Docker Compose services if a docker-compose.yml exists.
 
@@ -73,6 +112,8 @@ def dev(
 
     console.print(f"\n[bold green]hof dev[/] starting [bold]{config.app_name}[/]...\n")
 
+    _init_submodules(project_root)
+
     if fresh:
         compose_file = project_root / "docker-compose.yml"
         if compose_file.is_file():
@@ -95,6 +136,12 @@ def dev(
 
         run_migrations(project_root, get_config())
         console.print("  [green]Migrations complete.[/]")
+
+    # Free up ports before starting — avoids "address already in use" errors
+    # when restarting hof dev without a clean shutdown.
+    from hof.ui.vite import USER_VITE_PORT
+    for _port in (port, ADMIN_VITE_PORT, USER_VITE_PORT):
+        _kill_port(_port)
 
     processes: list[subprocess.Popen] = []
     env = {**os.environ, "HOF_ADMIN_VITE_PORT": str(ADMIN_VITE_PORT)}

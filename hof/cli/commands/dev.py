@@ -279,7 +279,7 @@ def _start_user_vite(
         console.print("  [dim]No ui/components/ or ui/pages/, skipping user UI[/]")
         return 0
 
-    manager = ViteManager(ui_dir)
+    manager = ViteManager(ui_dir, app_name=config.app_name, project_root=project_root)
     console.print(f"  [cyan]User UI[/]  (Vite) on port {USER_VITE_PORT}")
     proc = manager.start_dev_server(port=USER_VITE_PORT, env=env)
     if proc:

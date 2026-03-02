@@ -99,8 +99,10 @@ class ViteManager:
             imports.append(f'import {{ {stem} }} from "./components/{stem}";')
             registry_entries.append(f'  "{stem}": {stem},')
 
+        css_import = self._app_css_import()
         entry = (
-            'import React from "react";\n'
+            css_import
+            + 'import React from "react";\n'
             'import { createRoot } from "react-dom/client";\n'
             + ("\n".join(imports) + "\n" if imports else "")
             + "\n"
@@ -157,15 +159,6 @@ class ViteManager:
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hof component</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: system-ui, -apple-system, sans-serif;
-      background: #0f1117;
-      color: #e4e6eb;
-      padding: 20px;
-    }
-  </style>
 </head>
 <body>
   <div id="hof-root"></div>
@@ -198,8 +191,10 @@ class ViteManager:
             route_path = "/" if stem == "index" else f"/{stem}"
             route_entries.append(f'  {{ path: "{route_path}", component: {var_name} }},')
 
+        css_import = self._app_css_import()
         entry = (
-            'import React, { useState, useEffect } from "react";\n'
+            css_import
+            + 'import React, { useState, useEffect } from "react";\n'
             'import { createRoot } from "react-dom/client";\n'
             + "\n".join(imports)
             + "\n\n"
@@ -261,6 +256,16 @@ class ViteManager:
         if existing != html:
             pages_html_path.write_text(html)
 
+    def _has_app_css(self) -> bool:
+        """Return True if the project has a ui/app.css file."""
+        return (self.ui_dir / "app.css").exists()
+
+    def _app_css_import(self) -> str:
+        """Return a JS import statement for app.css if it exists, else empty string."""
+        if self._has_app_css():
+            return 'import "./app.css";\n'
+        return ""
+
     def _create_package_json(self, path: Path) -> None:
         deps: dict[str, str] = {
             "react": "^19.0.0",
@@ -282,9 +287,11 @@ class ViteManager:
             },
             "dependencies": deps,
             "devDependencies": {
+                "@tailwindcss/vite": "^4.0.0",
                 "@types/react": "^19.0.0",
                 "@types/react-dom": "^19.0.0",
                 "@vitejs/plugin-react": "^4.0.0",
+                "tailwindcss": "^4.0.0",
                 "typescript": "^5.0.0",
                 "vite": "^6.0.0",
             },
@@ -298,9 +305,10 @@ class ViteManager:
 import { resolve } from "path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   build: {
     rollupOptions: {
       input: {
@@ -320,9 +328,10 @@ export default defineConfig({
             config = """\
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     proxy: {
       "/api": "http://localhost:8001",

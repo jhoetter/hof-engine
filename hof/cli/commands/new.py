@@ -192,53 +192,28 @@ _PROJECT_DIRS = ["tables", "functions", "flows", "cron", "ui/components", "ui/pa
 _DEFAULT_INDEX_PAGE = """\
 export default function IndexPage() {
   return (
-    <div style={{
-      minHeight: "100vh",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      fontFamily: "system-ui, -apple-system, sans-serif",
-      background: "#0f1117",
-      color: "#e4e6eb",
-    }}>
-      <div style={{ textAlign: "center", maxWidth: 480, padding: "2rem" }}>
-        <h1 style={{ fontSize: "2.5rem", fontWeight: 700, marginBottom: "0.5rem" }}>
+    <div className="min-h-screen flex items-center justify-center bg-gray-950 text-gray-200">
+      <div className="text-center max-w-lg px-8">
+        <h1 className="text-4xl font-semibold leading-tight mb-2">
           {name}
         </h1>
-        <p style={{ color: "#9ca3af", fontSize: "1.1rem", lineHeight: 1.6, marginBottom: "2rem" }}>
+        <p className="text-gray-400 text-lg leading-relaxed mb-8">
           Your hof app is running. Edit{" "}
-          <code style={{
-            color: "#60a5fa", background: "#1e293b",
-            padding: "2px 6px", borderRadius: 4,
-          }}>
+          <code className="text-blue-400 bg-gray-800 px-1.5 py-0.5 rounded text-sm font-mono">
             ui/pages/index.tsx
-          </code>
-          {" "}to get started.
+          </code>{" "}
+          to get started.
         </p>
-        <div style={{ display: "flex", gap: "1rem", justifyContent: "center" }}>
+        <div className="flex gap-4 justify-center">
           <a
             href="/admin"
-            style={{
-              color: "#e4e6eb",
-              background: "#1e293b",
-              padding: "0.5rem 1.25rem",
-              borderRadius: 6,
-              textDecoration: "none",
-              fontSize: "0.9rem",
-            }}
+            className="bg-gray-800 text-gray-200 rounded-md px-5 py-2 text-sm font-medium hover:bg-gray-700 border border-gray-700 no-underline"
           >
             Admin Panel
           </a>
           <a
             href="/docs"
-            style={{
-              color: "#e4e6eb",
-              background: "#1e293b",
-              padding: "0.5rem 1.25rem",
-              borderRadius: 6,
-              textDecoration: "none",
-              fontSize: "0.9rem",
-            }}
+            className="bg-gray-800 text-gray-200 rounded-md px-5 py-2 text-sm font-medium hover:bg-gray-700 border border-gray-700 no-underline"
           >
             API Docs
           </a>
@@ -246,6 +221,15 @@ export default function IndexPage() {
       </div>
     </div>
   );
+}
+"""
+
+_APP_CSS = """\
+@import "tailwindcss";
+
+body {
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.6;
 }
 """
 
@@ -296,6 +280,7 @@ def get_project_files(name: str, *, slug: str | None = None) -> dict[str, str]:
         files[filename] = template.replace("{name}", name).replace("{slug}", slug)
 
     files[".env"] = _ENV_TEMPLATE.replace("{slug}", slug)
+    files["ui/app.css"] = _APP_CSS
     files["ui/pages/index.tsx"] = _DEFAULT_INDEX_PAGE.replace("{name}", name)
 
     for dirname in _PROJECT_DIRS:

@@ -6,15 +6,44 @@ import json
 import subprocess
 from pathlib import Path
 
+
 USER_VITE_PORT = 5175
+
+
+_FAVICON_CANDIDATES = ("favicon.svg", "favicon.ico", "favicon.png", "favicon.webp")
 
 
 class ViteManager:
     """Manages the Vite dev server for user-defined React components and pages."""
 
-    def __init__(self, ui_dir: Path) -> None:
+    def __init__(
+        self,
+        ui_dir: Path,
+        *,
+        app_name: str = "hof app",
+        project_root: Path | None = None,
+    ) -> None:
         self.ui_dir = ui_dir
+        self.app_name = app_name
+        self.project_root = project_root
         self.process: subprocess.Popen | None = None
+
+    def _find_favicon(self) -> str | None:
+        """Return the web path to a favicon in the design-system assets, or None.
+
+        Checks design-system/assets/icon/ for common favicon filenames and
+        returns the first match as a root-relative path (e.g.
+        /design-system/assets/icon/favicon.svg).
+        """
+        if self.project_root is None:
+            return None
+        icon_dir = self.project_root / "design-system" / "assets" / "icon"
+        if not icon_dir.is_dir():
+            return None
+        for name in _FAVICON_CANDIDATES:
+            if (icon_dir / name).exists():
+                return f"/design-system/assets/icon/{name}"
+        return None
 
     def has_pages(self) -> bool:
         """Return True if the project has at least one page in ui/pages/."""
@@ -36,6 +65,10 @@ class ViteManager:
         if not node_modules.is_dir():
             self._install_dependencies()
 
+        vite_config = self.ui_dir / "vite.config.ts"
+        if not vite_config.exists():
+            self._create_vite_config(vite_config)
+
         tsconfig = self.ui_dir / "tsconfig.json"
         if not tsconfig.exists():
             self._create_tsconfig(tsconfig)
@@ -45,8 +78,6 @@ class ViteManager:
         if self.has_pages():
             self._generate_pages_entry()
             self._generate_pages_host_page()
-
-        self._create_vite_config(self.ui_dir / "vite.config.ts")
 
     def start_dev_server(
         self,
@@ -89,7 +120,12 @@ class ViteManager:
     def _generate_entry_point(self) -> None:
         """Auto-generate _hof_entry.tsx that registers all components."""
         components_dir = self.ui_dir / "components"
-        tsx_files = sorted(components_dir.glob("*.tsx")) if components_dir.is_dir() else []
+        if not components_dir.is_dir():
+            return
+
+        tsx_files = sorted(components_dir.glob("*.tsx"))
+        if not tsx_files:
+            return
 
         imports: list[str] = []
         registry_entries: list[str] = []
@@ -99,13 +135,11 @@ class ViteManager:
             imports.append(f'import {{ {stem} }} from "./components/{stem}";')
             registry_entries.append(f'  "{stem}": {stem},')
 
-        css_import = self._app_css_import()
         entry = (
-            css_import
-            + 'import React from "react";\n'
+            'import React from "react";\n'
             'import { createRoot } from "react-dom/client";\n'
-            + ("\n".join(imports) + "\n" if imports else "")
-            + "\n"
+            + "\n".join(imports)
+            + "\n\n"
             + "const components: Record<string, React.ComponentType<any>> = {\n"
             + "\n".join(registry_entries)
             + "\n};\n\n"
@@ -117,9 +151,7 @@ class ViteManager:
             + "  const Component = components[componentName];\n"
             + "  const target = document.getElementById('hof-root');\n"
             + "  if (!Component || !target) {\n"
-            + "    window.parent.postMessage("
-            + "{ type: 'hof:error', error: `Component ${componentName} not found` }"
-            + ", '*');\n"
+            + "    window.parent.postMessage({ type: 'hof:error', error: `Component ${componentName} not found` }, '*');\n"
             + "    return;\n"
             + "  }\n"
             + "\n"
@@ -140,9 +172,7 @@ class ViteManager:
             + "});\n"
             + "observer.observe(document.body);\n\n"
             + "// Signal that the entry script has loaded\n"
-            + "window.parent.postMessage("
-            + "{ type: 'hof:loaded', components: Object.keys(components) }"
-            + ", '*');\n"
+            + "window.parent.postMessage({ type: 'hof:loaded', components: Object.keys(components) }, '*');\n"
         )
 
         entry_path = self.ui_dir / "_hof_entry.tsx"
@@ -152,13 +182,24 @@ class ViteManager:
 
     def _generate_host_page(self) -> None:
         """Generate index.html that loads the entry point."""
-        html = """\
+        favicon = self._find_favicon()
+        favicon_tag = f'\n  <link rel="icon" href="{favicon}" />' if favicon else ""
+        html = f"""\
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>hof component</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />{favicon_tag}
+  <title>{self.app_name}</title>
+  <style>
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+    body {{
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f1117;
+      color: #e4e6eb;
+      padding: 20px;
+    }}
+  </style>
 </head>
 <body>
   <div id="hof-root"></div>
@@ -191,10 +232,9 @@ class ViteManager:
             route_path = "/" if stem == "index" else f"/{stem}"
             route_entries.append(f'  {{ path: "{route_path}", component: {var_name} }},')
 
-        css_import = self._app_css_import()
         entry = (
-            css_import
-            + 'import React, { useState, useEffect } from "react";\n'
+            'import "./app.css";\n'
+            'import React, { useState, useEffect } from "react";\n'
             'import { createRoot } from "react-dom/client";\n'
             + "\n".join(imports)
             + "\n\n"
@@ -237,13 +277,15 @@ class ViteManager:
 
     def _generate_pages_host_page(self) -> None:
         """Generate _pages.html that loads the pages entry point."""
-        html = """\
+        favicon = self._find_favicon()
+        favicon_tag = f'\n  <link rel="icon" href="{favicon}" />' if favicon else ""
+        html = f"""\
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>hof app</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />{favicon_tag}
+  <title>{self.app_name}</title>
 </head>
 <body>
   <div id="hof-root"></div>
@@ -255,16 +297,6 @@ class ViteManager:
         existing = pages_html_path.read_text() if pages_html_path.exists() else ""
         if existing != html:
             pages_html_path.write_text(html)
-
-    def _has_app_css(self) -> bool:
-        """Return True if the project has a ui/app.css file."""
-        return (self.ui_dir / "app.css").exists()
-
-    def _app_css_import(self) -> str:
-        """Return a JS import statement for app.css if it exists, else empty string."""
-        if self._has_app_css():
-            return 'import "./app.css";\n'
-        return ""
 
     def _create_package_json(self, path: Path) -> None:
         deps: dict[str, str] = {
@@ -287,11 +319,9 @@ class ViteManager:
             },
             "dependencies": deps,
             "devDependencies": {
-                "@tailwindcss/vite": "^4.0.0",
                 "@types/react": "^19.0.0",
                 "@types/react-dom": "^19.0.0",
                 "@vitejs/plugin-react": "^4.0.0",
-                "tailwindcss": "^4.0.0",
                 "typescript": "^5.0.0",
                 "vite": "^6.0.0",
             },
@@ -299,49 +329,24 @@ class ViteManager:
         path.write_text(json.dumps(package, indent=2))
 
     def _create_vite_config(self, path: Path) -> None:
-        pages_html = self.ui_dir / "_pages.html"
-        if pages_html.exists():
-            config = """\
-import { resolve } from "path";
+        path.write_text("""\
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  build: {
-    rollupOptions: {
-      input: {
-        main: resolve(__dirname, "index.html"),
-        pages: resolve(__dirname, "_pages.html"),
-      },
-    },
-  },
+  plugins: [react()],
   server: {
     proxy: {
       "/api": "http://localhost:8001",
     },
-  },
-});
-"""
-        else:
-            config = """\
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
-
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  server: {
-    proxy: {
-      "/api": "http://localhost:8001",
+    fs: {
+      // Allow serving files from the project root (one level above ui/)
+      // so that /design-system/assets/icon/ is accessible for favicons etc.
+      allow: [".."],
     },
   },
 });
-"""
-        existing = path.read_text() if path.exists() else ""
-        if existing != config:
-            path.write_text(config)
+""")
 
     def _create_tsconfig(self, path: Path) -> None:
         tsconfig = {

@@ -149,7 +149,7 @@ RUN pip install .
 
 COPY . .
 RUN python -c "from pathlib import Path; from hof.config import load_config; \\
-    from hof.ui.vite import ViteManager; c = load_config(Path('.')); \\
+    from hof.ui.vite import ViteManager; c = load_config(Path('.'), strict=False); \\
     ViteManager(Path(c.ui_dir), app_name=c.app_name, project_root=Path('.')).build()"
 
 EXPOSE 8001

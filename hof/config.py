@@ -10,8 +10,11 @@ from typing import Any
 from dotenv import load_dotenv
 
 
-def _resolve_env_vars(value: Any) -> Any:
-    """Replace ${VAR_NAME} patterns with environment variable values."""
+def _resolve_env_vars(value: Any, *, strict: bool = True) -> Any:
+    """Replace ${VAR_NAME} patterns with environment variable values.
+
+    When *strict* is False, unset variables are left as-is (``${VAR}``).
+    """
     if not isinstance(value, str):
         return value
     pattern = re.compile(r"\$\{(\w+)\}")
@@ -20,7 +23,9 @@ def _resolve_env_vars(value: Any) -> Any:
         var_name = match.group(1)
         env_val = os.environ.get(var_name)
         if env_val is None:
-            raise ValueError(f"Environment variable {var_name} is not set")
+            if strict:
+                raise ValueError(f"Environment variable {var_name} is not set")
+            return match.group(0)
         return env_val
 
     return pattern.sub(replacer, value)
@@ -117,14 +122,21 @@ class Config:
         self.cron_dir = cron_dir
         self.ui_dir = ui_dir
 
-    def resolve(self) -> Config:
-        """Resolve all ${ENV_VAR} references in string fields."""
+    def resolve(self, *, strict: bool = True) -> Config:
+        """Resolve all ${ENV_VAR} references in string fields.
+
+        When *strict* is False, missing env vars are left as placeholders.
+        """
         for attr_name in vars(self):
             value = getattr(self, attr_name)
             if isinstance(value, str):
-                setattr(self, attr_name, _resolve_env_vars(value))
+                setattr(self, attr_name, _resolve_env_vars(value, strict=strict))
             elif isinstance(value, list):
-                setattr(self, attr_name, [_resolve_env_vars(v) for v in value])
+                setattr(
+                    self,
+                    attr_name,
+                    [_resolve_env_vars(v, strict=strict) for v in value],
+                )
         return self
 
     @property
@@ -140,8 +152,14 @@ class Config:
 _current_config: Config | None = None
 
 
-def load_config(project_root: Path | None = None) -> Config:
-    """Load config from hof.config.py in the project root."""
+def load_config(
+    project_root: Path | None = None, *, strict: bool = True
+) -> Config:
+    """Load config from hof.config.py in the project root.
+
+    Set *strict=False* during build steps where runtime env vars
+    (e.g. DATABASE_URL) are unavailable.
+    """
     global _current_config
 
     root = project_root or Path.cwd()
@@ -162,7 +180,7 @@ def load_config(project_root: Path | None = None) -> Config:
     if not isinstance(config, Config):
         raise ValueError("hof.config.py must define a `config = Config(...)` variable")
 
-    config.resolve()
+    config.resolve(strict=strict)
     _current_config = config
     return config
 

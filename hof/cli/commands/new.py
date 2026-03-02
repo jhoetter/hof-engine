@@ -207,13 +207,21 @@ export default function IndexPage() {
         <div className="flex gap-4 justify-center">
           <a
             href="/admin"
-            className="bg-hover text-foreground rounded-md px-5 py-2 text-sm font-medium hover:bg-divider border border-divider no-underline"
+            className={
+              "bg-hover text-foreground rounded-md px-5 py-2 "
+              + "text-sm font-medium hover:bg-divider "
+              + "border border-divider no-underline"
+            }
           >
             Admin Panel
           </a>
           <a
             href="/docs"
-            className="bg-hover text-foreground rounded-md px-5 py-2 text-sm font-medium hover:bg-divider border border-divider no-underline"
+            className={
+              "bg-hover text-foreground rounded-md px-5 py-2 "
+              + "text-sm font-medium hover:bg-divider "
+              + "border border-divider no-underline"
+            }
           >
             API Docs
           </a>

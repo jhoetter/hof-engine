@@ -6,7 +6,6 @@ import json
 import subprocess
 from pathlib import Path
 
-
 USER_VITE_PORT = 5175
 
 
@@ -167,12 +166,7 @@ class ViteManager:
     def _generate_entry_point(self) -> None:
         """Auto-generate _hof_entry.tsx that registers all components."""
         components_dir = self.ui_dir / "components"
-        if not components_dir.is_dir():
-            return
-
-        tsx_files = sorted(components_dir.glob("*.tsx"))
-        if not tsx_files:
-            return
+        tsx_files = sorted(components_dir.glob("*.tsx")) if components_dir.is_dir() else []
 
         imports: list[str] = []
         registry_entries: list[str] = []
@@ -182,11 +176,16 @@ class ViteManager:
             imports.append(f'import {{ {stem} }} from "./components/{stem}";')
             registry_entries.append(f'  "{stem}": {stem},')
 
+        imports_block = "\n".join(imports) + "\n" if imports else ""
+
+        not_found_msg = "Component ${componentName} not found"
+        loaded_keys = "Object.keys(components)"
+
         entry = (
             'import React from "react";\n'
             'import { createRoot } from "react-dom/client";\n'
-            + "\n".join(imports)
-            + "\n\n"
+            + imports_block
+            + "\n"
             + "const components: Record<string, React.ComponentType<any>> = {\n"
             + "\n".join(registry_entries)
             + "\n};\n\n"
@@ -198,12 +197,16 @@ class ViteManager:
             + "  const Component = components[componentName];\n"
             + "  const target = document.getElementById('hof-root');\n"
             + "  if (!Component || !target) {\n"
-            + "    window.parent.postMessage({ type: 'hof:error', error: `Component ${componentName} not found` }, '*');\n"
+            + "    window.parent.postMessage(\n"
+            + f"      {{ type: 'hof:error', error: `{not_found_msg}` }},\n"
+            + "      '*',\n"
+            + "    );\n"
             + "    return;\n"
             + "  }\n"
             + "\n"
             + "  const onComplete = (data: any) => {\n"
-            + "    window.parent.postMessage({ type: 'hof:complete', data }, '*');\n"
+            + "    window.parent.postMessage("
+            + "{ type: 'hof:complete', data }, '*');\n"
             + "  };\n"
             + "\n"
             + "  createRoot(target).render(\n"
@@ -215,11 +218,15 @@ class ViteManager:
             + "// Auto-resize iframe to match content height\n"
             + "const observer = new ResizeObserver(() => {\n"
             + "  const h = document.body.scrollHeight;\n"
-            + "  window.parent.postMessage({ type: 'hof:resize', height: h + 40 }, '*');\n"
+            + "  window.parent.postMessage("
+            + "{ type: 'hof:resize', height: h + 40 }, '*');\n"
             + "});\n"
             + "observer.observe(document.body);\n\n"
             + "// Signal that the entry script has loaded\n"
-            + "window.parent.postMessage({ type: 'hof:loaded', components: Object.keys(components) }, '*');\n"
+            + "window.parent.postMessage(\n"
+            + f"  {{ type: 'hof:loaded', components: {loaded_keys} }},\n"
+            + "  '*',\n"
+            + ");\n"
         )
 
         entry_path = self.ui_dir / "_hof_entry.tsx"

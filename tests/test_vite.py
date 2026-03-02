@@ -25,6 +25,22 @@ def manager(ui_dir: Path) -> ViteManager:
     return ViteManager(ui_dir)
 
 
+@pytest.fixture
+def project_root(tmp_path: Path) -> Path:
+    """Create a minimal project root with a design-system icon directory."""
+    ds_icon = tmp_path / "design-system" / "assets" / "icon"
+    ds_icon.mkdir(parents=True)
+    return tmp_path
+
+
+@pytest.fixture
+def manager_with_config(project_root: Path) -> ViteManager:
+    ui = project_root / "ui"
+    ui.mkdir()
+    (ui / "components").mkdir()
+    return ViteManager(ui, app_name="Acme Portal", project_root=project_root)
+
+
 class TestViteManagerConstants:
     def test_user_vite_port_default(self):
         assert USER_VITE_PORT == 5175
@@ -45,6 +61,22 @@ class TestGenerateHostPage:
         manager._generate_host_page()
         content = (ui_dir / "index.html").read_text()
         assert "/_hof_entry.tsx" in content
+
+    def test_index_html_default_title(self, manager, ui_dir):
+        manager._generate_host_page()
+        content = (ui_dir / "index.html").read_text()
+        assert "<title>hof app</title>" in content
+
+    def test_index_html_uses_app_name(self, manager_with_config, project_root):
+        ui_dir = project_root / "ui"
+        manager_with_config._generate_host_page()
+        content = (ui_dir / "index.html").read_text()
+        assert "<title>Acme Portal</title>" in content
+
+    def test_index_html_no_favicon_without_design_system(self, manager, ui_dir):
+        manager._generate_host_page()
+        content = (ui_dir / "index.html").read_text()
+        assert 'rel="icon"' not in content
 
     def test_index_html_not_rewritten_if_unchanged(self, manager, ui_dir):
         manager._generate_host_page()
@@ -188,6 +220,88 @@ class TestCreateTsconfig:
         manager._create_tsconfig(ts_path)
         data = json.loads(ts_path.read_text())
         assert "react" in data["compilerOptions"]["jsx"].lower()
+
+
+class TestFindFavicon:
+    def test_returns_none_without_project_root(self, manager):
+        assert manager._find_favicon() is None
+
+    def test_returns_none_when_icon_dir_missing(self, tmp_path):
+        ui = tmp_path / "ui"
+        ui.mkdir()
+        m = ViteManager(ui, project_root=tmp_path)
+        assert m._find_favicon() is None
+
+    def test_finds_svg_favicon(self, project_root):
+        (project_root / "design-system" / "assets" / "icon" / "favicon.svg").write_text(
+            "<svg/>"
+        )
+        ui = project_root / "ui"
+        ui.mkdir()
+        m = ViteManager(ui, project_root=project_root)
+        assert m._find_favicon() == "/design-system/assets/icon/favicon.svg"
+
+    def test_finds_ico_favicon(self, project_root):
+        (project_root / "design-system" / "assets" / "icon" / "favicon.ico").write_bytes(b"")
+        ui = project_root / "ui"
+        ui.mkdir()
+        m = ViteManager(ui, project_root=project_root)
+        assert m._find_favicon() == "/design-system/assets/icon/favicon.ico"
+
+    def test_prefers_svg_over_ico(self, project_root):
+        icon_dir = project_root / "design-system" / "assets" / "icon"
+        (icon_dir / "favicon.svg").write_text("<svg/>")
+        (icon_dir / "favicon.ico").write_bytes(b"")
+        ui = project_root / "ui"
+        ui.mkdir()
+        m = ViteManager(ui, project_root=project_root)
+        assert m._find_favicon() == "/design-system/assets/icon/favicon.svg"
+
+
+class TestGeneratePagesHostPage:
+    def test_creates_pages_html(self, manager, ui_dir):
+        (ui_dir / "pages").mkdir()
+        manager._generate_pages_host_page()
+        assert (ui_dir / "_pages.html").exists()
+
+    def test_pages_html_default_title(self, manager, ui_dir):
+        (ui_dir / "pages").mkdir()
+        manager._generate_pages_host_page()
+        content = (ui_dir / "_pages.html").read_text()
+        assert "<title>hof app</title>" in content
+
+    def test_pages_html_uses_app_name(self, manager_with_config, project_root):
+        ui_dir = project_root / "ui"
+        (ui_dir / "pages").mkdir(exist_ok=True)
+        manager_with_config._generate_pages_host_page()
+        content = (ui_dir / "_pages.html").read_text()
+        assert "<title>Acme Portal</title>" in content
+
+    def test_pages_html_includes_favicon_when_present(self, project_root):
+        icon_dir = project_root / "design-system" / "assets" / "icon"
+        (icon_dir / "favicon.svg").write_text("<svg/>")
+        ui = project_root / "ui"
+        ui.mkdir()
+        (ui / "pages").mkdir()
+        m = ViteManager(ui, app_name="My App", project_root=project_root)
+        m._generate_pages_host_page()
+        content = (ui / "_pages.html").read_text()
+        assert 'rel="icon"' in content
+        assert "/design-system/assets/icon/favicon.svg" in content
+
+    def test_pages_html_no_favicon_without_design_system(self, manager, ui_dir):
+        (ui_dir / "pages").mkdir()
+        manager._generate_pages_host_page()
+        content = (ui_dir / "_pages.html").read_text()
+        assert 'rel="icon"' not in content
+
+    def test_pages_html_not_rewritten_if_unchanged(self, manager, ui_dir):
+        (ui_dir / "pages").mkdir()
+        manager._generate_pages_host_page()
+        mtime1 = (ui_dir / "_pages.html").stat().st_mtime
+        manager._generate_pages_host_page()
+        mtime2 = (ui_dir / "_pages.html").stat().st_mtime
+        assert mtime1 == mtime2
 
 
 class TestEnsureSetup:

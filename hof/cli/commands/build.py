@@ -25,7 +25,7 @@ def build(ctx: typer.Context) -> None:
         console.print("[dim]No ui/ directory found, nothing to build.[/]")
         raise typer.Exit()
 
-    manager = ViteManager(ui_dir)
+    manager = ViteManager(ui_dir, app_name=config.app_name, project_root=project_root)
     console.print(f"[cyan]Building UI[/] in {config.ui_dir}/")
     manager.build()
     console.print("[green]Build complete.[/]")

@@ -319,9 +319,11 @@ class ViteManager:
             },
             "dependencies": deps,
             "devDependencies": {
+                "@tailwindcss/vite": "^4.0.0",
                 "@types/react": "^19.0.0",
                 "@types/react-dom": "^19.0.0",
                 "@vitejs/plugin-react": "^4.0.0",
+                "tailwindcss": "^4.0.0",
                 "typescript": "^5.0.0",
                 "vite": "^6.0.0",
             },
@@ -332,9 +334,10 @@ class ViteManager:
         path.write_text("""\
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     proxy: {
       "/api": "http://localhost:8001",

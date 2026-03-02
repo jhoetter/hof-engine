@@ -175,11 +175,21 @@ def _mount_admin_ui(app: FastAPI) -> None:
             )
 
     elif admin_dist.is_dir():
-        app.mount(
-            "/admin",
-            StaticFiles(directory=str(admin_dist), html=True),
-            name="admin-ui",
-        )
+        _admin_static = StaticFiles(directory=str(admin_dist))
+        _admin_index = admin_dist / "index.html"
+
+        @app.api_route("/admin/{path:path}", methods=["GET", "HEAD"])
+        @app.api_route("/admin", methods=["GET", "HEAD"])
+        async def admin_static(request: Request, path: str = "") -> Response:
+            last_segment = path.rsplit("/", 1)[-1] if path else ""
+            if "." in last_segment or path.startswith("assets/"):
+                scope = request.scope.copy()
+                scope["path"] = f"/{path}"
+                try:
+                    return await _admin_static.get_response(path, scope)
+                except Exception:
+                    pass
+            return HTMLResponse(content=_admin_index.read_text())
 
     else:
 

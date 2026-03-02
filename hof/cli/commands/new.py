@@ -192,14 +192,14 @@ _PROJECT_DIRS = ["tables", "functions", "flows", "cron", "ui/components", "ui/pa
 _DEFAULT_INDEX_PAGE = """\
 export default function IndexPage() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-950 text-gray-200">
+    <div className="min-h-screen flex items-center justify-center bg-background text-foreground">
       <div className="text-center max-w-lg px-8">
         <h1 className="text-4xl font-semibold leading-tight mb-2">
           {name}
         </h1>
-        <p className="text-gray-400 text-lg leading-relaxed mb-8">
+        <p className="text-tertiary text-lg leading-relaxed mb-8">
           Your hof app is running. Edit{" "}
-          <code className="text-blue-400 bg-gray-800 px-1.5 py-0.5 rounded text-sm font-mono">
+          <code className="text-accent bg-surface px-1.5 py-0.5 rounded text-sm font-mono">
             ui/pages/index.tsx
           </code>{" "}
           to get started.
@@ -207,13 +207,13 @@ export default function IndexPage() {
         <div className="flex gap-4 justify-center">
           <a
             href="/admin"
-            className="bg-gray-800 text-gray-200 rounded-md px-5 py-2 text-sm font-medium hover:bg-gray-700 border border-gray-700 no-underline"
+            className="bg-hover text-foreground rounded-md px-5 py-2 text-sm font-medium hover:bg-divider border border-divider no-underline"
           >
             Admin Panel
           </a>
           <a
             href="/docs"
-            className="bg-gray-800 text-gray-200 rounded-md px-5 py-2 text-sm font-medium hover:bg-gray-700 border border-gray-700 no-underline"
+            className="bg-hover text-foreground rounded-md px-5 py-2 text-sm font-medium hover:bg-divider border border-divider no-underline"
           >
             API Docs
           </a>
@@ -228,6 +228,9 @@ _APP_CSS = """\
 @import "tailwindcss";
 
 body {
+  color: var(--foreground);
+  background-color: var(--background);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   line-height: 1.6;
 }

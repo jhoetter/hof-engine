@@ -52,6 +52,13 @@ class ViteManager:
             return False
         return any(pages_dir.glob("*.tsx"))
 
+    def _has_components(self) -> bool:
+        """Return True if the project has at least one component in ui/components/."""
+        components_dir = self.ui_dir / "components"
+        if not components_dir.is_dir():
+            return False
+        return any(components_dir.glob("*.tsx"))
+
     def ensure_setup(self) -> None:
         """Ensure the UI directory has package.json, node_modules, and entry point."""
         if not self.ui_dir.is_dir():
@@ -73,8 +80,10 @@ class ViteManager:
         if not tsconfig.exists():
             self._create_tsconfig(tsconfig)
 
-        self._generate_host_page()
-        self._generate_entry_point()
+        has_components = self._has_components()
+        if has_components:
+            self._generate_host_page()
+            self._generate_entry_point()
         if self.has_pages():
             self._generate_pages_entry()
             self._generate_pages_host_page()
@@ -104,11 +113,49 @@ class ViteManager:
         if not self.ui_dir.is_dir():
             return
         self.ensure_setup()
-        subprocess.run(
-            ["npx", "vite", "build"],
-            cwd=str(self.ui_dir),
-            check=True,
+
+        inputs: list[str] = []
+        if self._has_components():
+            inputs.append("index.html")
+        if self.has_pages():
+            inputs.append("_pages.html")
+        if not inputs:
+            return
+
+        if len(inputs) == 1 and inputs[0] == "index.html":
+            subprocess.run(
+                ["npx", "vite", "build"],
+                cwd=str(self.ui_dir),
+                check=True,
+            )
+        else:
+            self._build_with_inputs(inputs)
+
+    def _build_with_inputs(self, inputs: list[str]) -> None:
+        """Run vite build with explicit rollup input entries."""
+        import json
+
+        input_obj = {Path(p).stem: p for p in inputs}
+        build_config = self.ui_dir / "_vite.build.config.ts"
+        build_config.write_text(
+            'import { defineConfig } from "vite";\n'
+            'import react from "@vitejs/plugin-react";\n'
+            'import tailwindcss from "@tailwindcss/vite";\n'
+            "export default defineConfig({\n"
+            "  plugins: [react(), tailwindcss()],\n"
+            "  build: {\n"
+            f"    rollupOptions: {{ input: {json.dumps(input_obj)} }},\n"
+            "  },\n"
+            "});\n"
         )
+        try:
+            subprocess.run(
+                ["npx", "vite", "build", "--config", "_vite.build.config.ts"],
+                cwd=str(self.ui_dir),
+                check=True,
+            )
+        finally:
+            build_config.unlink(missing_ok=True)
 
     def stop(self) -> None:
         """Stop the Vite dev server."""

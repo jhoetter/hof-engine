@@ -152,9 +152,7 @@ class Config:
 _current_config: Config | None = None
 
 
-def load_config(
-    project_root: Path | None = None, *, strict: bool = True
-) -> Config:
+def load_config(project_root: Path | None = None, *, strict: bool = True) -> Config:
     """Load config from hof.config.py in the project root.
 
     Set *strict=False* during build steps where runtime env vars

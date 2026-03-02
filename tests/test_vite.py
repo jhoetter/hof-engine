@@ -233,9 +233,7 @@ class TestFindFavicon:
         assert m._find_favicon() is None
 
     def test_finds_svg_favicon(self, project_root):
-        (project_root / "design-system" / "assets" / "icon" / "favicon.svg").write_text(
-            "<svg/>"
-        )
+        (project_root / "design-system" / "assets" / "icon" / "favicon.svg").write_text("<svg/>")
         ui = project_root / "ui"
         ui.mkdir()
         m = ViteManager(ui, project_root=project_root)

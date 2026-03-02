@@ -140,6 +140,7 @@ def dev(
     # Free up ports before starting — avoids "address already in use" errors
     # when restarting hof dev without a clean shutdown.
     from hof.ui.vite import USER_VITE_PORT
+
     for _port in (port, ADMIN_VITE_PORT, USER_VITE_PORT):
         _kill_port(_port)
 

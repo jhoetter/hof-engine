@@ -137,11 +137,17 @@ class ViteManager:
         input_obj = {Path(p).stem: p for p in inputs}
         build_config = self.ui_dir / "_vite.build.config.ts"
         build_config.write_text(
+            'import path from "path";\n'
             'import { defineConfig } from "vite";\n'
             'import react from "@vitejs/plugin-react";\n'
             'import tailwindcss from "@tailwindcss/vite";\n'
             "export default defineConfig({\n"
             "  plugins: [react(), tailwindcss()],\n"
+            "  resolve: {\n"
+            "    alias: {\n"
+            '      "@": path.resolve(__dirname, "."),\n'
+            "    },\n"
+            "  },\n"
             "  build: {\n"
             f"    rollupOptions: {{ input: {json.dumps(input_obj)} }},\n"
             "  },\n"

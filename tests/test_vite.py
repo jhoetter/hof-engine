@@ -181,6 +181,31 @@ class TestCreateViteConfig:
         assert 'base: "/user-ui/"' not in content
 
 
+class TestBuildWithInputs:
+    def test_temp_build_config_includes_at_alias(self, manager, ui_dir):
+        from unittest.mock import patch
+
+        captured: dict[str, str] = {}
+
+        def mock_run(cmd, **kwargs):
+            assert cmd == ["npx", "vite", "build", "--config", "_vite.build.config.ts"]
+            assert kwargs["cwd"] == str(ui_dir)
+            assert kwargs["check"] is True
+            build_config_path = ui_dir / "_vite.build.config.ts"
+            captured["content"] = build_config_path.read_text()
+            return MagicMock(returncode=0)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            manager._build_with_inputs(["index.html", "_pages.html"])
+
+        content = captured["content"]
+        assert 'import path from "path";' in content
+        assert "resolve:" in content
+        assert "alias:" in content
+        assert '"@": path.resolve(__dirname, ".")' in content
+        assert not (ui_dir / "_vite.build.config.ts").exists()
+
+
 class TestCreatePackageJson:
     def test_creates_package_json(self, manager, ui_dir):
         pkg_path = ui_dir / "package.json"

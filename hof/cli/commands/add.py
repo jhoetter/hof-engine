@@ -25,6 +25,29 @@ COMPONENTS_REPO_FALLBACK = "git@github.com:jhoetter/hof-components.git"
 CACHE_DIR = Path.home() / ".hof" / "components"
 
 
+def _safe_tar_members(tar: tarfile.TarFile, destination: Path) -> list[tarfile.TarInfo]:
+    """Return validated members that are safe to extract into destination."""
+    destination = destination.resolve()
+    safe_members: list[tarfile.TarInfo] = []
+
+    for member in tar.getmembers():
+        member_path = (destination / member.name).resolve()
+        try:
+            member_path.relative_to(destination)
+        except ValueError as exc:
+            raise tarfile.TarError(f"Unsafe path in artifact: {member.name}") from exc
+
+        if member.issym() or member.islnk():
+            raise tarfile.TarError(f"Links are not allowed in artifact: {member.name}")
+
+        if member.ischr() or member.isblk() or member.isfifo():
+            raise tarfile.TarError(f"Special files are not allowed in artifact: {member.name}")
+
+        safe_members.append(member)
+
+    return safe_members
+
+
 def _ensure_cache() -> None:
     """Download the hof-components artifact, falling back to git clone."""
     if CACHE_DIR.exists():
@@ -42,7 +65,7 @@ def _ensure_cache() -> None:
                 shutil.rmtree(CACHE_DIR)
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
             with tarfile.open(tmp_path, "r:gz") as tar:
-                tar.extractall(path=CACHE_DIR)
+                tar.extractall(path=CACHE_DIR, members=_safe_tar_members(tar, CACHE_DIR))
     except Exception:
         console.print("[dim]Artifact download failed, falling back to git clone...[/]")
         if not CACHE_DIR.exists():

@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tarfile
+import tempfile
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,19 +18,38 @@ from rich.table import Table
 app = typer.Typer()
 console = Console()
 
-COMPONENTS_REPO = "git@github.com:jhoetter/hof-components.git"
+COMPONENTS_ARTIFACT_URL = (
+    "https://github.com/jhoetter/hof-os/releases/latest/download/hof-components.tar.gz"
+)
+COMPONENTS_REPO_FALLBACK = "git@github.com:jhoetter/hof-components.git"
 CACHE_DIR = Path.home() / ".hof" / "components"
 
 
 def _ensure_cache() -> None:
-    """Clone or update the hof-components repo in the local cache."""
-    if not CACHE_DIR.exists():
-        console.print("[dim]Cloning hof-components...[/]")
-        CACHE_DIR.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "clone", COMPONENTS_REPO, str(CACHE_DIR)], check=True)
-    else:
+    """Download the hof-components artifact, falling back to git clone."""
+    if CACHE_DIR.exists():
         console.print("[dim]Updating hof-components...[/]")
-        subprocess.run(["git", "pull"], cwd=str(CACHE_DIR), check=True)
+    else:
+        console.print("[dim]Downloading hof-components...[/]")
+        CACHE_DIR.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
+            urllib.request.urlretrieve(COMPONENTS_ARTIFACT_URL, tmp.name)
+            if CACHE_DIR.exists():
+                shutil.rmtree(CACHE_DIR)
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(tmp.name, "r:gz") as tar:
+                tar.extractall(path=CACHE_DIR)
+        Path(tmp.name).unlink(missing_ok=True)
+    except Exception:
+        console.print("[dim]Artifact download failed, falling back to git clone...[/]")
+        if not CACHE_DIR.exists():
+            subprocess.run(
+                ["git", "clone", COMPONENTS_REPO_FALLBACK, str(CACHE_DIR)], check=True
+            )
+        else:
+            subprocess.run(["git", "pull"], cwd=str(CACHE_DIR), check=True)
 
 
 def _load_registry() -> dict:

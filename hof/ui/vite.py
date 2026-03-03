@@ -386,12 +386,18 @@ class ViteManager:
 
     def _create_vite_config(self, path: Path) -> None:
         path.write_text("""\
+import path from "path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "."),
+    },
+  },
   server: {
     proxy: {
       "/api": "http://localhost:8001",
@@ -420,6 +426,8 @@ export default defineConfig({
                 "noEmit": True,
                 "jsx": "react-jsx",
                 "strict": True,
+                "baseUrl": ".",
+                "paths": {"@/*": ["./*"]},
             },
             "include": ["**/*.ts", "**/*.tsx"],
         }

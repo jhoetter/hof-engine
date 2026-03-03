@@ -19,6 +19,7 @@ def function(
     tags: list[str] | None = None,
     timeout: int = 60,
     retries: int = 0,
+    public: bool = False,
 ) -> Callable:
     """Register a function in the hof registry.
 
@@ -28,6 +29,11 @@ def function(
 
         @function(tags=["ai"])
         def my_fn(): ...
+
+        @function(public=True)
+        def my_public_fn(): ...
+
+    Set ``public=True`` to allow unauthenticated access via the API.
     """
 
     def decorator(fn: Callable) -> Callable:
@@ -44,6 +50,7 @@ def function(
             is_async=asyncio.iscoroutinefunction(fn),
             parameters=_extract_parameters(fn),
             return_type=inspect.signature(fn).return_annotation,
+            public=public,
         )
 
         registry.register_function(metadata)
@@ -78,6 +85,7 @@ class FunctionMetadata:
         "is_async",
         "parameters",
         "return_type",
+        "public",
     )
 
     def __init__(
@@ -92,6 +100,7 @@ class FunctionMetadata:
         is_async: bool,
         parameters: list[ParameterInfo],
         return_type: Any,
+        public: bool = False,
     ):
         self.name = name
         self.description = description
@@ -102,6 +111,7 @@ class FunctionMetadata:
         self.is_async = is_async
         self.parameters = parameters
         self.return_type = return_type
+        self.public = public
 
     def to_dict(self) -> dict:
         return {
@@ -111,6 +121,7 @@ class FunctionMetadata:
             "timeout": self.timeout,
             "retries": self.retries,
             "is_async": self.is_async,
+            "public": self.public,
             "parameters": [p.to_dict() for p in self.parameters],
         }
 

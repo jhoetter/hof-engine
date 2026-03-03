@@ -19,15 +19,41 @@ COMPONENTS_REPO = "git@github.com:jhoetter/hof-components.git"
 CACHE_DIR = Path.home() / ".hof" / "components"
 
 
+def _is_git_repo(path: Path) -> bool:
+    """Return True when path points to a valid git work tree."""
+    if not path.exists() or not path.is_dir():
+        return False
+
+    result = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=str(path),
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
 def _ensure_cache() -> None:
     """Clone or update the hof-components repo in the local cache."""
+    CACHE_DIR.parent.mkdir(parents=True, exist_ok=True)
+
     if not CACHE_DIR.exists():
         console.print("[dim]Cloning hof-components...[/]")
-        CACHE_DIR.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "clone", COMPONENTS_REPO, str(CACHE_DIR)], check=True)
-    else:
+        return
+
+    if _is_git_repo(CACHE_DIR):
         console.print("[dim]Updating hof-components...[/]")
         subprocess.run(["git", "pull"], cwd=str(CACHE_DIR), check=True)
+        return
+
+    # CACHE_DIR can exist as a plain directory (for example, after tarball extraction).
+    # Refresh it before running git commands.
+    console.print("[dim]Refreshing hof-components cache...[/]")
+    shutil.rmtree(CACHE_DIR)
+    console.print("[dim]Cloning hof-components...[/]")
+    subprocess.run(["git", "clone", COMPONENTS_REPO, str(CACHE_DIR)], check=True)
 
 
 def _load_registry() -> dict:

@@ -33,15 +33,16 @@ def _ensure_cache() -> None:
         console.print("[dim]Downloading hof-components...[/]")
         CACHE_DIR.parent.mkdir(parents=True, exist_ok=True)
 
+    tmp_path: str | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
-            urllib.request.urlretrieve(COMPONENTS_ARTIFACT_URL, tmp.name)
+            tmp_path = tmp.name
+            urllib.request.urlretrieve(COMPONENTS_ARTIFACT_URL, tmp_path)
             if CACHE_DIR.exists():
                 shutil.rmtree(CACHE_DIR)
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            with tarfile.open(tmp.name, "r:gz") as tar:
+            with tarfile.open(tmp_path, "r:gz") as tar:
                 tar.extractall(path=CACHE_DIR)
-        Path(tmp.name).unlink(missing_ok=True)
     except Exception:
         console.print("[dim]Artifact download failed, falling back to git clone...[/]")
         if not CACHE_DIR.exists():
@@ -50,6 +51,9 @@ def _ensure_cache() -> None:
             )
         else:
             subprocess.run(["git", "pull"], cwd=str(CACHE_DIR), check=True)
+    finally:
+        if tmp_path is not None:
+            Path(tmp_path).unlink(missing_ok=True)
 
 
 def _load_registry() -> dict:

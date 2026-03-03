@@ -69,9 +69,7 @@ def _ensure_cache() -> None:
     except Exception:
         console.print("[dim]Artifact download failed, falling back to git clone...[/]")
         if not CACHE_DIR.exists():
-            subprocess.run(
-                ["git", "clone", COMPONENTS_REPO_FALLBACK, str(CACHE_DIR)], check=True
-            )
+            subprocess.run(["git", "clone", COMPONENTS_REPO_FALLBACK, str(CACHE_DIR)], check=True)
         else:
             subprocess.run(["git", "pull"], cwd=str(CACHE_DIR), check=True)
     finally:

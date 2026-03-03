@@ -87,6 +87,7 @@ def test_ensure_cache_cleans_tempfile_on_extractall_failure(tmp_path, monkeypatc
     assert mock_run.call_args.kwargs["cwd"] == str(cache_dir)
     assert mock_run.call_args.kwargs["check"] is True
 
+
 def _write_tar(tmp_path: Path, entries: list[tuple[tarfile.TarInfo, bytes]]) -> Path:
     tar_path = tmp_path / "artifact.tar"
     with tarfile.open(tar_path, "w") as tar:

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-03-10T18:17:37Z",
+  "artifacts": [
+    {
+      "engine_version": "0.1.1",
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components.tar.gz",
+      "sha256": "54b36879189a56f79e207fc52fb02f1771693fcba66d325147278faa7021a248",
+      "published_at": "2026-03-10T18:17:37Z"
+    }
+  ]
+}

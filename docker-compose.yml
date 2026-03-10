@@ -1,0 +1,114 @@
+version: "3.9"
+
+# Development docker-compose for hof-engine.
+# Starts PostgreSQL, Redis, and (optionally) the hof app server + worker.
+#
+# Usage:
+#   docker compose up db redis          # infrastructure only
+#   docker compose up                   # full stack
+#   docker compose run app hof db migrate
+
+services:
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hof
+      POSTGRES_PASSWORD: hof
+      POSTGRES_DB: hof
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hof"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Application (uses the project directory as the working directory)
+  # ---------------------------------------------------------------------------
+
+  app:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    working_dir: /project
+    volumes:
+      - .:/project
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://hof:hof@db:5432/hof
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8001:8001"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "hof db migrate && uvicorn hof.api.server:create_app --factory --host 0.0.0.0 --port 8001"
+
+  worker:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    working_dir: /project
+    volumes:
+      - .:/project
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://hof:hof@db:5432/hof
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      celery -A hof.tasks.celery_app:celery worker --loglevel=info
+
+  beat:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    working_dir: /project
+    volumes:
+      - .:/project
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://hof:hof@db:5432/hof
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      celery -A hof.tasks.celery_app:celery beat --loglevel=info
+
+volumes:
+  postgres_data:

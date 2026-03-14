@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
+from alembic.util.exc import CommandError
 
 if TYPE_CHECKING:
     from hof.config import Config
+
+logger = logging.getLogger(__name__)
 
 
 def _get_alembic_config(project_root: Path, config: Config) -> AlembicConfig:
@@ -35,11 +39,43 @@ def _get_alembic_config(project_root: Path, config: Config) -> AlembicConfig:
     return alembic_cfg
 
 
+def _upgrade_or_restamp(alembic_cfg: AlembicConfig, config: Config) -> None:
+    """Run ``alembic upgrade head``, recovering from stale revision stamps.
+
+    When migration files are replaced (e.g. after a template re-application
+    or squash merge), the database's ``alembic_version`` may reference a
+    revision that no longer exists on disk.  Alembic raises a
+    ``CommandError("Can't locate revision …")`` in this case.
+
+    Recovery strategy: stamp the DB to the current head so Alembic can
+    proceed, then re-run ``upgrade head`` to apply any new migrations.
+    """
+    try:
+        command.upgrade(alembic_cfg, "head")
+    except CommandError as exc:
+        if "Can't locate revision" not in str(exc):
+            raise
+        logger.warning(
+            "Stale Alembic revision detected (%s). Re-stamping database to current head.",
+            exc,
+        )
+        from sqlalchemy import create_engine, text
+
+        engine = create_engine(config.database_url)
+        with engine.connect() as conn:
+            conn.execute(text("DELETE FROM alembic_version"))
+            conn.commit()
+        engine.dispose()
+
+        command.stamp(alembic_cfg, "head")
+        command.upgrade(alembic_cfg, "head")
+
+
 def run_migrations(project_root: Path, config: Config, *, dry_run: bool = False) -> None:
     """Apply pending migrations, then autogenerate new ones if models changed."""
     alembic_cfg = _get_alembic_config(project_root, config)
 
-    command.upgrade(alembic_cfg, "head")
+    _upgrade_or_restamp(alembic_cfg, config)
 
     command.revision(
         alembic_cfg,
@@ -48,7 +84,7 @@ def run_migrations(project_root: Path, config: Config, *, dry_run: bool = False)
     )
 
     if not dry_run:
-        command.upgrade(alembic_cfg, "head")
+        _upgrade_or_restamp(alembic_cfg, config)
 
 
 def rollback_migrations(project_root: Path, config: Config, *, steps: int = 1) -> None:

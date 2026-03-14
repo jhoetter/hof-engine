@@ -14,7 +14,7 @@ from hof.functions import function
 from hof.logging_config import configure_logging
 from hof.scaffold import get_project_files
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 __all__ = [
     "HofApp",

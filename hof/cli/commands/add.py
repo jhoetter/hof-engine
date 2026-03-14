@@ -28,7 +28,9 @@ COMPONENTS_MANIFEST_RAW_URL = (
 COMPONENTS_REPO_FALLBACK = "https://github.com/jhoetter/hof-components.git"
 CACHE_DIR = Path.home() / ".hof" / "components"
 # Look for manifest inside the installed hof package first (ships with the wheel).
-MANIFEST_CANDIDATE_PATHS = (Path(__file__).resolve().parents[2] / "components-manifest.json",)
+MANIFEST_CANDIDATE_PATHS = (
+    Path(__file__).resolve().parents[2] / "components-manifest.json",
+)
 
 
 class ArtifactResolution(NamedTuple):
@@ -173,8 +175,34 @@ def _safe_tar_members(tar: tarfile.TarFile, destination: Path) -> list[tarfile.T
 
 
 def _ensure_cache() -> None:
-    """Download the hof-components artifact, falling back to git clone."""
+    """Populate the components cache from a local path, artifact download, or git clone.
+
+    When ``HOF_COMPONENTS_PATH`` is set, the cache is symlinked to that local
+    directory — no download, no tarball.  This is the fastest path for local
+    development (see ``make dev-components`` in hof-os).
+    """
+    local_path = os.getenv("HOF_COMPONENTS_PATH")
+    if local_path:
+        src = Path(local_path).expanduser().resolve()
+        if not src.is_dir() or not (src / "registry.json").exists():
+            console.print(f"[red]HOF_COMPONENTS_PATH={local_path} is not a valid components directory.[/]")
+            raise typer.Exit(1)
+        if CACHE_DIR.is_symlink() and CACHE_DIR.resolve() == src:
+            console.print(f"[dim]Using local components: {src}[/]")
+            return
+        if CACHE_DIR.exists() or CACHE_DIR.is_symlink():
+            if CACHE_DIR.is_symlink():
+                CACHE_DIR.unlink()
+            else:
+                shutil.rmtree(CACHE_DIR)
+        CACHE_DIR.parent.mkdir(parents=True, exist_ok=True)
+        CACHE_DIR.symlink_to(src)
+        console.print(f"[green]Linked components cache → {src}[/]")
+        return
+
     artifact = _resolve_artifact()
+    if CACHE_DIR.is_symlink():
+        CACHE_DIR.unlink()
     if CACHE_DIR.exists():
         console.print("[dim]Updating hof-components...[/]")
     else:
@@ -286,22 +314,26 @@ def _install_module(module_name: str, registry: dict, project_root: Path, force:
     copied: list[str] = []
     skipped: list[str] = []
 
-    for dest_dir, files in meta.get("files", {}).items():
-        for file_rel in files:
-            src = module_path / file_rel
-            dst = project_root / file_rel
-            if dst.exists() and not force:
-                skipped.append(file_rel)
-                continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            copied.append(file_rel)
+    files_spec = meta.get("files", {})
+    if isinstance(files_spec, dict):
+        file_pairs = list(files_spec.items())
+    else:
+        file_pairs = [(f, f) for f in files_spec]
 
-            # Ensure __init__.py exists for Python package dirs
-            if dst.suffix == ".py":
-                init = dst.parent / "__init__.py"
-                if not init.exists():
-                    init.touch()
+    for dest_rel, src_rel in file_pairs:
+        src = module_path / src_rel
+        dst = project_root / dest_rel
+        if dst.exists() and not force:
+            skipped.append(dest_rel)
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied.append(dest_rel)
+
+        if dst.suffix == ".py":
+            init = dst.parent / "__init__.py"
+            if not init.exists():
+                init.touch()
 
     for f in copied:
         console.print(f"  [green]+ {f}[/]")
@@ -333,7 +365,8 @@ def _install_module(module_name: str, registry: dict, project_root: Path, force:
         additions: list[str] = []
         for var in env_vars:
             if var["name"] not in existing_env:
-                additions.append(f"# {var['description']}\n{var['name']}=\n")
+                desc = var.get("description", var["name"])
+                additions.append(f"# {desc}\n{var['name']}=\n")
         if additions:
             with open(env_file, "a") as f:
                 f.write("\n" + "\n".join(additions))
@@ -341,7 +374,9 @@ def _install_module(module_name: str, registry: dict, project_root: Path, force:
             for var in env_vars:
                 if var["name"] not in existing_env:
                     req = " (required)" if var.get("required") else ""
-                    console.print(f"  {var['name']}{req} — {var['description']}")
+                    desc = var.get("description", "")
+                    suffix = f" — {desc}" if desc else ""
+                    console.print(f"  {var['name']}{req}{suffix}")
 
     # Track in .hof/modules.json
     all_files = copied + skipped

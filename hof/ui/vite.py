@@ -292,6 +292,19 @@ class ViteManager:
             route_path = "/" if stem == "index" else f"/{stem}"
             route_entries.append(f'  {{ path: "{route_path}", component: {var_name} }},')
 
+        # If the project provides an AuthProvider component, wrap page rendering
+        # with it so pages using useAuth() don't crash in development.
+        has_auth_provider = (self.ui_dir / "components" / "AuthProvider.tsx").is_file()
+        if has_auth_provider:
+            imports.append('import { AuthProvider } from "./components/AuthProvider";')
+            app_mount = (
+                "    <AuthProvider>\n"
+                "      <App />\n"
+                "    </AuthProvider>"
+            )
+        else:
+            app_mount = "    <App />"
+
         entry = (
             'import "./app.css";\n'
             'import React, { useState, useEffect } from "react";\n'
@@ -325,7 +338,8 @@ class ViteManager:
             + "}\n\n"
             + 'createRoot(document.getElementById("hof-root")!).render(\n'
             + "  <React.StrictMode>\n"
-            + "    <App />\n"
+            + app_mount
+            + "\n"
             + "  </React.StrictMode>\n"
             + ");\n"
         )

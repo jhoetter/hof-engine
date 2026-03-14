@@ -278,3 +278,34 @@ def _mount_user_pages(app: FastAPI, project_root: Path, config: Any) -> None:
                     return Response(content="Not found", status_code=404)
 
             return HTMLResponse(content=_spa_shell.read_text())
+
+    else:
+
+        @app.api_route("/{path:path}", methods=["GET", "HEAD"])
+        @app.api_route("/", methods=["GET", "HEAD"])
+        async def pages_not_built(request: Request, path: str = "") -> Response:
+            if path.startswith("api/"):
+                return Response(
+                    content='{"detail":"Not Found"}', status_code=404, media_type="application/json"
+                )
+            return HTMLResponse(
+                f"<!DOCTYPE html><html><head><title>{config.app_name}</title>"
+                '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                "<style>"
+                "body{font-family:system-ui,sans-serif;display:flex;align-items:center;"
+                "justify-content:center;min-height:100vh;margin:0;background:#fafafa;"
+                "color:#37352f}"
+                ".c{text-align:center;max-width:480px;padding:2rem}"
+                "h1{font-size:1.5rem;font-weight:600;margin:0 0 .5rem}"
+                "p{color:#787774;line-height:1.6;margin:0 0 1.5rem}"
+                "code{background:#f0f0f0;padding:2px 6px;border-radius:4px;font-size:.85em}"
+                "a{color:#2383e2;text-decoration:none}"
+                "</style></head><body><div class='c'>"
+                f"<h1>{config.app_name}</h1>"
+                "<p>The app is running but the UI has not been built yet. "
+                "Add pages to <code>ui/pages/</code> and redeploy, "
+                "or visit <a href='/admin'>/admin</a> or "
+                "<a href='/docs'>/docs</a>.</p>"
+                "</div></body></html>",
+                status_code=200,
+            )

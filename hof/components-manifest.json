@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-03-15T13:10:00Z",
+  "updated_at": "2026-03-15T11:24:32Z",
   "artifacts": [
     {
       "engine_version": "0.1.6",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-67d7627083d2.tar.gz",
-      "sha256": "67d7627083d2924c1dd561f66ca5b1618b7cb6894c01f4180ac25d9f95dc70d1",
-      "published_at": "2026-03-15T13:10:00Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-49700a2bcef2.tar.gz",
+      "sha256": "49700a2bcef21a5bf209a8225092b00bbb64ed79adda000f95b31d79edae0891",
+      "published_at": "2026-03-15T11:24:32Z"
     },
     {
       "engine_version": "0.1.5",

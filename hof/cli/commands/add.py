@@ -28,9 +28,7 @@ COMPONENTS_MANIFEST_RAW_URL = (
 COMPONENTS_REPO_FALLBACK = "https://github.com/jhoetter/hof-components.git"
 CACHE_DIR = Path.home() / ".hof" / "components"
 # Look for manifest inside the installed hof package first (ships with the wheel).
-MANIFEST_CANDIDATE_PATHS = (
-    Path(__file__).resolve().parents[2] / "components-manifest.json",
-)
+MANIFEST_CANDIDATE_PATHS = (Path(__file__).resolve().parents[2] / "components-manifest.json",)
 
 
 class ArtifactResolution(NamedTuple):

@@ -48,6 +48,7 @@ export function Sidebar() {
           </NavLink>
         </li>
       </ul>
+
     </aside>
   );
 }

@@ -81,6 +81,8 @@ class Config:
         flows_dir: str = "flows",
         cron_dir: str = "cron",
         ui_dir: str = "ui",
+        # Documentation
+        docs_dir: str = "docs",
     ):
         self.app_name = app_name
         self.debug = debug
@@ -121,6 +123,7 @@ class Config:
         self.flows_dir = flows_dir
         self.cron_dir = cron_dir
         self.ui_dir = ui_dir
+        self.docs_dir = docs_dir
 
     def resolve(self, *, strict: bool = True) -> Config:
         """Resolve all ${ENV_VAR} references in string fields.

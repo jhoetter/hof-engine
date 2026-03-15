@@ -55,6 +55,9 @@ def create_app() -> FastAPI:
         title=f"{config.app_name} API",
         description=f"Auto-generated API for {config.app_name} (powered by hof-engine)",
         version="0.1.0",
+        docs_url="/api/swagger",
+        redoc_url="/api/redoc",
+        openapi_url="/api/openapi.json",
     )
 
     app.add_middleware(
@@ -71,6 +74,7 @@ def create_app() -> FastAPI:
     from hof.api.routes.functions import router as functions_router
     from hof.api.routes.tables import router as tables_router
     from hof.api.routes.ws import router as ws_router
+    from hof.docs.router import router as docs_router
 
     setup_auth(app, config)
 
@@ -79,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(flows_router, prefix="/api/flows", tags=["flows"])
     app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
     app.include_router(ws_router, tags=["realtime"])
+    app.include_router(docs_router, prefix="/api/docs", tags=["docs"])
 
     @app.get("/api/health")
     async def health():
@@ -305,7 +310,7 @@ def _mount_user_pages(app: FastAPI, project_root: Path, config: Any) -> None:
                 "<p>The app is running but the UI has not been built yet. "
                 "Add pages to <code>ui/pages/</code> and redeploy, "
                 "or visit <a href='/admin'>/admin</a> or "
-                "<a href='/docs'>/docs</a>.</p>"
+                "<a href='/api/swagger'>/api/swagger</a>.</p>"
                 "</div></body></html>",
                 status_code=200,
             )

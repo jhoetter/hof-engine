@@ -212,6 +212,33 @@ _ENV_TEMPLATE = (
     "DB_PASSWORD=changeme\n"
 )
 
+_DOCS_INDEX_TEMPLATE = """\
+---
+title: Overview
+section: Guide
+order: 1
+---
+
+# {name}
+
+Welcome to the **{name}** documentation.
+
+## Getting started
+
+Describe what this application does and how to use it.
+
+## Architecture
+
+Explain the key tables, flows, and functions.
+
+## Development
+
+```bash
+hof dev        # start dev server
+hof db migrate # apply migrations
+```
+"""
+
 
 # ---------------------------------------------------------------------------
 # Public API — single source of truth for project file layout
@@ -249,6 +276,7 @@ def get_project_files(name: str, *, slug: str | None = None) -> dict[str, str]:
 
     files[".env"] = _ENV_TEMPLATE.replace("{slug}", slug)
     files["ui/app.css"] = _APP_CSS
+    files["docs/index.md"] = _DOCS_INDEX_TEMPLATE.replace("{name}", name)
 
     for dirname in _PROJECT_DIRS:
         parts = dirname.split("/")

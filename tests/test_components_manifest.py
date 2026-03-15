@@ -59,7 +59,7 @@ def test_latest_artifact_downloads_and_extracts(manifest):
 
         with tarfile.open(tmp_path, "r:gz") as tar:
             names = [m.name for m in tar.getmembers()]
-            symlinks = [m.name for m in tar.getmembers() if m.issym() or m.islnk()]
+            symlinks = [m.name for m in tar.getmembers() if m.issym()]
             assert not symlinks, f"Artifact contains symlinks: {symlinks}"
 
             assert any("registry.json" in n for n in names), "Artifact missing registry.json"

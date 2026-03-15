@@ -163,8 +163,8 @@ def _safe_tar_members(tar: tarfile.TarFile, destination: Path) -> list[tarfile.T
     """Filter tar members, rejecting path traversal, absolute paths, and links."""
     safe: list[tarfile.TarInfo] = []
     for member in tar.getmembers():
-        if member.issym() or member.islnk():
-            raise tarfile.TarError(f"Links are not allowed: {member.name}")
+        if member.issym():
+            raise tarfile.TarError(f"Symlinks are not allowed: {member.name}")
         resolved = (destination / member.name).resolve()
         if not str(resolved).startswith(str(destination.resolve())):
             raise tarfile.TarError(f"Unsafe path: {member.name}")

@@ -162,8 +162,24 @@ def test_safe_tar_members_rejects_symlink(tmp_path: Path) -> None:
     destination.mkdir()
 
     with tarfile.open(tar_path, "r") as tar:
-        with pytest.raises(tarfile.TarError, match="Links are not allowed"):
+        with pytest.raises(tarfile.TarError, match="Symlinks are not allowed"):
             add_cmd._safe_tar_members(tar, destination)
+
+
+def test_safe_tar_members_allows_hard_links(tmp_path: Path) -> None:
+    regular = _file_entry("module/original.txt", b"content")
+    hardlink = tarfile.TarInfo("module/hardlink.txt")
+    hardlink.type = tarfile.LNKTYPE
+    hardlink.linkname = "module/original.txt"
+    tar_path = _write_tar(tmp_path, [regular, (hardlink, b"")])
+    destination = tmp_path / "extract"
+    destination.mkdir()
+
+    with tarfile.open(tar_path, "r") as tar:
+        safe = add_cmd._safe_tar_members(tar, destination)
+        names = [m.name for m in safe]
+        assert "module/original.txt" in names
+        assert "module/hardlink.txt" in names
 
 
 def test_resolve_artifact_prefers_env_override(monkeypatch):

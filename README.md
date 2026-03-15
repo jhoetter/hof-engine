@@ -12,6 +12,7 @@ Full-stack Python + React framework for building applications with workflows, da
 - **CLI**: Full CLI access to all features
 - **Admin Dashboard**: Visual flow viewer, table browser, execution history, and logs
 - **LLM Integration**: First-class support via llm-markdown with structured outputs
+- **Self-Contained Docs**: Bundle Markdown documentation with your app, served and rendered in the admin UI
 
 ## Quick Start
 
@@ -66,6 +67,30 @@ Run:
 hof db migrate
 hof dev
 ```
+
+## Self-Contained Docs
+
+Every hof application can ship its own documentation. Place Markdown files in a `docs/` directory at the project root and they are automatically served at `/api/docs` and rendered in the admin UI at `/docs`.
+
+```
+my-app/
+  docs/
+    index.md          # Overview
+    data-model.md     # Table schemas
+    api.md            # Function reference
+```
+
+Use optional YAML frontmatter to control titles, section grouping, and sort order:
+
+```markdown
+---
+title: Data Model
+section: Reference
+order: 1
+---
+```
+
+No configuration needed — `docs_dir` defaults to `"docs"`. Set `docs_dir=""` in `hof.config.py` to disable. See the [Configuration reference](docs/reference/config.md#self-contained-documentation) for full details.
 
 ## Requirements
 

@@ -64,6 +64,9 @@ config = Config(
     flows_dir="flows",                          # Directory to scan for flows (default: "flows")
     cron_dir="cron",                            # Directory to scan for cron jobs (default: "cron")
     ui_dir="ui",                                # Directory for React components (default: "ui")
+
+    # Documentation
+    docs_dir="docs",                            # Directory of markdown docs served in admin UI (default: "docs"; set to "" to disable)
 )
 ```
 
@@ -85,6 +88,56 @@ DATABASE_URL=postgresql://localhost:5432/myapp
 OPENAI_API_KEY=sk-...
 HOF_ADMIN_PASSWORD=changeme
 ```
+
+## Self-Contained Documentation
+
+Each hof application can ship its own `docs/` directory of Markdown files. hof-engine discovers, serves, and renders them inside the admin UI at `/docs`.
+
+### File structure
+
+```
+my-app/
+  docs/
+    index.md
+    data-model.md
+    api.md
+```
+
+Any `*.md` file placed inside `docs_dir` is automatically picked up. Subdirectories are supported — use them to group files into sections.
+
+### Frontmatter
+
+Files can include optional YAML frontmatter to control the navigation tree:
+
+```markdown
+---
+title: Data Model
+section: Reference
+order: 2
+---
+
+# Data Model
+...
+```
+
+| Key | Type | Default |
+|---|---|---|
+| `title` | string | Filename without `.md`, title-cased |
+| `section` | string | Parent directory name, title-cased (or empty for root files) |
+| `order` | integer | `9999` (alphabetical fallback) |
+
+Without frontmatter, files are still discovered and shown in alphabetical order.
+
+### API endpoints
+
+The docs system exposes two read-only endpoints (no authentication beyond the existing admin login):
+
+- `GET /api/docs` — returns the ordered navigation tree as JSON
+- `GET /api/docs/{path}` — returns the raw Markdown content of a single file
+
+### Disabling docs
+
+Set `docs_dir=""` in `hof.config.py` to disable the docs system entirely. The `/docs` route in the admin UI will not appear when the doc tree is empty.
 
 ## Multiple Environments
 

@@ -19,7 +19,6 @@ def test_core_files_present():
         ".dockerignore",
         "pyrightconfig.json",
         ".env",
-        "ui/pages/index.tsx",
     ]
     for path in expected:
         assert path in files, f"Missing expected file: {path}"
@@ -40,7 +39,12 @@ def test_ui_gitkeep_files():
 def test_name_interpolation():
     files = get_project_files("acme portal")
     assert 'app_name="acme portal"' in files["hof.config.py"]
-    assert "acme portal" in files["ui/pages/index.tsx"]
+
+
+def test_no_index_page_in_scaffold():
+    """Scaffold must NOT create ui/pages/index.tsx — templates provide it."""
+    files = get_project_files("test-project")
+    assert "ui/pages/index.tsx" not in files
 
 
 def test_slug_derived_from_name():

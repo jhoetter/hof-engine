@@ -65,6 +65,23 @@ hof-engine/
 
 5. **Docs in this repo are framework reference only.** Application examples and tutorials belong in hof-components (`docs/examples/`).
 
+## Pre-Commit Validation (MANDATORY)
+
+**Before every commit, run `make check` and ensure it passes.** This mirrors the CI pipeline:
+
+```bash
+make check    # lint + format check + tests
+make format   # auto-fix formatting (run before make check if needed)
+```
+
+Targeted commands:
+
+- `make lint` — ruff lint + format check only
+- `make test` — pytest only
+- `make format` — auto-format with ruff (fixes formatting errors)
+
+**Never commit with known failures.**
+
 ## Publishing to PyPI
 
 The package is published via **Trusted Publishing** (OIDC) — no API tokens or secrets are needed.

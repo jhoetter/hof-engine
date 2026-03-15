@@ -65,7 +65,7 @@ def _read_manifest_from_url() -> dict | None:
 
 
 def _load_components_manifest() -> dict | None:
-    return _read_manifest_from_disk() or _read_manifest_from_url()
+    return _read_manifest_from_url() or _read_manifest_from_disk()
 
 
 def _resolve_artifact_from_manifest(

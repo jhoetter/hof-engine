@@ -185,7 +185,9 @@ def _ensure_cache() -> None:
     if local_path:
         src = Path(local_path).expanduser().resolve()
         if not src.is_dir() or not (src / "registry.json").exists():
-            console.print(f"[red]HOF_COMPONENTS_PATH={local_path} is not a valid components directory.[/]")
+            console.print(
+                f"[red]HOF_COMPONENTS_PATH={local_path} is not a valid components directory.[/]"
+            )
             raise typer.Exit(1)
         if CACHE_DIR.is_symlink() and CACHE_DIR.resolve() == src:
             console.print(f"[dim]Using local components: {src}[/]")

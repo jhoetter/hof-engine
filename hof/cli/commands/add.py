@@ -28,7 +28,9 @@ COMPONENTS_MANIFEST_RAW_URL = (
 COMPONENTS_REPO_FALLBACK = "https://github.com/jhoetter/hof-components.git"
 CACHE_DIR = Path.home() / ".hof" / "components"
 # Look for manifest inside the installed hof package first (ships with the wheel).
-MANIFEST_CANDIDATE_PATHS = (Path(__file__).resolve().parents[2] / "components-manifest.json",)
+MANIFEST_CANDIDATE_PATHS = (
+    Path(__file__).resolve().parents[2] / "components-manifest.json",
+)
 
 
 class ArtifactResolution(NamedTuple):
@@ -466,9 +468,12 @@ def _install_template(template_name: str, registry: dict, project_root: Path, fo
     if meta.get("description"):
         console.print(f"  {meta['description']}\n")
 
-    # Copy any template-level files (hof.config.py, etc.)
+    # Copy template-level files (GUIDE.md, etc.).
+    # hof.config.py is always skipped because the scaffold's version contains
+    # project-specific values (app_name, ${DATABASE_URL}) that must be preserved.
+    _TEMPLATE_SKIP = {"template.json", "hof.config.py"}
     for src_file in template_path.iterdir():
-        if src_file.name in ("template.json",):
+        if src_file.name in _TEMPLATE_SKIP:
             continue
         if src_file.is_file():
             dst = project_root / src_file.name

@@ -297,11 +297,7 @@ class ViteManager:
         has_auth_provider = (self.ui_dir / "components" / "AuthProvider.tsx").is_file()
         if has_auth_provider:
             imports.append('import { AuthProvider } from "./components/AuthProvider";')
-            app_mount = (
-                "    <AuthProvider>\n"
-                "      <App />\n"
-                "    </AuthProvider>"
-            )
+            app_mount = "    <AuthProvider>\n      <App />\n    </AuthProvider>"
         else:
             app_mount = "    <App />"
 

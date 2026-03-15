@@ -480,10 +480,12 @@ def _install_template(template_name: str, registry: dict, project_root: Path, fo
                 shutil.copy2(src_file, dst)
                 console.print(f"  [green]+ {src_file.name}[/]")
 
-    # Install each module referenced by the template
+    # Install each module referenced by the template.
+    # Always force-overwrite: a template is a deliberate choice of app shape,
+    # so module files (e.g. dashboard's index.tsx) must replace scaffold placeholders.
     for module_name in meta.get("modules", []):
         console.print(f"\n[bold]Installing module:[/] {module_name}")
-        _install_module(module_name, registry, project_root, force)
+        _install_module(module_name, registry, project_root, force=True)
 
     notes = meta.get("post_install_notes")
     if notes:

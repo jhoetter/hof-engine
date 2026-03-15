@@ -471,9 +471,9 @@ def _install_template(template_name: str, registry: dict, project_root: Path, fo
     # Copy template-level files (GUIDE.md, etc.).
     # hof.config.py is always skipped because the scaffold's version contains
     # project-specific values (app_name, ${DATABASE_URL}) that must be preserved.
-    _TEMPLATE_SKIP = {"template.json", "hof.config.py"}
+    template_skip = {"template.json", "hof.config.py"}
     for src_file in template_path.iterdir():
-        if src_file.name in _TEMPLATE_SKIP:
+        if src_file.name in template_skip:
             continue
         if src_file.is_file():
             dst = project_root / src_file.name

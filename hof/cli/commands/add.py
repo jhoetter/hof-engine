@@ -488,6 +488,15 @@ def _install_template(template_name: str, registry: dict, project_root: Path, fo
         console.print(f"\n[bold]Installing module:[/] {module_name}")
         _install_module(module_name, registry, project_root, force=True)
 
+    # Verify critical files were actually installed.
+    index_page = project_root / "ui" / "pages" / "index.tsx"
+    if not index_page.exists():
+        console.print(
+            "\n[red bold]⚠ WARNING: ui/pages/index.tsx was not installed![/]\n"
+            "[red]The app will show a 404 at '/'. This likely means the components "
+            "artifact is stale. Re-run with a fresh cache or check the manifest.[/]"
+        )
+
     notes = meta.get("post_install_notes")
     if notes:
         console.print(f"\n[bold cyan]Note:[/] {notes}")

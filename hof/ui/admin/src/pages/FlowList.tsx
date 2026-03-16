@@ -26,7 +26,7 @@ export function FlowList() {
               <tr>
                 <th>Name</th>
                 <th>Nodes</th>
-                <th>Execution Waves</th>
+                <th>DAG Waves</th>
                 <th></th>
               </tr>
             </thead>

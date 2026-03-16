@@ -101,7 +101,7 @@ export function FlowGraph({ nodes, edges, executionOrder, nodeStates }: FlowGrap
   }, [nodes, edges, executionOrder, nodeStates]);
 
   return (
-    <div className="flow-graph">
+    <div className="flow-graph-container">
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}

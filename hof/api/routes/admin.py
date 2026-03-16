@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.get("/overview")
-async def admin_overview(user: str = Depends(verify_auth)) -> dict:
+def admin_overview(user: str = Depends(verify_auth)) -> dict:
     """Dashboard overview: counts of all registered components and recent activity."""
     recent_executions = execution_store.list_executions(limit=10)
 
@@ -64,7 +64,7 @@ async def flow_dag(
 
 
 @router.get("/pending-actions")
-async def pending_actions(user: str = Depends(verify_auth)) -> list[dict]:
+def pending_actions(user: str = Depends(verify_auth)) -> list[dict]:
     """List all pending human-in-the-loop actions."""
     executions = execution_store.list_executions(status="waiting_for_human", limit=50)
     actions = []

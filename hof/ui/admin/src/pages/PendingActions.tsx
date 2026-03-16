@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, type PendingAction } from "../api";
 import { UserComponent } from "../components/UserComponent";
 
@@ -7,9 +7,15 @@ export function PendingActions() {
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
+  const refreshActions = useCallback(() => {
     api.pendingActions().then(setActions).catch(console.error);
   }, []);
+
+  useEffect(() => {
+    refreshActions();
+    const interval = setInterval(refreshActions, 5000);
+    return () => clearInterval(interval);
+  }, [refreshActions]);
 
   const handleComplete = async (action: PendingAction, data: Record<string, unknown>) => {
     const key = `${action.execution_id}-${action.node_name}`;

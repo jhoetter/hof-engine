@@ -20,12 +20,17 @@ async def list_flows(user: str = Depends(verify_auth)) -> list[dict]:
 
 
 @router.post("/{flow_name}/run")
-async def run_flow(
+def run_flow(
     flow_name: str,
     body: dict[str, Any] | None = None,
     user: str = Depends(verify_auth),
 ) -> dict:
-    """Trigger a new flow execution."""
+    """Trigger a new flow execution.
+
+    This is a sync def (not async) so FastAPI runs it in a thread pool,
+    avoiding event-loop blocking from the sync database operations in
+    the flow executor.
+    """
     flow = registry.get_flow(flow_name)
     if flow is None:
         raise HTTPException(404, f"Flow '{flow_name}' not found")
@@ -36,7 +41,7 @@ async def run_flow(
 
 
 @router.get("/{flow_name}/executions")
-async def list_executions(
+def list_executions(
     flow_name: str,
     status: str | None = None,
     limit: int = 20,
@@ -52,7 +57,7 @@ async def list_executions(
 
 
 @router.get("/executions/{execution_id}")
-async def get_execution(
+def get_execution(
     execution_id: str,
     user: str = Depends(verify_auth),
 ) -> dict:
@@ -64,7 +69,7 @@ async def get_execution(
 
 
 @router.post("/executions/{execution_id}/cancel")
-async def cancel_execution(
+def cancel_execution(
     execution_id: str,
     user: str = Depends(verify_auth),
 ) -> dict:
@@ -74,13 +79,17 @@ async def cancel_execution(
 
 
 @router.post("/executions/{execution_id}/nodes/{node_name}/submit")
-async def submit_human_input(
+def submit_human_input(
     execution_id: str,
     node_name: str,
     body: dict[str, Any],
     user: str = Depends(verify_auth),
 ) -> dict:
-    """Submit human input for a waiting node."""
+    """Submit human input for a waiting node.
+
+    Sync def so FastAPI runs it in a thread pool, avoiding event-loop
+    blocking from the sync database operations in resume_after_human.
+    """
     execution = execution_store.get_execution(execution_id)
     if execution is None:
         raise HTTPException(404, f"Execution '{execution_id}' not found")

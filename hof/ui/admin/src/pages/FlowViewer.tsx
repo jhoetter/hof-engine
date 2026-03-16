@@ -19,10 +19,16 @@ export function FlowViewer() {
   const [executions, setExecutions] = useState<FlowExecution[]>([]);
   const [selectedExecution, setSelectedExecution] = useState<FlowExecution | null>(null);
 
+  const refreshExecutions = () => {
+    if (name) api.listExecutions(name).then(setExecutions).catch(console.error);
+  };
+
   useEffect(() => {
     if (!name) return;
     api.flowDag(name).then(setDag).catch(console.error);
-    api.listExecutions(name).then(setExecutions).catch(console.error);
+    refreshExecutions();
+    const interval = setInterval(refreshExecutions, 3000);
+    return () => clearInterval(interval);
   }, [name]);
 
   if (!dag) return <p>Loading...</p>;
@@ -61,7 +67,10 @@ export function FlowViewer() {
       />
 
       <div className="card" style={{ marginTop: 16 }}>
-        <h3>Executions</h3>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h3>Executions</h3>
+          <button className="btn" onClick={refreshExecutions}>Refresh</button>
+        </div>
         {executions.length === 0 ? (
           <p style={{ color: "var(--text-secondary)", fontSize: 13 }}>No executions yet.</p>
         ) : (

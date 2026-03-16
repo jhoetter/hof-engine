@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hof-engine"
-version = "0.1.23"
+version = "0.1.24"
 description = "Full-stack Python + React framework for building applications with workflows, tables, UIs, and LLM integration."
 readme = "README.md"
 license = "MIT"

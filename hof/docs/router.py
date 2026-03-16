@@ -102,4 +102,5 @@ async def get_doc(doc_path: str) -> str:
     if not target.exists() or not target.suffix == ".md":
         raise HTTPException(status_code=404, detail="Document not found")
 
-    return target.read_text(encoding="utf-8")
+    _, body = _parse_frontmatter(target.read_text(encoding="utf-8"))
+    return body

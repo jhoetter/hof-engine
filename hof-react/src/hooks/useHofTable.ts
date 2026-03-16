@@ -43,9 +43,14 @@ export function useHofTable<T = Record<string, unknown>>(
     setLoading(true);
     setError(null);
     try {
+      const token = localStorage.getItem("hof_token");
       const params = buildParams();
       const url = `/api/tables/${tableName}${params ? `?${params}` : ""}`;
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
       if (!res.ok) throw new Error(`Failed to fetch ${tableName}`);
       const json = await res.json();
       setData(json);
@@ -62,9 +67,13 @@ export function useHofTable<T = Record<string, unknown>>(
 
   const create = useCallback(
     async (record: Partial<T>): Promise<T> => {
+      const token = localStorage.getItem("hof_token");
       const res = await fetch(`/api/tables/${tableName}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(record),
       });
       if (!res.ok) throw new Error("Create failed");
@@ -77,9 +86,13 @@ export function useHofTable<T = Record<string, unknown>>(
 
   const update = useCallback(
     async (id: string, fields: Partial<T>): Promise<T> => {
+      const token = localStorage.getItem("hof_token");
       const res = await fetch(`/api/tables/${tableName}/${id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(fields),
       });
       if (!res.ok) throw new Error("Update failed");
@@ -92,7 +105,13 @@ export function useHofTable<T = Record<string, unknown>>(
 
   const remove = useCallback(
     async (id: string): Promise<void> => {
-      const res = await fetch(`/api/tables/${tableName}/${id}`, { method: "DELETE" });
+      const token = localStorage.getItem("hof_token");
+      const res = await fetch(`/api/tables/${tableName}/${id}`, {
+        method: "DELETE",
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
       if (!res.ok) throw new Error("Delete failed");
       setData((prev) => prev.filter((r: any) => r.id !== id));
     },

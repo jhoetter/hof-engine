@@ -30,7 +30,12 @@ export function useHofFlow(flowName: string): UseHofFlowResult {
   const fetchExecutions = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/flows/${flowName}/executions`);
+      const token = localStorage.getItem("hof_token");
+      const res = await fetch(`/api/flows/${flowName}/executions`, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
       if (!res.ok) throw new Error("Failed to fetch executions");
       const json = await res.json();
       setExecutions(json);
@@ -47,9 +52,13 @@ export function useHofFlow(flowName: string): UseHofFlowResult {
 
   const run = useCallback(
     async (input: Record<string, unknown>): Promise<FlowExecution> => {
+      const token = localStorage.getItem("hof_token");
       const res = await fetch(`/api/flows/${flowName}/run`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(input),
       });
       if (!res.ok) throw new Error("Failed to run flow");

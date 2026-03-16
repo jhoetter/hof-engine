@@ -41,11 +41,15 @@ export function useHofNode(): HofNodeContext {
       setSubmitting(true);
       setError(null);
       try {
+        const token = localStorage.getItem("hof_token");
         const res = await fetch(
           `/api/flows/executions/${executionId}/nodes/${nodeName}/submit`,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
             body: JSON.stringify(result),
           }
         );

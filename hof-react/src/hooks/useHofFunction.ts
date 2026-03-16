@@ -19,9 +19,13 @@ export function useHofFunction<TResult = unknown>(
       setLoading(true);
       setError(null);
       try {
+        const token = localStorage.getItem("hof_token");
         const res = await fetch(`/api/functions/${functionName}`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
           body: JSON.stringify(params),
         });
         if (!res.ok) {

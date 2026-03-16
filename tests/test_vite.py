@@ -327,6 +327,96 @@ class TestGeneratePagesHostPage:
         assert mtime1 == mtime2
 
 
+class TestHasShellRouter:
+    def test_false_without_shell_router(self, manager, ui_dir):
+        assert manager._has_shell_router() is False
+
+    def test_false_with_only_shell_router(self, manager, ui_dir):
+        (ui_dir / "ShellRouter.tsx").write_text("export function ShellRouter() {}")
+        assert manager._has_shell_router() is False
+
+    def test_false_with_only_layout_context(self, manager, ui_dir):
+        (ui_dir / "components" / "LayoutContext.tsx").write_text("export {}")
+        assert manager._has_shell_router() is False
+
+    def test_true_with_both(self, manager, ui_dir):
+        (ui_dir / "ShellRouter.tsx").write_text("export function ShellRouter() {}")
+        (ui_dir / "components" / "LayoutContext.tsx").write_text("export {}")
+        assert manager._has_shell_router() is True
+
+
+class TestGeneratePagesEntry:
+    def test_noop_without_pages_dir(self, manager, ui_dir):
+        manager._generate_pages_entry()
+        assert not (ui_dir / "_hof_pages_entry.tsx").exists()
+
+    def test_noop_with_empty_pages_dir(self, manager, ui_dir):
+        (ui_dir / "pages").mkdir()
+        manager._generate_pages_entry()
+        assert not (ui_dir / "_hof_pages_entry.tsx").exists()
+
+    def test_bare_entry_without_shell(self, manager, ui_dir):
+        pages = ui_dir / "pages"
+        pages.mkdir()
+        (pages / "index.tsx").write_text("export default function Index() {}")
+        (pages / "about.tsx").write_text("export default function About() {}")
+        manager._generate_pages_entry()
+        content = (ui_dir / "_hof_pages_entry.tsx").read_text()
+        assert "function App()" in content
+        assert 'path: "/"' in content
+        assert 'path: "/about"' in content
+        assert "ShellRouter" not in content
+        assert "LayoutProvider" not in content
+
+    def test_bare_entry_wraps_auth_provider(self, manager, ui_dir):
+        pages = ui_dir / "pages"
+        pages.mkdir()
+        (pages / "index.tsx").write_text("export default function Index() {}")
+        (ui_dir / "components" / "AuthProvider.tsx").write_text("export function AuthProvider() {}")
+        manager._generate_pages_entry()
+        content = (ui_dir / "_hof_pages_entry.tsx").read_text()
+        assert "AuthProvider" in content
+        assert "function App()" in content
+
+    def test_shell_entry_with_shell_router(self, manager, ui_dir):
+        pages = ui_dir / "pages"
+        pages.mkdir()
+        (pages / "index.tsx").write_text("export default function Index() {}")
+        (pages / "settings.tsx").write_text("export default function Settings() {}")
+        (ui_dir / "ShellRouter.tsx").write_text("export function ShellRouter() {}")
+        (ui_dir / "components" / "LayoutContext.tsx").write_text("export function LayoutProvider() {}")
+        manager._generate_pages_entry()
+        content = (ui_dir / "_hof_pages_entry.tsx").read_text()
+        assert "ShellRouter" in content
+        assert "LayoutProvider" in content
+        assert 'path: "/"' in content
+        assert 'path: "/settings"' in content
+        assert "function App()" not in content
+
+    def test_shell_entry_wraps_auth_provider(self, manager, ui_dir):
+        pages = ui_dir / "pages"
+        pages.mkdir()
+        (pages / "index.tsx").write_text("export default function Index() {}")
+        (ui_dir / "ShellRouter.tsx").write_text("export function ShellRouter() {}")
+        (ui_dir / "components" / "LayoutContext.tsx").write_text("export function LayoutProvider() {}")
+        (ui_dir / "components" / "AuthProvider.tsx").write_text("export function AuthProvider() {}")
+        manager._generate_pages_entry()
+        content = (ui_dir / "_hof_pages_entry.tsx").read_text()
+        assert "AuthProvider" in content
+        assert "ShellRouter" in content
+        assert "LayoutProvider" in content
+
+    def test_not_rewritten_if_unchanged(self, manager, ui_dir):
+        pages = ui_dir / "pages"
+        pages.mkdir()
+        (pages / "index.tsx").write_text("export default function Index() {}")
+        manager._generate_pages_entry()
+        mtime1 = (ui_dir / "_hof_pages_entry.tsx").stat().st_mtime
+        manager._generate_pages_entry()
+        mtime2 = (ui_dir / "_hof_pages_entry.tsx").stat().st_mtime
+        assert mtime1 == mtime2
+
+
 class TestEnsureSetup:
     def test_ensure_setup_skips_missing_dir(self, tmp_path):
         manager = ViteManager(tmp_path / "nonexistent")

@@ -264,25 +264,42 @@ def _load_template_meta(template_path: Path) -> dict:
 def _update_modules_json(
     project_root: Path, module_name: str, meta: dict, copied: list[str]
 ) -> None:
-    """Track installed module in .hof/modules.json."""
-    hof_dir = project_root / ".hof"
-    hof_dir.mkdir(exist_ok=True)
+    """Track installed module in hof-modules.json (project root, committed to git).
 
-    modules_file = hof_dir / "modules.json"
-    data: dict = {"installed_modules": {}}
-    if modules_file.exists():
-        data = json.loads(modules_file.read_text())
-
+    Also maintains the legacy .hof/modules.json for backward compatibility with
+    older hof-engine versions that read from there.
+    """
     npm_deps = meta.get("dependencies", {}).get("npm", [])
-
-    data["installed_modules"][module_name] = {
+    entry = {
         "version": meta.get("version", "unknown"),
         "installed_at": datetime.now(UTC).isoformat(),
         "files": copied,
         "npm_dependencies": npm_deps,
     }
 
-    modules_file.write_text(json.dumps(data, indent=2))
+    # Primary: hof-modules.json at project root (committed to git)
+    root_file = project_root / "hof-modules.json"
+    root_data: dict = {"installed_modules": {}}
+    if root_file.exists():
+        try:
+            root_data = json.loads(root_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    root_data["installed_modules"][module_name] = entry
+    root_file.write_text(json.dumps(root_data, indent=2) + "\n")
+
+    # Legacy: .hof/modules.json (gitignored, kept for backward compat)
+    hof_dir = project_root / ".hof"
+    hof_dir.mkdir(exist_ok=True)
+    legacy_file = hof_dir / "modules.json"
+    legacy_data: dict = {"installed_modules": {}}
+    if legacy_file.exists():
+        try:
+            legacy_data = json.loads(legacy_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    legacy_data["installed_modules"][module_name] = entry
+    legacy_file.write_text(json.dumps(legacy_data, indent=2))
 
 
 def _install_module(module_name: str, registry: dict, project_root: Path, force: bool) -> None:
@@ -300,12 +317,19 @@ def _install_module(module_name: str, registry: dict, project_root: Path, force:
     # Check module dependencies first
     dep_modules = meta.get("dependencies", {}).get("modules", [])
     if dep_modules:
-        modules_file = project_root / ".hof" / "modules.json"
         installed: set[str] = set()
-        if modules_file.exists():
-            installed = set(
-                json.loads(modules_file.read_text()).get("installed_modules", {}).keys()
-            )
+        for candidate in (
+            project_root / "hof-modules.json",
+            project_root / ".hof" / "modules.json",
+        ):
+            if candidate.exists():
+                try:
+                    installed = set(
+                        json.loads(candidate.read_text()).get("installed_modules", {}).keys()
+                    )
+                except (json.JSONDecodeError, OSError):
+                    pass
+                break
         missing = [m for m in dep_modules if m not in installed]
         if missing:
             console.print(f"[yellow]Module '{module_name}' requires: {', '.join(missing)}[/]")

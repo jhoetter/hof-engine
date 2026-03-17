@@ -437,16 +437,24 @@ class ViteManager:
             pages_html_path.write_text(html)
 
     def _collect_module_npm_deps(self) -> list[str]:
-        """Read .hof/modules.json and return all npm dependencies from installed modules."""
+        """Return all npm dependencies from installed hof modules.
+
+        Reads hof-modules.json at the project root (committed to git).
+        Falls back to the legacy .hof/modules.json for older projects.
+        """
         if self.project_root is None:
             return []
-        modules_file = self.project_root / ".hof" / "modules.json"
-        if not modules_file.exists():
-            return []
-        try:
-            data = json.loads(modules_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            return []
+        data: dict = {}
+        for candidate in (
+            self.project_root / "hof-modules.json",
+            self.project_root / ".hof" / "modules.json",
+        ):
+            if candidate.exists():
+                try:
+                    data = json.loads(candidate.read_text())
+                except (json.JSONDecodeError, OSError):
+                    continue
+                break
         deps: list[str] = []
         for _name, info in data.get("installed_modules", {}).items():
             for dep in info.get("npm_dependencies", []):

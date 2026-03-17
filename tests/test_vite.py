@@ -242,18 +242,14 @@ class TestCollectModuleNpmDeps:
     def test_returns_empty_with_invalid_json(self, tmp_path):
         ui = tmp_path / "ui"
         ui.mkdir()
-        hof_dir = tmp_path / ".hof"
-        hof_dir.mkdir()
-        (hof_dir / "modules.json").write_text("not json")
+        (tmp_path / "hof-modules.json").write_text("not json")
         manager = ViteManager(ui, project_root=tmp_path)
         assert manager._collect_module_npm_deps() == []
 
-    def test_collects_deps_from_modules(self, tmp_path):
+    def test_collects_deps_from_root_modules_json(self, tmp_path):
         ui = tmp_path / "ui"
         ui.mkdir()
-        hof_dir = tmp_path / ".hof"
-        hof_dir.mkdir()
-        (hof_dir / "modules.json").write_text(
+        (tmp_path / "hof-modules.json").write_text(
             json.dumps(
                 {
                     "installed_modules": {
@@ -276,12 +272,68 @@ class TestCollectModuleNpmDeps:
         assert "lucide-react" in deps
         assert "xlsx" in deps
 
-    def test_deduplicates_deps(self, tmp_path):
+    def test_falls_back_to_legacy_hof_dir(self, tmp_path):
         ui = tmp_path / "ui"
         ui.mkdir()
         hof_dir = tmp_path / ".hof"
         hof_dir.mkdir()
         (hof_dir / "modules.json").write_text(
+            json.dumps(
+                {
+                    "installed_modules": {
+                        "schema-view": {
+                            "version": "0.1.0",
+                            "files": [],
+                            "npm_dependencies": ["lucide-react"],
+                        },
+                    }
+                }
+            )
+        )
+        manager = ViteManager(ui, project_root=tmp_path)
+        deps = manager._collect_module_npm_deps()
+        assert "lucide-react" in deps
+
+    def test_prefers_root_over_legacy(self, tmp_path):
+        ui = tmp_path / "ui"
+        ui.mkdir()
+        (tmp_path / "hof-modules.json").write_text(
+            json.dumps(
+                {
+                    "installed_modules": {
+                        "mod-a": {
+                            "version": "0.1.0",
+                            "files": [],
+                            "npm_dependencies": ["from-root"],
+                        },
+                    }
+                }
+            )
+        )
+        hof_dir = tmp_path / ".hof"
+        hof_dir.mkdir()
+        (hof_dir / "modules.json").write_text(
+            json.dumps(
+                {
+                    "installed_modules": {
+                        "mod-b": {
+                            "version": "0.1.0",
+                            "files": [],
+                            "npm_dependencies": ["from-legacy"],
+                        },
+                    }
+                }
+            )
+        )
+        manager = ViteManager(ui, project_root=tmp_path)
+        deps = manager._collect_module_npm_deps()
+        assert "from-root" in deps
+        assert "from-legacy" not in deps
+
+    def test_deduplicates_deps(self, tmp_path):
+        ui = tmp_path / "ui"
+        ui.mkdir()
+        (tmp_path / "hof-modules.json").write_text(
             json.dumps(
                 {
                     "installed_modules": {
@@ -307,9 +359,7 @@ class TestCollectModuleNpmDeps:
     def test_handles_modules_without_npm_deps(self, tmp_path):
         ui = tmp_path / "ui"
         ui.mkdir()
-        hof_dir = tmp_path / ".hof"
-        hof_dir.mkdir()
-        (hof_dir / "modules.json").write_text(
+        (tmp_path / "hof-modules.json").write_text(
             json.dumps(
                 {
                     "installed_modules": {
@@ -329,9 +379,7 @@ class TestPackageJsonIncludesModuleDeps:
     def test_includes_module_npm_deps(self, tmp_path):
         ui = tmp_path / "ui"
         ui.mkdir()
-        hof_dir = tmp_path / ".hof"
-        hof_dir.mkdir()
-        (hof_dir / "modules.json").write_text(
+        (tmp_path / "hof-modules.json").write_text(
             json.dumps(
                 {
                     "installed_modules": {
@@ -354,9 +402,7 @@ class TestPackageJsonIncludesModuleDeps:
     def test_does_not_override_core_deps(self, tmp_path):
         ui = tmp_path / "ui"
         ui.mkdir()
-        hof_dir = tmp_path / ".hof"
-        hof_dir.mkdir()
-        (hof_dir / "modules.json").write_text(
+        (tmp_path / "hof-modules.json").write_text(
             json.dumps(
                 {
                     "installed_modules": {

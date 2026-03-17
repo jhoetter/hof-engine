@@ -1,216 +1,222 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-03-17T13:50:34Z",
+  "updated_at": "2026-03-17T14:00:57Z",
   "artifacts": [
     {
+      "engine_version": "0.1.40",
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
+    },
+    {
       "engine_version": "0.1.39",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.38",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.37",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.36",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.35",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.30",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.29",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.28",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.27",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.26",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.25",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.24",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.23",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.22",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.21",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.20",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.19",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.18",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.17",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.16",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.15",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.14",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.13",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.12",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.11",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.10",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.9",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.8",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.7",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.6",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.5",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.4",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.3",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.2",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     },
     {
       "engine_version": "0.1.1",
-      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-1a4ac80819d2.tar.gz",
-      "sha256": "1a4ac80819d2c21c3883cc69df74f62c9cad7f0d3ff621b55d7e3b707bb0fad9",
-      "published_at": "2026-03-17T13:50:34Z"
+      "artifact_url": "https://github.com/jhoetter/hof-engine/releases/download/components-0.1/hof-components-abb516a80859.tar.gz",
+      "sha256": "abb516a8085999dc4bffcd740966791cf9ba5e842fc646dcdaf06b6e3ba5a728",
+      "published_at": "2026-03-17T14:00:57Z"
     }
   ]
 }

@@ -502,20 +502,23 @@ def _install_template(template_name: str, registry: dict, project_root: Path, fo
     if meta.get("description"):
         console.print(f"  {meta['description']}\n")
 
-    # Copy template-level files (GUIDE.md, etc.).
-    # hof.config.py is always skipped because the scaffold's version contains
+    # Copy template-level files recursively (custom pages, components, etc.).
+    # hof.config.py and template.json are skipped — hof.config.py contains
     # project-specific values (app_name, ${DATABASE_URL}) that must be preserved.
     template_skip = {"template.json", "hof.config.py"}
-    for src_file in template_path.iterdir():
-        if src_file.name in template_skip:
+    for src_file in template_path.rglob("*"):
+        if not src_file.is_file():
             continue
-        if src_file.is_file():
-            dst = project_root / src_file.name
-            if dst.exists() and not force:
-                console.print(f"  [yellow]~ {src_file.name} (exists, skipped)[/]")
-            else:
-                shutil.copy2(src_file, dst)
-                console.print(f"  [green]+ {src_file.name}[/]")
+        rel = src_file.relative_to(template_path)
+        if rel.parts[0] in template_skip or str(rel) in template_skip:
+            continue
+        dst = project_root / rel
+        if dst.exists() and not force:
+            console.print(f"  [yellow]~ {rel} (exists, skipped)[/]")
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dst)
+            console.print(f"  [green]+ {rel}[/]")
 
     # Install each module referenced by the template.
     # Always force-overwrite: a template is a deliberate choice of app shape,

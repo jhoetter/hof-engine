@@ -1,4 +1,4 @@
-"""Vite dev server and build management for user React code."""
+"""Vite dev server and build management for user React UI code."""
 
 from __future__ import annotations
 
@@ -274,9 +274,10 @@ class ViteManager:
 
     def _has_shell_router(self) -> bool:
         """Return True if the project has a ShellRouter + LayoutContext."""
-        return (self.ui_dir / "ShellRouter.tsx").is_file() and (
-            self.ui_dir / "components" / "LayoutContext.tsx"
-        ).is_file()
+        return (
+            (self.ui_dir / "ShellRouter.tsx").is_file()
+            and (self.ui_dir / "components" / "LayoutContext.tsx").is_file()
+        )
 
     def _generate_pages_entry(self) -> None:
         """Auto-generate _hof_pages_entry.tsx with file-system routing for pages.
@@ -336,7 +337,11 @@ class ViteManager:
         if has_auth_provider:
             imports.append('import { AuthProvider } from "./components/AuthProvider";')
 
-        routes_block = "const routes = [\n" + "\n".join(route_entries) + "\n];\n"
+        routes_block = (
+            "const routes = [\n"
+            + "\n".join(route_entries)
+            + "\n];\n"
+        )
 
         inner = "      <ShellRouter routes={routes} />"
         if has_auth_provider:
@@ -349,7 +354,8 @@ class ViteManager:
         render_block = (
             'createRoot(document.getElementById("hof-root")!).render(\n'
             "  <React.StrictMode>\n"
-            "    <LayoutProvider>\n" + inner + "\n"
+            "    <LayoutProvider>\n"
+            + inner + "\n"
             "    </LayoutProvider>\n"
             "  </React.StrictMode>\n"
             ");\n"

@@ -486,6 +486,43 @@ def _print_list(registry: dict) -> None:
         console.print("[yellow]No modules or templates found in registry.[/]")
 
 
+_IMPL_SKIP_FILES = {
+    "template.json",
+    "hof.config.py",
+    "pyproject.toml",
+    "example.json",
+    ".env.example",
+    "hof-modules.json",
+    "pyrightconfig.json",
+}
+
+_IMPL_SKIP_DIRS = {
+    "node_modules",
+    "__pycache__",
+    ".hof",
+    "migrations",
+}
+
+_IMPL_SKIP_NAMES = {
+    "_hof_entry.tsx",
+    "_hof_pages_entry.tsx",
+    "_pages.html",
+    "_vite.build.config.ts",
+    "index.html",
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+    "vite.config.ts",
+}
+
+
+def _should_skip_impl_file(rel: Path) -> bool:
+    """Return True if a file from the implementation should not be copied."""
+    if str(rel) in _IMPL_SKIP_FILES or rel.name in _IMPL_SKIP_NAMES:
+        return True
+    return any(part in _IMPL_SKIP_DIRS for part in rel.parts)
+
+
 def _install_template(template_name: str, registry: dict, project_root: Path, force: bool) -> None:
     """Scaffold a project from a template (installs all its modules)."""
     if template_name not in registry.get("templates", {}):
@@ -502,9 +539,42 @@ def _install_template(template_name: str, registry: dict, project_root: Path, fo
     if meta.get("description"):
         console.print(f"  {meta['description']}\n")
 
-    # Copy template-level files recursively (custom pages, components, etc.).
-    # hof.config.py and template.json are skipped — hof.config.py contains
-    # project-specific values (app_name, ${DATABASE_URL}) that must be preserved.
+    # Install each module referenced by the template.
+    # Always force-overwrite: a template is a deliberate choice of app shape,
+    # so module files (e.g. dashboard's index.tsx) must replace scaffold placeholders.
+    for module_name in meta.get("modules", []):
+        console.print(f"\n[bold]Installing module:[/] {module_name}")
+        _install_module(module_name, registry, project_root, force=True)
+
+    # Copy implementation files (custom pages, components, functions, etc.).
+    # If copy_from is set, use the implementation directory as the source of
+    # truth. These are the example/custom files that bring the template to life.
+    # They are copied AFTER modules so they can override module defaults when
+    # the implementation has a customised version of a module file.
+    copy_from = meta.get("copy_from")
+    if copy_from:
+        impl_path = CACHE_DIR / copy_from
+        if impl_path.is_dir():
+            console.print(f"\n[bold]Copying implementation files:[/] {copy_from}")
+            for src_file in impl_path.rglob("*"):
+                if not src_file.is_file():
+                    continue
+                rel = src_file.relative_to(impl_path)
+                if _should_skip_impl_file(rel):
+                    continue
+                dst = project_root / rel
+                if dst.exists() and not force:
+                    console.print(f"  [yellow]~ {rel} (exists, skipped)[/]")
+                else:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src_file, dst)
+                    console.print(f"  [green]+ {rel}[/]")
+        else:
+            console.print(
+                f"[yellow]⚠ copy_from directory '{copy_from}' not found in cache, skipping.[/]"
+            )
+
+    # Copy any template-level override files (e.g. GUIDE.md).
     template_skip = {"template.json", "hof.config.py"}
     for src_file in template_path.rglob("*"):
         if not src_file.is_file():
@@ -519,13 +589,6 @@ def _install_template(template_name: str, registry: dict, project_root: Path, fo
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_file, dst)
             console.print(f"  [green]+ {rel}[/]")
-
-    # Install each module referenced by the template.
-    # Always force-overwrite: a template is a deliberate choice of app shape,
-    # so module files (e.g. dashboard's index.tsx) must replace scaffold placeholders.
-    for module_name in meta.get("modules", []):
-        console.print(f"\n[bold]Installing module:[/] {module_name}")
-        _install_module(module_name, registry, project_root, force=True)
 
     # Verify critical files were actually installed.
     index_page = project_root / "ui" / "pages" / "index.tsx"

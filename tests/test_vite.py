@@ -228,6 +228,154 @@ class TestCreatePackageJson:
         assert "react-dom" in data["dependencies"]
 
 
+class TestCollectModuleNpmDeps:
+    def test_returns_empty_without_project_root(self, ui_dir):
+        manager = ViteManager(ui_dir)
+        assert manager._collect_module_npm_deps() == []
+
+    def test_returns_empty_without_modules_json(self, tmp_path):
+        ui = tmp_path / "ui"
+        ui.mkdir()
+        manager = ViteManager(ui, project_root=tmp_path)
+        assert manager._collect_module_npm_deps() == []
+
+    def test_returns_empty_with_invalid_json(self, tmp_path):
+        ui = tmp_path / "ui"
+        ui.mkdir()
+        hof_dir = tmp_path / ".hof"
+        hof_dir.mkdir()
+        (hof_dir / "modules.json").write_text("not json")
+        manager = ViteManager(ui, project_root=tmp_path)
+        assert manager._collect_module_npm_deps() == []
+
+    def test_collects_deps_from_modules(self, tmp_path):
+        ui = tmp_path / "ui"
+        ui.mkdir()
+        hof_dir = tmp_path / ".hof"
+        hof_dir.mkdir()
+        (hof_dir / "modules.json").write_text(
+            json.dumps(
+                {
+                    "installed_modules": {
+                        "schema-view": {
+                            "version": "0.1.0",
+                            "files": [],
+                            "npm_dependencies": ["lucide-react"],
+                        },
+                        "data-import": {
+                            "version": "0.1.0",
+                            "files": [],
+                            "npm_dependencies": ["xlsx"],
+                        },
+                    }
+                }
+            )
+        )
+        manager = ViteManager(ui, project_root=tmp_path)
+        deps = manager._collect_module_npm_deps()
+        assert "lucide-react" in deps
+        assert "xlsx" in deps
+
+    def test_deduplicates_deps(self, tmp_path):
+        ui = tmp_path / "ui"
+        ui.mkdir()
+        hof_dir = tmp_path / ".hof"
+        hof_dir.mkdir()
+        (hof_dir / "modules.json").write_text(
+            json.dumps(
+                {
+                    "installed_modules": {
+                        "mod-a": {
+                            "version": "0.1.0",
+                            "files": [],
+                            "npm_dependencies": ["lucide-react"],
+                        },
+                        "mod-b": {
+                            "version": "0.1.0",
+                            "files": [],
+                            "npm_dependencies": ["lucide-react", "xlsx"],
+                        },
+                    }
+                }
+            )
+        )
+        manager = ViteManager(ui, project_root=tmp_path)
+        deps = manager._collect_module_npm_deps()
+        assert deps.count("lucide-react") == 1
+        assert "xlsx" in deps
+
+    def test_handles_modules_without_npm_deps(self, tmp_path):
+        ui = tmp_path / "ui"
+        ui.mkdir()
+        hof_dir = tmp_path / ".hof"
+        hof_dir.mkdir()
+        (hof_dir / "modules.json").write_text(
+            json.dumps(
+                {
+                    "installed_modules": {
+                        "auth": {
+                            "version": "0.1.0",
+                            "files": [],
+                        },
+                    }
+                }
+            )
+        )
+        manager = ViteManager(ui, project_root=tmp_path)
+        assert manager._collect_module_npm_deps() == []
+
+
+class TestPackageJsonIncludesModuleDeps:
+    def test_includes_module_npm_deps(self, tmp_path):
+        ui = tmp_path / "ui"
+        ui.mkdir()
+        hof_dir = tmp_path / ".hof"
+        hof_dir.mkdir()
+        (hof_dir / "modules.json").write_text(
+            json.dumps(
+                {
+                    "installed_modules": {
+                        "schema-view": {
+                            "version": "0.1.0",
+                            "files": [],
+                            "npm_dependencies": ["lucide-react"],
+                        },
+                    }
+                }
+            )
+        )
+        manager = ViteManager(ui, project_root=tmp_path)
+        pkg_path = ui / "package.json"
+        manager._create_package_json(pkg_path)
+        data = json.loads(pkg_path.read_text())
+        assert "lucide-react" in data["dependencies"]
+        assert data["dependencies"]["lucide-react"] == "*"
+
+    def test_does_not_override_core_deps(self, tmp_path):
+        ui = tmp_path / "ui"
+        ui.mkdir()
+        hof_dir = tmp_path / ".hof"
+        hof_dir.mkdir()
+        (hof_dir / "modules.json").write_text(
+            json.dumps(
+                {
+                    "installed_modules": {
+                        "evil-mod": {
+                            "version": "0.1.0",
+                            "files": [],
+                            "npm_dependencies": ["react"],
+                        },
+                    }
+                }
+            )
+        )
+        manager = ViteManager(ui, project_root=tmp_path)
+        pkg_path = ui / "package.json"
+        manager._create_package_json(pkg_path)
+        data = json.loads(pkg_path.read_text())
+        assert data["dependencies"]["react"] == "^19.0.0"
+
+
 class TestCreateTsconfig:
     def test_creates_tsconfig(self, manager, ui_dir):
         ts_path = ui_dir / "tsconfig.json"
@@ -384,7 +532,8 @@ class TestGeneratePagesEntry:
         (pages / "index.tsx").write_text("export default function Index() {}")
         (pages / "settings.tsx").write_text("export default function Settings() {}")
         (ui_dir / "ShellRouter.tsx").write_text("export function ShellRouter() {}")
-        (ui_dir / "components" / "LayoutContext.tsx").write_text("export function LayoutProvider() {}")
+        layout_ctx = ui_dir / "components" / "LayoutContext.tsx"
+        layout_ctx.write_text("export function LayoutProvider() {}")
         manager._generate_pages_entry()
         content = (ui_dir / "_hof_pages_entry.tsx").read_text()
         assert "ShellRouter" in content
@@ -398,8 +547,10 @@ class TestGeneratePagesEntry:
         pages.mkdir()
         (pages / "index.tsx").write_text("export default function Index() {}")
         (ui_dir / "ShellRouter.tsx").write_text("export function ShellRouter() {}")
-        (ui_dir / "components" / "LayoutContext.tsx").write_text("export function LayoutProvider() {}")
-        (ui_dir / "components" / "AuthProvider.tsx").write_text("export function AuthProvider() {}")
+        layout_ctx = ui_dir / "components" / "LayoutContext.tsx"
+        layout_ctx.write_text("export function LayoutProvider() {}")
+        auth = ui_dir / "components" / "AuthProvider.tsx"
+        auth.write_text("export function AuthProvider() {}")
         manager._generate_pages_entry()
         content = (ui_dir / "_hof_pages_entry.tsx").read_text()
         assert "AuthProvider" in content

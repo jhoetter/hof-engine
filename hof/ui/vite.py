@@ -274,10 +274,9 @@ class ViteManager:
 
     def _has_shell_router(self) -> bool:
         """Return True if the project has a ShellRouter + LayoutContext."""
-        return (
-            (self.ui_dir / "ShellRouter.tsx").is_file()
-            and (self.ui_dir / "components" / "LayoutContext.tsx").is_file()
-        )
+        return (self.ui_dir / "ShellRouter.tsx").is_file() and (
+            self.ui_dir / "components" / "LayoutContext.tsx"
+        ).is_file()
 
     def _generate_pages_entry(self) -> None:
         """Auto-generate _hof_pages_entry.tsx with file-system routing for pages.
@@ -337,11 +336,7 @@ class ViteManager:
         if has_auth_provider:
             imports.append('import { AuthProvider } from "./components/AuthProvider";')
 
-        routes_block = (
-            "const routes = [\n"
-            + "\n".join(route_entries)
-            + "\n];\n"
-        )
+        routes_block = "const routes = [\n" + "\n".join(route_entries) + "\n];\n"
 
         inner = "      <ShellRouter routes={routes} />"
         if has_auth_provider:
@@ -354,8 +349,7 @@ class ViteManager:
         render_block = (
             'createRoot(document.getElementById("hof-root")!).render(\n'
             "  <React.StrictMode>\n"
-            "    <LayoutProvider>\n"
-            + inner + "\n"
+            "    <LayoutProvider>\n" + inner + "\n"
             "    </LayoutProvider>\n"
             "  </React.StrictMode>\n"
             ");\n"
@@ -442,6 +436,24 @@ class ViteManager:
         if existing != html:
             pages_html_path.write_text(html)
 
+    def _collect_module_npm_deps(self) -> list[str]:
+        """Read .hof/modules.json and return all npm dependencies from installed modules."""
+        if self.project_root is None:
+            return []
+        modules_file = self.project_root / ".hof" / "modules.json"
+        if not modules_file.exists():
+            return []
+        try:
+            data = json.loads(modules_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            return []
+        deps: list[str] = []
+        for _name, info in data.get("installed_modules", {}).items():
+            for dep in info.get("npm_dependencies", []):
+                if dep not in deps:
+                    deps.append(dep)
+        return deps
+
     def _create_package_json(self, path: Path) -> None:
         deps: dict[str, str] = {
             "react": "^19.0.0",
@@ -450,6 +462,10 @@ class ViteManager:
         hof_react = self._hof_react_version()
         if hof_react is not None:
             deps["@hof-engine/react"] = hof_react
+
+        for pkg in self._collect_module_npm_deps():
+            if pkg not in deps:
+                deps[pkg] = "*"
 
         package = {
             "name": "hof-ui",

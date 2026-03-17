@@ -273,10 +273,13 @@ def _update_modules_json(
     if modules_file.exists():
         data = json.loads(modules_file.read_text())
 
+    npm_deps = meta.get("dependencies", {}).get("npm", [])
+
     data["installed_modules"][module_name] = {
         "version": meta.get("version", "unknown"),
         "installed_at": datetime.now(UTC).isoformat(),
         "files": copied,
+        "npm_dependencies": npm_deps,
     }
 
     modules_file.write_text(json.dumps(data, indent=2))
@@ -350,12 +353,21 @@ def _install_module(module_name: str, registry: dict, project_root: Path, force:
         for dep in pip_deps:
             console.print(f"  {dep}")
 
-    # npm dependencies
+    # npm dependencies — install automatically if ui/ and package.json exist
     npm_deps = meta.get("dependencies", {}).get("npm", [])
     if npm_deps:
-        console.print("\n[bold]Add to ui/package.json dependencies:[/]")
-        for dep in npm_deps:
-            console.print(f"  {dep}")
+        ui_pkg = project_root / "ui" / "package.json"
+        if ui_pkg.exists():
+            console.print(f"\n[bold]Installing npm dependencies:[/] {', '.join(npm_deps)}")
+            subprocess.run(
+                ["npm", "install", "--save", *npm_deps],
+                cwd=str(project_root / "ui"),
+                check=False,
+            )
+        else:
+            console.print("\n[bold]npm dependencies (will be auto-installed at build time):[/]")
+            for dep in npm_deps:
+                console.print(f"  {dep}")
 
     # Env vars
     env_vars = meta.get("env_vars", [])

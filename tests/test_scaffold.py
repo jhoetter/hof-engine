@@ -50,13 +50,13 @@ def test_no_index_page_in_scaffold():
 def test_slug_derived_from_name():
     files = get_project_files("Acme Portal")
     assert 'name = "acme-portal"' in files["pyproject.toml"]
-    assert "acme-portal" in files[".env"]
+    assert "DB_NAME=app" in files[".env"]
 
 
 def test_explicit_slug_overrides_derived():
     files = get_project_files("My Cool App", slug="cool-app")
     assert 'name = "cool-app"' in files["pyproject.toml"]
-    assert "cool-app" in files[".env"]
+    assert "DB_NAME=app" in files[".env"]
     assert 'app_name="My Cool App"' in files["hof.config.py"]
 
 
@@ -70,6 +70,11 @@ def test_dockerfile_cmd_uses_uvicorn():
     files = get_project_files("test-project")
     assert "uvicorn" in files["Dockerfile"]
     assert "hof dev" not in files["Dockerfile"]
+
+
+def test_dockerfile_cmd_includes_ensure_db():
+    files = get_project_files("test-project")
+    assert "hof.db.ensure_db" in files["Dockerfile"]
 
 
 def test_compose_has_no_app_service():

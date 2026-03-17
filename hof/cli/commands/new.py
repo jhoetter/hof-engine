@@ -115,6 +115,7 @@ config = Config(
     redis_url="${REDIS_URL}",
     admin_username="admin",
     admin_password="${HOF_ADMIN_PASSWORD}",
+    jwt_secret_key="${JWT_SECRET_KEY}",
 )
 """,
     "pyproject.toml": """[build-system]
@@ -153,7 +154,7 @@ RUN python -c "from pathlib import Path; from hof.config import load_config; \\
     ViteManager(Path(c.ui_dir), app_name=c.app_name, project_root=Path('.')).build()"
 
 EXPOSE 8001
-CMD ["sh", "-c", "hof db migrate && \\
+CMD ["sh", "-c", "python -m hof.db.ensure_db && hof db migrate && \\
     python -m uvicorn hof.api.server:create_app \\
     --factory --host 0.0.0.0 --port 8001"]
 """,
@@ -205,10 +206,10 @@ _ENV_TEMPLATE = (
     "# Environment variables — used for local dev outside Docker.\n"
     "# Inside Docker, DATABASE_URL and REDIS_URL are overridden by docker-compose.yml.\n"
     "# Ports offset from hof-os (5432/6379) so both can run simultaneously.\n"
-    "DATABASE_URL=postgresql://postgres:changeme@localhost:5433/{slug}\n"
+    "DATABASE_URL=postgresql://postgres:changeme@localhost:5433/app\n"
     "REDIS_URL=redis://localhost:6380/0\n"
     "HOF_ADMIN_PASSWORD=changeme\n"
-    "DB_NAME={slug}\n"
+    "DB_NAME=app\n"
     "DB_PASSWORD=changeme\n"
 )
 

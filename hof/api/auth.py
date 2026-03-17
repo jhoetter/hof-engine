@@ -31,6 +31,7 @@ Custom roles can be defined and checked with ``require_role()``.
 
 from __future__ import annotations
 
+import os
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -130,15 +131,27 @@ def _create_access_token(
 def _decode_jwt(token: str) -> dict[str, Any] | None:
     if _config is None:
         return None
-    secret = _config.jwt_secret_key or _config.admin_password
-    if not secret:
+    algorithm = _config.jwt_algorithm
+    secrets_to_try: list[str] = []
+    if _config.jwt_secret_key:
+        secrets_to_try.append(_config.jwt_secret_key)
+    if _config.admin_password:
+        secrets_to_try.append(_config.admin_password)
+    jwt_env = os.environ.get("JWT_SECRET_KEY", "")
+    if jwt_env and jwt_env not in secrets_to_try:
+        secrets_to_try.append(jwt_env)
+    if not secrets_to_try:
         return None
     try:
         from jose import jwt
-
-        return jwt.decode(token, secret, algorithms=[_config.jwt_algorithm])
-    except Exception:
+    except ImportError:
         return None
+    for secret in secrets_to_try:
+        try:
+            return jwt.decode(token, secret, algorithms=[algorithm])
+        except Exception:
+            continue
+    return None
 
 
 # ---------------------------------------------------------------------------

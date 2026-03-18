@@ -188,6 +188,39 @@ class Table(Base, metaclass=TableMeta):
             with get_session() as s:
                 yield s
 
+    @classmethod
+    def _apply_filters(cls, stmt: Any, filters: dict[str, Any]) -> Any:
+        """Apply a filter dict to a SQLAlchemy select statement.
+
+        Supported operators (suffix after ``__``):
+          lt, gt, lte, gte, ne, in, ilike
+        No suffix = exact equality match.
+        """
+        for key, value in filters.items():
+            if "__" in key:
+                field_name, op = key.rsplit("__", 1)
+                col = getattr(cls, field_name, None)
+                if col is not None:
+                    if op == "lt":
+                        stmt = stmt.where(col < value)
+                    elif op == "gt":
+                        stmt = stmt.where(col > value)
+                    elif op == "lte":
+                        stmt = stmt.where(col <= value)
+                    elif op == "gte":
+                        stmt = stmt.where(col >= value)
+                    elif op == "ne":
+                        stmt = stmt.where(col != value)
+                    elif op == "in":
+                        stmt = stmt.where(col.in_(value))
+                    elif op == "ilike":
+                        stmt = stmt.where(col.ilike(f"%{value}%"))
+            else:
+                col = getattr(cls, key, None)
+                if col is not None:
+                    stmt = stmt.where(col == value)
+        return stmt
+
     # ------------------------------------------------------------------
     # Serialization
     # ------------------------------------------------------------------
@@ -238,27 +271,7 @@ class Table(Base, metaclass=TableMeta):
             stmt = sa.select(cls)
 
             if filters:
-                for key, value in filters.items():
-                    if "__" in key:
-                        field_name, op = key.rsplit("__", 1)
-                        col = getattr(cls, field_name, None)
-                        if col is not None:
-                            if op == "lt":
-                                stmt = stmt.where(col < value)
-                            elif op == "gt":
-                                stmt = stmt.where(col > value)
-                            elif op == "lte":
-                                stmt = stmt.where(col <= value)
-                            elif op == "gte":
-                                stmt = stmt.where(col >= value)
-                            elif op == "ne":
-                                stmt = stmt.where(col != value)
-                            elif op == "in":
-                                stmt = stmt.where(col.in_(value))
-                    else:
-                        col = getattr(cls, key, None)
-                        if col is not None:
-                            stmt = stmt.where(col == value)
+                stmt = cls._apply_filters(stmt, filters)
 
             if order_by:
                 desc = order_by.startswith("-")
@@ -279,6 +292,7 @@ class Table(Base, metaclass=TableMeta):
         limit: int = 100,
         offset: int = 0,
         window_columns: list[WindowColumn] | None = None,
+        window_filters: dict[str, Any] | None = None,
         session: Session | None = None,
     ) -> list[dict[str, Any]]:
         """Query records and append SQL window function columns to each row.
@@ -288,12 +302,16 @@ class Table(Base, metaclass=TableMeta):
         window columns — which are not ORM model attributes — can be included.
 
         Args:
-            filters:        Same filter syntax as ``query()``.
+            filters:        Same filter syntax as ``query()``. Applied before
+                            window functions (affects what window functions see).
             order_by:       Column name to order by (prefix ``-`` for DESC).
             limit:          Maximum rows to return.
             offset:         Row offset for pagination.
             window_columns: Window function specifications. If None or empty,
                             behaves identically to ``query()`` but returns dicts.
+            window_filters: Filters applied *after* window functions, on the
+                            computed columns (e.g. ``running_total__gte=100``).
+                            Uses the same operator syntax as ``filters``.
             session:        Optional external session.
 
         Returns:
@@ -308,27 +326,7 @@ class Table(Base, metaclass=TableMeta):
             base_stmt = sa.select(cls)
 
             if filters:
-                for key, value in filters.items():
-                    if "__" in key:
-                        field_name, op = key.rsplit("__", 1)
-                        col = getattr(cls, field_name, None)
-                        if col is not None:
-                            if op == "lt":
-                                base_stmt = base_stmt.where(col < value)
-                            elif op == "gt":
-                                base_stmt = base_stmt.where(col > value)
-                            elif op == "lte":
-                                base_stmt = base_stmt.where(col <= value)
-                            elif op == "gte":
-                                base_stmt = base_stmt.where(col >= value)
-                            elif op == "ne":
-                                base_stmt = base_stmt.where(col != value)
-                            elif op == "in":
-                                base_stmt = base_stmt.where(col.in_(value))
-                    else:
-                        col = getattr(cls, key, None)
-                        if col is not None:
-                            base_stmt = base_stmt.where(col == value)
+                base_stmt = cls._apply_filters(base_stmt, filters)
 
             if order_by:
                 desc = order_by.startswith("-")
@@ -448,13 +446,42 @@ class Table(Base, metaclass=TableMeta):
                 window_exprs.append(expr.label(wc.key))
 
             # ----------------------------------------------------------------
-            # 4. Select all base columns + window expressions, then paginate.
+            # 4. Wrap window results in a second CTE if window_filters exist,
+            #    then paginate.
             # ----------------------------------------------------------------
-            outer_stmt = (
-                sa.select(cte, *window_exprs)
-                .limit(limit)
-                .offset(offset)
-            )
+            window_stmt = sa.select(cte, *window_exprs)
+
+            if window_filters:
+                # Wrap in a subquery so we can WHERE on the window columns.
+                window_cte = window_stmt.cte("windowed")
+                outer_stmt = sa.select(window_cte)
+                for key, value in window_filters.items():
+                    if "__" in key:
+                        field_name, op = key.rsplit("__", 1)
+                        wcol = window_cte.c.get(field_name)
+                        if wcol is not None:
+                            if op == "lt":
+                                outer_stmt = outer_stmt.where(wcol < value)
+                            elif op == "gt":
+                                outer_stmt = outer_stmt.where(wcol > value)
+                            elif op == "lte":
+                                outer_stmt = outer_stmt.where(wcol <= value)
+                            elif op == "gte":
+                                outer_stmt = outer_stmt.where(wcol >= value)
+                            elif op == "ne":
+                                outer_stmt = outer_stmt.where(wcol != value)
+                            elif op == "in":
+                                outer_stmt = outer_stmt.where(wcol.in_(value))
+                            elif op == "ilike":
+                                outer_stmt = outer_stmt.where(wcol.ilike(f"%{value}%"))
+                    else:
+                        wcol = window_cte.c.get(key)
+                        if wcol is not None:
+                            outer_stmt = outer_stmt.where(wcol == value)
+            else:
+                outer_stmt = window_stmt
+
+            outer_stmt = outer_stmt.limit(limit).offset(offset)
             rows = s.execute(outer_stmt).mappings().all()
             return [dict(r) for r in rows]
 

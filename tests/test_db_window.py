@@ -415,6 +415,20 @@ class TestEdgeCases:
         assert [r["rn"] for r in rows] == [1, 2]
         assert rows[1]["rt"] == pytest.approx(30.0)   # only A rows: 10+20
 
+    def test_ilike_filter(self):
+        """ilike filter does case-insensitive substring match."""
+        _seed((10, "North", 1), (20, "South", 2), (30, "Northeast", 3))
+        rows = Sale.query_with_windows(
+            filters={"region__ilike": "north"},
+            order_by="day",
+            window_columns=[
+                WindowColumn(key="rn", fn="row_number", order_by="day"),
+            ],
+        )
+        assert len(rows) == 2
+        assert {r["region"] for r in rows} == {"North", "Northeast"}
+        assert [r["rn"] for r in rows] == [1, 2]
+
     def test_unknown_fn_raises(self):
         _seed((1, "A", 1))
         with pytest.raises(ValueError, match="Unknown window function"):
@@ -423,3 +437,51 @@ class TestEdgeCases:
                     WindowColumn(key="x", fn="not_a_fn", order_by="day"),  # type: ignore[arg-type]
                 ]
             )
+
+
+# ---------------------------------------------------------------------------
+# window_filters — filtering on computed window columns
+# ---------------------------------------------------------------------------
+
+
+class TestWindowFilters:
+    def test_filter_on_running_sum_gte(self):
+        """Only return rows where the running total has reached >= 30."""
+        _seed((10, "A", 1), (20, "A", 2), (30, "A", 3))
+        rows = Sale.query_with_windows(
+            order_by="day",
+            window_columns=[
+                WindowColumn(key="rt", fn="running_sum", over="amount", order_by="day")
+            ],
+            window_filters={"rt__gte": 30.0},
+        )
+        assert all(r["rt"] >= 30.0 for r in rows)
+        assert len(rows) == 2  # rows 2 (30) and 3 (60)
+
+    def test_filter_on_row_number(self):
+        """Filter to a specific row number."""
+        for i in range(5):
+            _seed((i * 10, "A", i))
+        rows = Sale.query_with_windows(
+            order_by="day",
+            window_columns=[
+                WindowColumn(key="rn", fn="row_number", order_by="day")
+            ],
+            window_filters={"rn__lte": 3},
+        )
+        assert len(rows) == 3
+        assert [r["rn"] for r in rows] == [1, 2, 3]
+
+    def test_window_filter_with_base_filter(self):
+        """window_filters and base filters can combine."""
+        _seed((10, "A", 1), (20, "A", 2), (5, "B", 3), (15, "B", 4))
+        rows = Sale.query_with_windows(
+            filters={"region": "A"},
+            order_by="day",
+            window_columns=[
+                WindowColumn(key="rt", fn="running_sum", over="amount", order_by="day")
+            ],
+            window_filters={"rt__gt": 10.0},
+        )
+        assert len(rows) == 1
+        assert rows[0]["rt"] == pytest.approx(30.0)

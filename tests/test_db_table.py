@@ -186,6 +186,13 @@ class TestQuery:
         results = Item.query(filters={"score__in": [1, 3]})
         assert {r.name for r in results} == {"A", "C"}
 
+    def test_query_with_ilike_filter(self):
+        Item.create(name="FooBar", score=1)
+        Item.create(name="Baz", score=2)
+        results = Item.query(filters={"name__ilike": "foo"})
+        assert len(results) == 1
+        assert results[0].name == "FooBar"
+
     def test_query_order_ascending(self):
         Item.create(name="Z", score=3)
         Item.create(name="A", score=1)

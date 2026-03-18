@@ -130,6 +130,38 @@ def branching_flow():
     return flow
 
 
+@pytest.fixture
+def conditional_flow():
+    """A flow with two mutually exclusive branches gated by a when guard."""
+    flow = Flow("test_conditional_flow")
+
+    @flow.node
+    def check(value: int) -> dict:
+        return {"exceeds": value > 100}
+
+    @flow.node(
+        depends_on=[check],
+        when=lambda ctx: ctx.get("exceeds", False),
+        when_label="exceeds == true",
+    )
+    def high_path(exceeds: bool) -> dict:
+        return {"result": "high"}
+
+    @flow.node(
+        depends_on=[check],
+        when=lambda ctx: not ctx.get("exceeds", False),
+        when_label="exceeds == false",
+    )
+    def low_path(exceeds: bool) -> dict:
+        return {"result": "low"}
+
+    @flow.node(depends_on=[high_path, low_path])
+    def finish(result: str = "") -> dict:
+        return {"final": result}
+
+    return flow
+
+
 # ---------------------------------------------------------------------------
 # Pre-built FlowExecution dataclass (no DB required)
 # ---------------------------------------------------------------------------

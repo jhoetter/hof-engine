@@ -25,6 +25,8 @@ class NodeMetadata:
     human_ui: str | None = None
     human_timeout: str | None = None
     is_async: bool = False
+    when: Callable | None = None
+    when_label: str = ""
 
     def execute(self, **kwargs: Any) -> Any:
         """Execute the node function, filtering kwargs to only accepted params."""
@@ -42,6 +44,8 @@ class NodeMetadata:
             "tags": self.tags,
             "is_human": self.is_human,
             "human_ui": self.human_ui,
+            "has_when": self.when is not None,
+            "when_label": self.when_label,
         }
 
 
@@ -92,6 +96,8 @@ def node(
     retry_delay: int = 30,
     timeout: int = 60,
     tags: list[str] | None = None,
+    when: Callable | None = None,
+    when_label: str = "",
 ) -> Callable:
     """Standalone node decorator (for use outside of a Flow context).
 
@@ -111,6 +117,8 @@ def node(
             timeout=timeout,
             tags=tags or [],
             is_async=asyncio.iscoroutinefunction(fn),
+            when=when,
+            when_label=when_label,
         )
 
         @functools.wraps(fn)

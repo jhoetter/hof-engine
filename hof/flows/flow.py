@@ -46,6 +46,8 @@ class Flow:
         retry_delay: int = 30,
         timeout: int = 60,
         tags: list[str] | None = None,
+        when: Callable | None = None,
+        when_label: str = "",
     ) -> Callable:
         """Register a function as a node in this flow.
 
@@ -55,6 +57,9 @@ class Flow:
 
             @flow.node(depends_on=[other_step], retries=3)
             def my_step(): ...
+
+            @flow.node(depends_on=[gate], when=lambda ctx: ctx.get("flag"), when_label="flag == true")
+            def conditional_step(): ...
         """
 
         def decorator(fn: Callable) -> Callable:
@@ -72,6 +77,10 @@ class Flow:
                     meta.timeout = timeout
                 if tags:
                     meta.tags = tags
+                if when is not None:
+                    meta.when = when
+                if when_label:
+                    meta.when_label = when_label
             else:
                 dep_names = _resolve_dep_names(depends_on or [])
                 meta = NodeMetadata(
@@ -83,6 +92,8 @@ class Flow:
                     timeout=timeout,
                     tags=tags or [],
                     is_async=asyncio.iscoroutinefunction(fn),
+                    when=when,
+                    when_label=when_label,
                 )
 
             self.nodes[meta.name] = meta

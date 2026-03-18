@@ -128,9 +128,19 @@ class FlowExecutor:
             if execution.status == ExecutionStatus.CANCELLED:
                 break
 
+            # Evaluate when guards and propagate skips before splitting human/non-human
+            to_run: list[str] = []
+            for name in wave:
+                meta = self.flow.nodes[name]
+                if self._should_skip(name, meta, execution, node_outputs):
+                    execution.set_node_state(name, status=NodeStatus.SKIPPED)
+                    node_outputs[name] = {}
+                    continue
+                to_run.append(name)
+
             # Check for human nodes in this wave first
-            human_nodes = [n for n in wave if self.flow.nodes[n].is_human]
-            non_human_nodes = [n for n in wave if not self.flow.nodes[n].is_human]
+            human_nodes = [n for n in to_run if self.flow.nodes[n].is_human]
+            non_human_nodes = [n for n in to_run if not self.flow.nodes[n].is_human]
 
             # Run non-human nodes in parallel
             if non_human_nodes:
@@ -184,6 +194,39 @@ class FlowExecutor:
         from hof.api.routes.ws import notify_execution_update
 
         _broadcast(notify_execution_update(execution.id, execution.status))
+
+    # ------------------------------------------------------------------
+    # Skip / guard evaluation
+    # ------------------------------------------------------------------
+
+    def _should_skip(
+        self,
+        node_name: str,
+        meta: Any,
+        execution: FlowExecution,
+        node_outputs: dict[str, dict],
+    ) -> bool:
+        """Return True if this node should be skipped.
+
+        A node is skipped when:
+        1. All of its dependencies were skipped (cascade skip), OR
+        2. It has a `when` guard that evaluates to False against upstream output.
+        """
+        if meta.depends_on:
+            all_deps_skipped = all(
+                (execution.get_node_state(d) is not None
+                 and execution.get_node_state(d).status == NodeStatus.SKIPPED)  # type: ignore[union-attr]
+                for d in meta.depends_on
+            )
+            if all_deps_skipped:
+                return True
+
+        if meta.when is not None:
+            guard_input = self._gather_input(meta, execution.input_data, node_outputs)
+            if not meta.when(guard_input):
+                return True
+
+        return False
 
     # ------------------------------------------------------------------
     # Parallel wave execution
@@ -379,8 +422,18 @@ class FlowExecutor:
             if not found_human_wave:
                 continue
 
-            non_human = [n for n in wave if not self.flow.nodes[n].is_human]
-            human_in_wave = [n for n in wave if self.flow.nodes[n].is_human]
+            # Evaluate when guards and propagate skips before splitting human/non-human
+            to_run: list[str] = []
+            for name in wave:
+                meta = self.flow.nodes[name]
+                if self._should_skip(name, meta, execution, node_outputs):
+                    execution.set_node_state(name, status=NodeStatus.SKIPPED)
+                    node_outputs[name] = {}
+                    continue
+                to_run.append(name)
+
+            non_human = [n for n in to_run if not self.flow.nodes[n].is_human]
+            human_in_wave = [n for n in to_run if self.flow.nodes[n].is_human]
 
             if non_human:
                 wave_outputs, error = self._run_wave_parallel(non_human, execution, node_outputs)

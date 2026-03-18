@@ -303,3 +303,119 @@ class TestFlowExecutorResume:
             result = executor.resume_after_human("bad-id", "step", {})
 
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# When guards and conditional branching
+# ---------------------------------------------------------------------------
+
+
+class TestWhenGuards:
+    def test_when_guard_false_skips_node(self):
+        """Node with when=lambda: False should be marked SKIPPED."""
+        flow = Flow("guard_skip_flow")
+
+        @flow.node
+        def start(x: int) -> dict:
+            return {"x": x}
+
+        @flow.node(depends_on=[start], when=lambda ctx: False, when_label="never")
+        def guarded(x: int) -> dict:
+            return {"ran": True}
+
+        execution = _make_execution("guard_skip_flow", {"x": 1})
+        ctx, store = _patch_store(execution)
+
+        with ctx:
+            executor = FlowExecutor(flow)
+            result = executor.start({"x": 1})
+
+        assert result.status == ExecutionStatus.COMPLETED
+        guarded_state = result.get_node_state("guarded")
+        assert guarded_state is not None
+        assert guarded_state.status == NodeStatus.SKIPPED
+
+    def test_when_guard_true_runs_node(self):
+        """Node with when=lambda: True should execute normally."""
+        flow = Flow("guard_pass_flow")
+
+        @flow.node
+        def start(x: int) -> dict:
+            return {"x": x}
+
+        @flow.node(depends_on=[start], when=lambda ctx: True, when_label="always")
+        def guarded(x: int) -> dict:
+            return {"ran": True}
+
+        execution = _make_execution("guard_pass_flow", {"x": 1})
+        ctx, store = _patch_store(execution)
+
+        with ctx:
+            executor = FlowExecutor(flow)
+            result = executor.start({"x": 1})
+
+        assert result.status == ExecutionStatus.COMPLETED
+        guarded_state = result.get_node_state("guarded")
+        assert guarded_state is not None
+        assert guarded_state.status == NodeStatus.COMPLETED
+
+    def test_skip_propagation_to_downstream(self):
+        """When a node is skipped, all exclusively-downstream nodes are also skipped."""
+        flow = Flow("skip_propagation_flow")
+
+        @flow.node
+        def start() -> dict:
+            return {}
+
+        @flow.node(depends_on=[start], when=lambda ctx: False)
+        def skipped_gate() -> dict:
+            return {"gate": True}
+
+        @flow.node(depends_on=[skipped_gate])
+        def downstream(gate: bool = False) -> dict:
+            return {"downstream_ran": True}
+
+        execution = _make_execution("skip_propagation_flow")
+        ctx, store = _patch_store(execution)
+
+        with ctx:
+            executor = FlowExecutor(flow)
+            result = executor.start({})
+
+        assert result.status == ExecutionStatus.COMPLETED
+        gate_state = result.get_node_state("skipped_gate")
+        downstream_state = result.get_node_state("downstream")
+        assert gate_state is not None and gate_state.status == NodeStatus.SKIPPED
+        assert downstream_state is not None and downstream_state.status == NodeStatus.SKIPPED
+
+    def test_conditional_branching_high_path(self, conditional_flow):
+        """When value > 100, high_path runs and low_path is skipped."""
+        execution = _make_execution("test_conditional_flow", {"value": 200})
+        ctx, store = _patch_store(execution)
+
+        with ctx:
+            executor = FlowExecutor(conditional_flow)
+            result = executor.start({"value": 200})
+
+        assert result.status == ExecutionStatus.COMPLETED
+        high_state = result.get_node_state("high_path")
+        low_state = result.get_node_state("low_path")
+        assert high_state is not None and high_state.status == NodeStatus.COMPLETED
+        assert low_state is not None and low_state.status == NodeStatus.SKIPPED
+        assert result.output_data.get("final") == "high"
+
+    def test_conditional_branching_low_path(self, conditional_flow):
+        """When value <= 100, low_path runs and high_path is skipped."""
+        execution = _make_execution("test_conditional_flow", {"value": 50})
+        ctx, store = _patch_store(execution)
+
+        with ctx:
+            executor = FlowExecutor(conditional_flow)
+            result = executor.start({"value": 50})
+
+        assert result.status == ExecutionStatus.COMPLETED
+        high_state = result.get_node_state("high_path")
+        low_state = result.get_node_state("low_path")
+        assert high_state is not None and high_state.status == NodeStatus.SKIPPED
+        assert low_state is not None and low_state.status == NodeStatus.COMPLETED
+        assert result.output_data.get("final") == "low"

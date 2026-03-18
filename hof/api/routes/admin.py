@@ -48,10 +48,17 @@ async def flow_dag(
                 "is_human": meta.is_human,
                 "human_ui": meta.human_ui,
                 "tags": meta.tags,
+                "has_when": meta.when is not None,
+                "when_label": meta.when_label,
             }
         )
         for dep in meta.depends_on:
-            edges.append({"source": dep, "target": name})
+            edges.append({
+                "source": dep,
+                "target": name,
+                "conditional": meta.when is not None,
+                "when_label": meta.when_label,
+            })
 
     execution_order = flow.get_execution_order()
 

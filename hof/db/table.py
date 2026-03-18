@@ -12,6 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy import func
 from sqlalchemy.orm import Session, mapped_column
 
+from hof.db.window import WindowColumn
+
 from hof.core.registry import registry
 from hof.db.engine import Base, get_session
 
@@ -267,6 +269,194 @@ class Table(Base, metaclass=TableMeta):
 
             stmt = stmt.limit(limit).offset(offset)
             return list(s.scalars(stmt).all())
+
+    @classmethod
+    def query_with_windows(
+        cls,
+        *,
+        filters: dict[str, Any] | None = None,
+        order_by: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        window_columns: list[WindowColumn] | None = None,
+        session: Session | None = None,
+    ) -> list[dict[str, Any]]:
+        """Query records and append SQL window function columns to each row.
+
+        Builds a CTE from the base query (with filters and ordering), then
+        wraps it with window expressions. Returns plain dicts so that the extra
+        window columns — which are not ORM model attributes — can be included.
+
+        Args:
+            filters:        Same filter syntax as ``query()``.
+            order_by:       Column name to order by (prefix ``-`` for DESC).
+            limit:          Maximum rows to return.
+            offset:         Row offset for pagination.
+            window_columns: Window function specifications. If None or empty,
+                            behaves identically to ``query()`` but returns dicts.
+            session:        Optional external session.
+
+        Returns:
+            List of dicts, each containing all model columns plus any computed
+            window columns keyed by ``WindowColumn.key``.
+        """
+        with cls._session_scope(session) as s:
+            # ----------------------------------------------------------------
+            # 1. Base query: filters + ordering (no limit/offset yet — window
+            #    functions must see the full ordered dataset before slicing).
+            # ----------------------------------------------------------------
+            base_stmt = sa.select(cls)
+
+            if filters:
+                for key, value in filters.items():
+                    if "__" in key:
+                        field_name, op = key.rsplit("__", 1)
+                        col = getattr(cls, field_name, None)
+                        if col is not None:
+                            if op == "lt":
+                                base_stmt = base_stmt.where(col < value)
+                            elif op == "gt":
+                                base_stmt = base_stmt.where(col > value)
+                            elif op == "lte":
+                                base_stmt = base_stmt.where(col <= value)
+                            elif op == "gte":
+                                base_stmt = base_stmt.where(col >= value)
+                            elif op == "ne":
+                                base_stmt = base_stmt.where(col != value)
+                            elif op == "in":
+                                base_stmt = base_stmt.where(col.in_(value))
+                    else:
+                        col = getattr(cls, key, None)
+                        if col is not None:
+                            base_stmt = base_stmt.where(col == value)
+
+            if order_by:
+                desc = order_by.startswith("-")
+                field_name = order_by.lstrip("-")
+                col = getattr(cls, field_name, None)
+                if col is not None:
+                    base_stmt = base_stmt.order_by(
+                        col.desc() if desc else col.asc()
+                    )
+
+            if not window_columns:
+                # No window functions requested — add limit/offset and return dicts.
+                base_stmt = base_stmt.limit(limit).offset(offset)
+                instances = list(s.scalars(base_stmt).all())
+                return [inst.to_dict() for inst in instances]
+
+            # ----------------------------------------------------------------
+            # 2. Wrap in a CTE so window functions can reference it cleanly.
+            # ----------------------------------------------------------------
+            cte = base_stmt.cte("base")
+
+            # ----------------------------------------------------------------
+            # 3. Build window expressions for each WindowColumn.
+            # ----------------------------------------------------------------
+            def _order_clause(wc: WindowColumn) -> sa.UnaryExpression:
+                col = cte.c[wc.order_by]
+                return col.desc() if wc.order_dir == "desc" else col.asc()
+
+            def _partition(wc: WindowColumn) -> list:
+                return [cte.c[f] for f in wc.partition_by] if wc.partition_by else []
+
+            def _over(wc: WindowColumn, **extra: Any) -> sa.Over:
+                return sa.over(
+                    extra.pop("agg"),
+                    partition_by=_partition(wc),
+                    order_by=_order_clause(wc),
+                    **extra,
+                )
+
+            window_exprs: list[Any] = []
+            for wc in window_columns:
+                over_col = cte.c[wc.over] if wc.over else None
+                rows_unbounded = {"rows": (None, 0)}  # ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+
+                match wc.fn:
+                    case "row_number":
+                        expr = sa.over(
+                            func.row_number(),
+                            partition_by=_partition(wc),
+                            order_by=_order_clause(wc),
+                        )
+                    case "running_sum":
+                        expr = sa.over(
+                            func.sum(over_col),
+                            partition_by=_partition(wc),
+                            order_by=_order_clause(wc),
+                            rows=(None, 0),
+                        )
+                    case "running_avg":
+                        expr = sa.over(
+                            func.avg(over_col),
+                            partition_by=_partition(wc),
+                            order_by=_order_clause(wc),
+                            rows=(None, 0),
+                        )
+                    case "cumulative_count":
+                        expr = sa.over(
+                            func.count(),
+                            partition_by=_partition(wc),
+                            order_by=_order_clause(wc),
+                            rows=(None, 0),
+                        )
+                    case "rank":
+                        # Rank by the `over` field descending (highest = rank 1).
+                        rank_order = over_col.desc()
+                        expr = sa.over(
+                            func.rank(),
+                            partition_by=_partition(wc),
+                            order_by=rank_order,
+                        )
+                    case "lag":
+                        expr = sa.over(
+                            func.lag(over_col, wc.offset),
+                            partition_by=_partition(wc),
+                            order_by=_order_clause(wc),
+                        )
+                    case "lead":
+                        expr = sa.over(
+                            func.lead(over_col, wc.offset),
+                            partition_by=_partition(wc),
+                            order_by=_order_clause(wc),
+                        )
+                    case "delta":
+                        # current - previous: expressed as col - LAG(col, 1)
+                        lag_expr = sa.over(
+                            func.lag(over_col, 1),
+                            partition_by=_partition(wc),
+                            order_by=_order_clause(wc),
+                        )
+                        expr = over_col - lag_expr
+                    case "pct_of_total":
+                        total_expr = sa.over(
+                            func.sum(over_col),
+                            partition_by=_partition(wc),
+                        )
+                        expr = over_col * sa.cast(100.0, sa.Float) / total_expr
+                    case "moving_avg":
+                        expr = sa.over(
+                            func.avg(over_col),
+                            partition_by=_partition(wc),
+                            order_by=_order_clause(wc),
+                            rows=(-(wc.frame_size - 1), 0),
+                        )
+                    case _:
+                        raise ValueError(f"Unknown window function: {wc.fn!r}")
+
+                window_exprs.append(expr.label(wc.key))
+
+            # ----------------------------------------------------------------
+            # 4. Select all base columns + window expressions, then paginate.
+            # ----------------------------------------------------------------
+            outer_stmt = (
+                sa.select(cte, *window_exprs)
+                .limit(limit)
+                .offset(offset)
+            )
+            rows = s.execute(outer_stmt).mappings().all()
+            return [dict(r) for r in rows]
 
     @classmethod
     def update(

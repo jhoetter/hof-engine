@@ -136,7 +136,7 @@ class TestRunningSum:
                 WindowColumn(key="rt", fn="running_sum", over="amount", order_by="day")
             ],
         )
-        assert page2[0]["rt"] == 600.0   # 100+200+300
+        assert page2[0]["rt"] == 600.0  # 100+200+300
         assert page2[1]["rt"] == 1000.0  # 100+200+300+400
 
 
@@ -169,9 +169,7 @@ class TestCumulativeCount:
         _seed((1, "A", 1), (2, "A", 2), (3, "A", 3))
         rows = Sale.query_with_windows(
             order_by="day",
-            window_columns=[
-                WindowColumn(key="cc", fn="cumulative_count", order_by="day")
-            ],
+            window_columns=[WindowColumn(key="cc", fn="cumulative_count", order_by="day")],
         )
         assert [r["cc"] for r in rows] == [1, 2, 3]
 
@@ -186,9 +184,7 @@ class TestLagLead:
         _seed((10, "A", 1), (20, "A", 2), (30, "A", 3))
         rows = Sale.query_with_windows(
             order_by="day",
-            window_columns=[
-                WindowColumn(key="prev", fn="lag", over="amount", order_by="day")
-            ],
+            window_columns=[WindowColumn(key="prev", fn="lag", over="amount", order_by="day")],
         )
         assert rows[0]["prev"] is None
         assert rows[1]["prev"] == pytest.approx(10.0)
@@ -210,9 +206,7 @@ class TestLagLead:
         _seed((10, "A", 1), (20, "A", 2), (30, "A", 3))
         rows = Sale.query_with_windows(
             order_by="day",
-            window_columns=[
-                WindowColumn(key="nxt", fn="lead", over="amount", order_by="day")
-            ],
+            window_columns=[WindowColumn(key="nxt", fn="lead", over="amount", order_by="day")],
         )
         assert rows[0]["nxt"] == pytest.approx(20.0)
         assert rows[1]["nxt"] == pytest.approx(30.0)
@@ -229,9 +223,7 @@ class TestDelta:
         _seed((10, "A", 1), (25, "A", 2), (40, "A", 3))
         rows = Sale.query_with_windows(
             order_by="day",
-            window_columns=[
-                WindowColumn(key="d", fn="delta", over="amount", order_by="day")
-            ],
+            window_columns=[WindowColumn(key="d", fn="delta", over="amount", order_by="day")],
         )
         assert rows[0]["d"] is None
         assert rows[1]["d"] == pytest.approx(15.0)
@@ -248,9 +240,7 @@ class TestRank:
         _seed((30, "A", 1), (10, "A", 2), (20, "A", 3))
         rows = Sale.query_with_windows(
             order_by="day",
-            window_columns=[
-                WindowColumn(key="rnk", fn="rank", over="amount", order_by="day")
-            ],
+            window_columns=[WindowColumn(key="rnk", fn="rank", over="amount", order_by="day")],
         )
         by_day = {r["day"]: r["rnk"] for r in rows}
         assert by_day[1] == 1  # amount=30 → rank 1
@@ -261,14 +251,12 @@ class TestRank:
         _seed((50, "A", 1), (50, "A", 2), (10, "A", 3))
         rows = Sale.query_with_windows(
             order_by="day",
-            window_columns=[
-                WindowColumn(key="rnk", fn="rank", over="amount", order_by="day")
-            ],
+            window_columns=[WindowColumn(key="rnk", fn="rank", over="amount", order_by="day")],
         )
         ranks = {r["day"]: r["rnk"] for r in rows}
         assert ranks[1] == 1
-        assert ranks[2] == 1   # tied
-        assert ranks[3] == 3   # gap after tie
+        assert ranks[2] == 1  # tied
+        assert ranks[3] == 3  # gap after tie
 
 
 # ---------------------------------------------------------------------------
@@ -302,15 +290,18 @@ class TestMovingAvg:
             order_by="day",
             window_columns=[
                 WindowColumn(
-                    key="ma", fn="moving_avg", over="amount",
-                    order_by="day", frame_size=3,
+                    key="ma",
+                    fn="moving_avg",
+                    over="amount",
+                    order_by="day",
+                    frame_size=3,
                 )
             ],
         )
-        assert rows[0]["ma"] == pytest.approx(10.0)            # only 1 row in frame
-        assert rows[1]["ma"] == pytest.approx(15.0)            # (10+20)/2
-        assert rows[2]["ma"] == pytest.approx(20.0)            # (10+20+30)/3
-        assert rows[3]["ma"] == pytest.approx(30.0)            # (20+30+40)/3
+        assert rows[0]["ma"] == pytest.approx(10.0)  # only 1 row in frame
+        assert rows[1]["ma"] == pytest.approx(15.0)  # (10+20)/2
+        assert rows[2]["ma"] == pytest.approx(20.0)  # (10+20+30)/3
+        assert rows[3]["ma"] == pytest.approx(30.0)  # (20+30+40)/3
 
 
 # ---------------------------------------------------------------------------
@@ -325,16 +316,19 @@ class TestPartitionBy:
             order_by="day",
             window_columns=[
                 WindowColumn(
-                    key="rt", fn="running_sum", over="amount",
-                    order_by="day", partition_by=["region"],
+                    key="rt",
+                    fn="running_sum",
+                    over="amount",
+                    order_by="day",
+                    partition_by=["region"],
                 )
             ],
         )
         by_day = {r["day"]: r["rt"] for r in rows}
-        assert by_day[1] == pytest.approx(10.0)   # A: 10
-        assert by_day[2] == pytest.approx(30.0)   # A: 10+20
-        assert by_day[3] == pytest.approx(5.0)    # B: 5  (reset)
-        assert by_day[4] == pytest.approx(20.0)   # B: 5+15
+        assert by_day[1] == pytest.approx(10.0)  # A: 10
+        assert by_day[2] == pytest.approx(30.0)  # A: 10+20
+        assert by_day[3] == pytest.approx(5.0)  # B: 5  (reset)
+        assert by_day[4] == pytest.approx(20.0)  # B: 5+15
 
     def test_row_number_per_partition(self):
         _seed((1, "A", 1), (2, "A", 2), (3, "B", 3), (4, "B", 4))
@@ -342,8 +336,10 @@ class TestPartitionBy:
             order_by="day",
             window_columns=[
                 WindowColumn(
-                    key="rn", fn="row_number",
-                    order_by="day", partition_by=["region"],
+                    key="rn",
+                    fn="row_number",
+                    order_by="day",
+                    partition_by=["region"],
                 )
             ],
         )
@@ -381,9 +377,7 @@ class TestMultipleWindowColumns:
 class TestEdgeCases:
     def test_empty_table(self):
         rows = Sale.query_with_windows(
-            window_columns=[
-                WindowColumn(key="rn", fn="row_number", order_by="day")
-            ]
+            window_columns=[WindowColumn(key="rn", fn="row_number", order_by="day")]
         )
         assert rows == []
 
@@ -398,7 +392,7 @@ class TestEdgeCases:
         )
         assert len(rows) == 1
         assert rows[0]["rt"] == pytest.approx(42.0)
-        assert rows[0]["d"] is None   # no previous row
+        assert rows[0]["d"] is None  # no previous row
 
     def test_filters_applied_before_window(self):
         """Window functions should operate only on the filtered subset."""
@@ -413,7 +407,7 @@ class TestEdgeCases:
         )
         assert len(rows) == 2
         assert [r["rn"] for r in rows] == [1, 2]
-        assert rows[1]["rt"] == pytest.approx(30.0)   # only A rows: 10+20
+        assert rows[1]["rt"] == pytest.approx(30.0)  # only A rows: 10+20
 
     def test_ilike_filter(self):
         """ilike filter does case-insensitive substring match."""
@@ -464,9 +458,7 @@ class TestWindowFilters:
             _seed((i * 10, "A", i))
         rows = Sale.query_with_windows(
             order_by="day",
-            window_columns=[
-                WindowColumn(key="rn", fn="row_number", order_by="day")
-            ],
+            window_columns=[WindowColumn(key="rn", fn="row_number", order_by="day")],
             window_filters={"rn__lte": 3},
         )
         assert len(rows) == 3

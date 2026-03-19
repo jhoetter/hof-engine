@@ -332,9 +332,7 @@ class Table(Base, metaclass=TableMeta):
                 field_name = order_by.lstrip("-")
                 col = getattr(cls, field_name, None)
                 if col is not None:
-                    base_stmt = base_stmt.order_by(
-                        col.desc() if desc else col.asc()
-                    )
+                    base_stmt = base_stmt.order_by(col.desc() if desc else col.asc())
 
             if not window_columns:
                 # No window functions requested — add limit/offset and return dicts.

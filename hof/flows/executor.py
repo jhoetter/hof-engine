@@ -214,8 +214,10 @@ class FlowExecutor:
         """
         if meta.depends_on:
             all_deps_skipped = all(
-                (execution.get_node_state(d) is not None
-                 and execution.get_node_state(d).status == NodeStatus.SKIPPED)  # type: ignore[union-attr]
+                (
+                    execution.get_node_state(d) is not None
+                    and execution.get_node_state(d).status == NodeStatus.SKIPPED
+                )  # type: ignore[union-attr]
                 for d in meta.depends_on
             )
             if all_deps_skipped:

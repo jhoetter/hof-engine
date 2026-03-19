@@ -58,7 +58,11 @@ class Flow:
             @flow.node(depends_on=[other_step], retries=3)
             def my_step(): ...
 
-            @flow.node(depends_on=[gate], when=lambda ctx: ctx.get("flag"), when_label="flag == true")
+            @flow.node(
+                depends_on=[gate],
+                when=lambda ctx: ctx.get("flag"),
+                when_label="flag == true",
+            )
             def conditional_step(): ...
         """
 

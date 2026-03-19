@@ -12,10 +12,9 @@ import sqlalchemy as sa
 from sqlalchemy import func
 from sqlalchemy.orm import Session, mapped_column
 
-from hof.db.window import WindowColumn
-
 from hof.core.registry import registry
 from hof.db.engine import Base, get_session
+from hof.db.window import WindowColumn
 
 
 class Column:
@@ -369,7 +368,6 @@ class Table(Base, metaclass=TableMeta):
             window_exprs: list[Any] = []
             for wc in window_columns:
                 over_col = cte.c[wc.over] if wc.over else None
-                rows_unbounded = {"rows": (None, 0)}  # ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 
                 match wc.fn:
                     case "row_number":

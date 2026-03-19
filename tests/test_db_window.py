@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import sqlalchemy as sa
 import pytest
+import sqlalchemy as sa
 
 import hof.db.engine as engine_module
 from hof.core.types import types

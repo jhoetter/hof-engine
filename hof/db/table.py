@@ -288,6 +288,7 @@ class Table(Base, metaclass=TableMeta):
         *,
         filters: dict[str, Any] | None = None,
         order_by: str | None = None,
+        secondary_order_by: str | None = None,
         limit: int = 100,
         offset: int = 0,
         window_columns: list[WindowColumn] | None = None,
@@ -304,6 +305,7 @@ class Table(Base, metaclass=TableMeta):
             filters:        Same filter syntax as ``query()``. Applied before
                             window functions (affects what window functions see).
             order_by:       Column name to order by (prefix ``-`` for DESC).
+            secondary_order_by: Optional tiebreaker column (same prefix syntax).
             limit:          Maximum rows to return.
             offset:         Row offset for pagination.
             window_columns: Window function specifications. If None or empty,
@@ -332,7 +334,22 @@ class Table(Base, metaclass=TableMeta):
                 field_name = order_by.lstrip("-")
                 col = getattr(cls, field_name, None)
                 if col is not None:
-                    base_stmt = base_stmt.order_by(col.desc() if desc else col.asc())
+                    base_stmt = base_stmt.order_by(
+                        col.desc() if desc else col.asc()
+                    )
+
+            if secondary_order_by:
+                _desc2 = secondary_order_by.startswith("-")
+                _fname2 = secondary_order_by.lstrip("-")
+                _col2 = getattr(cls, _fname2, None)
+                if _col2 is not None:
+                    base_stmt = base_stmt.order_by(
+                        _col2.desc() if _desc2 else _col2.asc()
+                    )
+
+            # Always append primary key as ultimate tiebreaker for deterministic
+            # ordering (critical for bulk-inserted rows sharing the same timestamps).
+            base_stmt = base_stmt.order_by(cls.id.asc())
 
             if not window_columns:
                 # No window functions requested — add limit/offset and return dicts.
@@ -348,9 +365,10 @@ class Table(Base, metaclass=TableMeta):
             # ----------------------------------------------------------------
             # 3. Build window expressions for each WindowColumn.
             # ----------------------------------------------------------------
-            def _order_clause(wc: WindowColumn) -> sa.UnaryExpression:
+            def _order_clause(wc: WindowColumn) -> list:
                 col = cte.c[wc.order_by]
-                return col.desc() if wc.order_dir == "desc" else col.asc()
+                primary = col.desc() if wc.order_dir == "desc" else col.asc()
+                return [primary, cte.c["id"].asc()]
 
             def _partition(wc: WindowColumn) -> list:
                 return [cte.c[f] for f in wc.partition_by] if wc.partition_by else []
@@ -396,8 +414,7 @@ class Table(Base, metaclass=TableMeta):
                             rows=(None, 0),
                         )
                     case "rank":
-                        # Rank by the `over` field descending (highest = rank 1).
-                        rank_order = over_col.desc()
+                        rank_order = [over_col.desc(), cte.c["id"].asc()]
                         expr = sa.over(
                             func.rank(),
                             partition_by=_partition(wc),
@@ -476,6 +493,34 @@ class Table(Base, metaclass=TableMeta):
                             outer_stmt = outer_stmt.where(wcol == value)
             else:
                 outer_stmt = window_stmt
+
+            # Re-apply ordering on the outer query — ORDER BY inside a CTE
+            # is not guaranteed to propagate to the outer SELECT.
+            if order_by:
+                _desc = order_by.startswith("-")
+                _fname = order_by.lstrip("-")
+                _src = window_cte if window_filters else cte
+                _ocol = _src.c.get(_fname)
+                if _ocol is not None:
+                    outer_stmt = outer_stmt.order_by(
+                        _ocol.desc() if _desc else _ocol.asc()
+                    )
+
+            if secondary_order_by:
+                _desc2o = secondary_order_by.startswith("-")
+                _fname2o = secondary_order_by.lstrip("-")
+                _src2 = window_cte if window_filters else cte
+                _ocol2 = _src2.c.get(_fname2o)
+                if _ocol2 is not None:
+                    outer_stmt = outer_stmt.order_by(
+                        _ocol2.desc() if _desc2o else _ocol2.asc()
+                    )
+
+            # Ultimate tiebreaker on outer query (CTE ordering doesn't propagate).
+            _src_id = window_cte if window_filters else cte
+            _ocol_id = _src_id.c.get("id")
+            if _ocol_id is not None:
+                outer_stmt = outer_stmt.order_by(_ocol_id.asc())
 
             outer_stmt = outer_stmt.limit(limit).offset(offset)
             rows = s.execute(outer_stmt).mappings().all()

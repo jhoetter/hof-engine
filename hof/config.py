@@ -45,11 +45,11 @@ class Config:
         secret_key: str = "",
         # Database
         database_url: str = "postgresql://localhost:5433/hof",
-        database_pool_size: int = 10,
+        database_pool_size: int = 20,
         database_echo: bool = False,
         # Redis / Celery
         redis_url: str = "redis://localhost:6380/0",
-        celery_concurrency: int = 4,
+        celery_concurrency: int = 8,
         # Server
         host: str = "0.0.0.0",
         port: int = 8001,

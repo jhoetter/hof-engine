@@ -27,7 +27,7 @@ def create_celery_app() -> Celery:
         enable_utc=True,
         task_track_started=True,
         task_acks_late=True,
-        worker_prefetch_multiplier=1,
+        worker_prefetch_multiplier=4,
     )
 
     return app
@@ -108,6 +108,64 @@ def run_flow_task(flow_name: str, input_data: dict) -> str:
     executor = FlowExecutor(flow)
     execution = executor.start(input_data)
     return execution.id
+
+
+@celery.task(name="hof.compute_bulk")
+def compute_bulk_task(
+    compute_fn_name: str,
+    record_ids: list[str],
+    sse_channel: str | None = None,
+) -> dict:
+    """Background task: run a registered function for each record and stream results via SSE.
+
+    The named function receives ``record_id`` and ``sse_channel`` and must
+    return a dict of computed field values.
+    """
+    from pathlib import Path
+
+    from hof.api.routes.sse import publish_computation_event
+    from hof.config import load_config
+    from hof.core.discovery import discover_all
+    from hof.core.registry import registry
+    from hof.db.engine import init_engine
+
+    config = load_config()
+    init_engine(
+        config.database_url,
+        pool_size=config.database_pool_size,
+        echo=config.database_echo,
+    )
+    discover_all(Path.cwd(), config.discovery_dirs)
+
+    meta = registry.get_function(compute_fn_name)
+    if meta is None:
+        if sse_channel:
+            publish_computation_event(sse_channel, {"status": "done"})
+        raise ValueError(f"Compute function '{compute_fn_name}' not found")
+
+    computed_count = 0
+    errors: list[dict] = []
+
+    try:
+        for record_id in record_ids:
+            try:
+                result = meta.fn(record_id=record_id, sse_channel=sse_channel)
+                computed_count += 1
+                if sse_channel and isinstance(result, dict):
+                    for field, value in result.get("computed", {}).items():
+                        publish_computation_event(sse_channel, {
+                            "step": "completed",
+                            "row_id": record_id,
+                            "field": field,
+                            "value": value,
+                        })
+            except Exception as exc:
+                errors.append({"record_id": record_id, "error": str(exc)})
+    finally:
+        if sse_channel:
+            publish_computation_event(sse_channel, {"status": "done"})
+
+    return {"computed": computed_count, "errors": errors}
 
 
 @celery.task(name="hof.execute_cron", bind=True, max_retries=3)

@@ -424,6 +424,12 @@ class ViteManager:
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />{favicon_tag}
   <title>{self.app_name}</title>
+  <style>
+    body {{ margin: 0; background: #ffffff; }}
+    @media (prefers-color-scheme: dark) {{
+      body {{ background: #191919; }}
+    }}
+  </style>
 </head>
 <body>
   <div id="hof-root"></div>

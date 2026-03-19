@@ -520,6 +520,13 @@ class TestGeneratePagesHostPage:
         mtime2 = (ui_dir / "_pages.html").stat().st_mtime
         assert mtime1 == mtime2
 
+    def test_pages_html_has_dark_mode_background(self, manager, ui_dir):
+        (ui_dir / "pages").mkdir()
+        manager._generate_pages_host_page()
+        content = (ui_dir / "_pages.html").read_text()
+        assert "prefers-color-scheme: dark" in content
+        assert "#191919" in content
+
 
 class TestHasShellRouter:
     def test_false_without_shell_router(self, manager, ui_dir):

@@ -27,12 +27,12 @@ config = Config(
 
     # Database
     database_url="postgresql://localhost:5432/myapp",  # Required. PostgreSQL connection URL
-    database_pool_size=10,                             # Connection pool size (default: 10)
+    database_pool_size=20,                             # Connection pool size (default: 20)
     database_echo=False,                               # Log SQL queries (default: False)
 
     # Redis / Task Queue
     redis_url="redis://localhost:6379/0",       # Required. Redis URL for Celery
-    celery_concurrency=4,                       # Number of parallel worker processes (default: 4)
+    celery_concurrency=8,                       # Number of parallel worker processes (default: 8)
 
     # Server
     host="0.0.0.0",                             # Bind host (default: 0.0.0.0)

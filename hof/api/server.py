@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from hof.app import HofApp, set_global_app
-from hof.config import load_config
+from hof.config import find_project_root, load_config
 from hof.core.discovery import discover_all
 from hof.logging_config import configure_logging
 
@@ -27,7 +27,13 @@ def create_app() -> FastAPI:
 
     This is the entry point for uvicorn: `uvicorn hof.api.server:create_app --factory`
     """
-    project_root = Path.cwd()
+    env_root = os.environ.get("HOF_PROJECT_ROOT")
+    if env_root:
+        project_root = Path(env_root).resolve()
+    else:
+        found = find_project_root()
+        project_root = found if found is not None else Path.cwd().resolve()
+
     config = load_config(project_root)
 
     configure_logging(debug=config.debug, app_name=config.app_name)

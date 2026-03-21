@@ -237,6 +237,22 @@ def _ensure_cache() -> None:
             Path(tmp_name).unlink(missing_ok=True)
 
 
+def _copy_file_dereferencing(src: Path, dst: Path) -> None:
+    """Copy file contents into *dst*; if *src* is a symlink, copy the target file.
+
+    Matches ``tar --dereference`` so monorepo symlinks into ``modules/`` become
+    real files in customer projects.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.is_symlink():
+        resolved = src.resolve()
+        if not resolved.is_file():
+            return
+        shutil.copy2(resolved, dst)
+    else:
+        shutil.copy2(src, dst)
+
+
 def _load_registry() -> dict:
     registry_path = CACHE_DIR / "registry.json"
     if not registry_path.exists():
@@ -354,7 +370,7 @@ def _install_module(module_name: str, registry: dict, project_root: Path, force:
             skipped.append(dest_rel)
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        _copy_file_dereferencing(src, dst)
         copied.append(dest_rel)
 
         if dst.suffix == ".py":
@@ -450,15 +466,25 @@ def add(
         _print_list(registry)
         return
 
+    from hof.config import find_project_root
+
+    project_root = find_project_root()
+    if project_root is None:
+        console.print(
+            "[red]Could not find hof.config.py — run [bold]hof add[/] from your project "
+            "root (or a subdirectory).[/]"
+        )
+        raise typer.Exit(1)
+
     if template:
-        _install_template(template, registry, Path.cwd(), force)
+        _install_template(template, registry, project_root, force)
         return
 
     if not module_name:
         console.print("[red]Provide a module name, --list, or --template <name>.[/]")
         raise typer.Exit(1)
 
-    _install_module(module_name, registry, Path.cwd(), force)
+    _install_module(module_name, registry, project_root, force)
 
 
 def _print_list(registry: dict) -> None:
@@ -501,6 +527,10 @@ _IMPL_SKIP_DIRS = {
     "__pycache__",
     ".hof",
     "migrations",
+    ".venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".turbo",
 }
 
 _IMPL_SKIP_NAMES = {
@@ -513,6 +543,8 @@ _IMPL_SKIP_NAMES = {
     "package-lock.json",
     "tsconfig.json",
     "vite.config.ts",
+    "celerybeat-schedule.db",
+    ".env",
 }
 
 
@@ -566,8 +598,7 @@ def _install_template(template_name: str, registry: dict, project_root: Path, fo
                 if dst.exists() and not force:
                     console.print(f"  [yellow]~ {rel} (exists, skipped)[/]")
                 else:
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src_file, dst)
+                    _copy_file_dereferencing(src_file, dst)
                     console.print(f"  [green]+ {rel}[/]")
         else:
             console.print(
@@ -586,8 +617,7 @@ def _install_template(template_name: str, registry: dict, project_root: Path, fo
         if dst.exists() and not force:
             console.print(f"  [yellow]~ {rel} (exists, skipped)[/]")
         else:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_file, dst)
+            _copy_file_dereferencing(src_file, dst)
             console.print(f"  [green]+ {rel}[/]")
 
     # Verify critical files were actually installed.

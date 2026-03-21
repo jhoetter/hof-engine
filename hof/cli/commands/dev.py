@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
+from shutil import which
 from typing import Any
+from urllib.parse import urlparse
 
 import typer
 from rich.console import Console
@@ -17,6 +21,9 @@ console = Console()
 
 ADMIN_UI_DIR = Path(__file__).resolve().parent.parent.parent / "ui" / "admin"
 ADMIN_VITE_PORT = 5174
+
+SERVICE_WAIT_TIMEOUT = 120.0
+SERVICE_WAIT_INTERVAL = 0.5
 
 
 def _init_submodules(project_root: Path) -> None:
@@ -58,39 +65,146 @@ def _kill_port(port: int) -> None:
             pass
 
 
-def _docker_compose_up(project_root: Path) -> bool:
-    """Start Docker Compose services if a docker-compose.yml exists.
+def _compose_file(project_root: Path) -> Path | None:
+    for name in ("docker-compose.yml", "compose.yaml", "compose.yml"):
+        candidate = project_root / name
+        if candidate.is_file():
+            return candidate
+    return None
 
-    Returns True if compose was started, False if no compose file found.
-    """
-    compose_file = project_root / "docker-compose.yml"
-    if not compose_file.is_file():
+
+def _docker_compose_prefix() -> list[str]:
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        if result.returncode == 0:
+            return ["docker", "compose"]
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return ["docker-compose"]
+
+
+def _docker_compose_cmd(project_root: Path, compose_file: Path, *args: str) -> list[str]:
+    return [*_docker_compose_prefix(), "-f", str(compose_file), *args]
+
+
+def _docker_compose_up(project_root: Path) -> bool:
+    """Start Docker Compose services if a compose file exists."""
+    compose_file = _compose_file(project_root)
+    if compose_file is None:
         return False
     console.print("  [cyan]Starting Docker services...[/]")
+    prefix_cmd = _docker_compose_cmd(project_root, compose_file, "up", "-d", "--wait")
     result = subprocess.run(
-        ["docker", "compose", "up", "-d", "--wait"],
+        prefix_cmd,
         cwd=str(project_root),
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
-        console.print(f"  [red]Docker Compose failed:[/] {result.stderr.strip()}")
-        raise typer.Exit(1)
-    console.print("  [green]Docker services ready.[/]")
+        # Older Docker Compose builds may not support --wait.
+        fallback = _docker_compose_cmd(project_root, compose_file, "up", "-d")
+        result = subprocess.run(
+            fallback,
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            console.print(f"  [red]Docker Compose failed:[/] {err}")
+            raise typer.Exit(1)
+    console.print("  [green]Docker services started.[/]")
     return True
 
 
-def _docker_compose_down(project_root: Path) -> None:
-    """Stop Docker Compose services if a docker-compose.yml exists."""
-    compose_file = project_root / "docker-compose.yml"
-    if not compose_file.is_file():
+def _docker_compose_down(project_root: Path, *, volumes: bool = False) -> None:
+    compose_file = _compose_file(project_root)
+    if compose_file is None:
         return
     console.print("  [cyan]Stopping Docker services...[/]")
-    subprocess.run(
-        ["docker", "compose", "down"],
-        cwd=str(project_root),
-        capture_output=True,
-    )
+    args = ["down"]
+    if volumes:
+        args.append("-v")
+    cmd = _docker_compose_cmd(project_root, compose_file, *args)
+    subprocess.run(cmd, cwd=str(project_root), capture_output=True)
+
+
+def _parse_host_port(url: str, default_port: int) -> tuple[str, int]:
+    """Return (host, port) from a database or redis URL."""
+    normalized = url.replace("postgresql+asyncpg", "postgresql")
+    parsed = urlparse(normalized)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or default_port
+    return host, port
+
+
+def _wait_tcp_open(host: str, port: int, *, deadline: float) -> bool:
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=2.0):
+                return True
+        except OSError:
+            time.sleep(SERVICE_WAIT_INTERVAL)
+    return False
+
+
+def _wait_for_db_and_redis(config: Any) -> None:
+    """Block until Postgres and Redis accept TCP connections (local dev)."""
+    db_host, db_port = _parse_host_port(config.database_url, 5432)
+    redis_host, redis_port = _parse_host_port(config.redis_url, 6379)
+
+    deadline = time.monotonic() + SERVICE_WAIT_TIMEOUT
+    console.print("  [cyan]Waiting for Postgres and Redis...[/]")
+
+    if not _wait_tcp_open(db_host, db_port, deadline=deadline):
+        console.print(
+            f"  [red]Postgres not reachable at {db_host}:{db_port} "
+            f"within {int(SERVICE_WAIT_TIMEOUT)}s.[/]"
+        )
+        raise typer.Exit(1)
+
+    deadline = time.monotonic() + SERVICE_WAIT_TIMEOUT
+    if not _wait_tcp_open(redis_host, redis_port, deadline=deadline):
+        console.print(
+            f"  [red]Redis not reachable at {redis_host}:{redis_port} "
+            f"within {int(SERVICE_WAIT_TIMEOUT)}s.[/]"
+        )
+        raise typer.Exit(1)
+
+    console.print("  [green]Postgres and Redis are ready.[/]")
+
+
+def _install_project_dependencies(project_root: Path) -> None:
+    """On --fresh, sync Python and UI dependencies when tooling is available."""
+    if (project_root / "pyproject.toml").is_file():
+        uv_bin = which("uv")
+        if uv_bin:
+            console.print("  [cyan]Running uv sync...[/]")
+            subprocess.run(
+                [uv_bin, "sync"],
+                cwd=str(project_root),
+                check=False,
+            )
+    ui = project_root / "ui"
+    if (ui / "package-lock.json").is_file():
+        console.print("  [cyan]Running npm ci in ui/...[/]")
+        subprocess.run(
+            ["npm", "ci"],
+            cwd=str(ui),
+            check=False,
+        )
+    elif (ui / "package.json").is_file():
+        console.print("  [cyan]Running npm install in ui/...[/]")
+        subprocess.run(
+            ["npm", "install"],
+            cwd=str(ui),
+            check=False,
+        )
 
 
 @app.callback(invoke_without_command=True)
@@ -105,9 +219,19 @@ def dev(
     ),
 ) -> None:
     """Start all development services: FastAPI, Celery worker, Vite."""
-    from hof.config import load_config
+    from hof.config import find_project_root, load_config
 
-    project_root = Path.cwd()
+    found = find_project_root()
+    if found is None:
+        console.print(
+            "[red]Could not find hof.config.py — run [bold]hof dev[/] from your project "
+            "root (or a subdirectory).[/]"
+        )
+        raise typer.Exit(1)
+
+    project_root = found
+    os.chdir(project_root)
+
     config = load_config(project_root)
 
     console.print(f"\n[bold green]hof dev[/] starting [bold]{config.app_name}[/]...\n")
@@ -115,22 +239,21 @@ def dev(
     _init_submodules(project_root)
 
     if fresh:
-        compose_file = project_root / "docker-compose.yml"
-        if compose_file.is_file():
-            console.print("  [yellow]Wiping Docker volumes for a fresh start...[/]")
-            subprocess.run(
-                ["docker", "compose", "down", "-v"],
-                cwd=str(project_root),
-                capture_output=True,
-            )
+        _docker_compose_down(project_root, volumes=True)
 
     compose_started = _docker_compose_up(project_root)
 
-    if compose_started:
+    _wait_for_db_and_redis(config)
+
+    if fresh:
+        _install_project_dependencies(project_root)
+
+    has_migrations = (project_root / "migrations" / "env.py").is_file()
+    if compose_started or has_migrations:
         console.print("  [cyan]Running migrations...[/]")
         from hof.cli.commands import bootstrap
 
-        bootstrap()
+        bootstrap(project_root)
         from hof.config import get_config
         from hof.db.migrations import run_migrations
 
@@ -145,7 +268,11 @@ def dev(
         _kill_port(_port)
 
     processes: list[subprocess.Popen] = []
-    env = {**os.environ, "HOF_ADMIN_VITE_PORT": str(ADMIN_VITE_PORT)}
+    env = {
+        **os.environ,
+        "HOF_ADMIN_VITE_PORT": str(ADMIN_VITE_PORT),
+        "HOF_PROJECT_ROOT": str(project_root),
+    }
 
     try:
         # Admin UI Vite dev server

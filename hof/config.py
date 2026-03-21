@@ -10,6 +10,18 @@ from typing import Any
 from dotenv import load_dotenv
 
 
+def find_project_root(start: Path | None = None) -> Path | None:
+    """Walk *start* and its parents for ``hof.config.py``.
+
+    Returns the directory containing the config file, or ``None`` if not found.
+    """
+    current = (start or Path.cwd()).resolve()
+    for directory in [current, *current.parents]:
+        if (directory / "hof.config.py").is_file():
+            return directory
+    return None
+
+
 def _resolve_env_vars(value: Any, *, strict: bool = True) -> Any:
     """Replace ${VAR_NAME} patterns with environment variable values.
 
@@ -163,7 +175,16 @@ def load_config(project_root: Path | None = None, *, strict: bool = True) -> Con
     """
     global _current_config
 
-    root = project_root or Path.cwd()
+    if project_root is not None:
+        root = project_root
+    else:
+        env_root = os.environ.get("HOF_PROJECT_ROOT")
+        if env_root:
+            root = Path(env_root).resolve()
+        else:
+            found = find_project_root()
+            root = found if found is not None else Path.cwd()
+
     load_dotenv(root / ".env")
 
     config_file = root / "hof.config.py"

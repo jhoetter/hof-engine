@@ -65,8 +65,10 @@ class HofApp:
         """Load config from disk and create a fully-initialized app."""
         from hof.config import load_config
 
-        root = project_root or Path.cwd()
-        config = load_config(root)
+        if project_root is not None:
+            config = load_config(project_root)
+        else:
+            config = load_config()
         app = cls(config=config)
         return app
 

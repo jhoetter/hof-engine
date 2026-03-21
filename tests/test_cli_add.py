@@ -275,3 +275,19 @@ def test_verify_archive_checksum_raises_on_mismatch(tmp_path: Path) -> None:
     archive.write_bytes(b"data")
     with pytest.raises(ValueError, match="Checksum mismatch"):
         add_cmd._verify_archive_checksum(archive, "deadbeef")
+
+
+def test_copy_file_dereferencing_writes_regular_file(tmp_path: Path) -> None:
+    target = tmp_path / "modules" / "shared.tsx"
+    target.parent.mkdir(parents=True)
+    target.write_text("export const x = 1\n", encoding="utf-8")
+    link = tmp_path / "ui" / "pages" / "index.tsx"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(target)
+
+    dst = tmp_path / "out" / "ui" / "pages" / "index.tsx"
+    add_cmd._copy_file_dereferencing(link, dst)
+
+    assert dst.is_file()
+    assert not dst.is_symlink()
+    assert dst.read_text(encoding="utf-8") == "export const x = 1\n"

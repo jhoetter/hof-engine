@@ -464,8 +464,11 @@ class Table(Base, metaclass=TableMeta):
             # ----------------------------------------------------------------
             window_stmt = sa.select(cte, *window_exprs)
 
+            # Outer ORDER BY must use columns from a named subquery/CTE. Ordering
+            # with ``window_stmt.c.*`` compiles to invalid SQL (ORDER BY anon_1.col
+            # without that alias in FROM) on common backends.
             if window_filters:
-                # Wrap in a subquery so we can WHERE on the window columns.
+                # Wrap in a CTE so we can WHERE on the window columns.
                 window_cte = window_stmt.cte("windowed")
                 outer_stmt = sa.select(window_cte)
                 for key, value in window_filters.items():
@@ -491,16 +494,18 @@ class Table(Base, metaclass=TableMeta):
                         wcol = window_cte.c.get(key)
                         if wcol is not None:
                             outer_stmt = outer_stmt.where(wcol == value)
+                _order_src = window_cte
             else:
-                outer_stmt = window_stmt
+                win_subq = window_stmt.subquery("win")
+                outer_stmt = sa.select(win_subq)
+                _order_src = win_subq
 
             # Re-apply ordering on the outer query — ORDER BY inside a CTE
             # is not guaranteed to propagate to the outer SELECT.
             if order_by:
                 _desc = order_by.startswith("-")
                 _fname = order_by.lstrip("-")
-                _src = window_cte if window_filters else cte
-                _ocol = _src.c.get(_fname)
+                _ocol = _order_src.c.get(_fname)
                 if _ocol is not None:
                     outer_stmt = outer_stmt.order_by(
                         _ocol.desc() if _desc else _ocol.asc()
@@ -509,16 +514,14 @@ class Table(Base, metaclass=TableMeta):
             if secondary_order_by:
                 _desc2o = secondary_order_by.startswith("-")
                 _fname2o = secondary_order_by.lstrip("-")
-                _src2 = window_cte if window_filters else cte
-                _ocol2 = _src2.c.get(_fname2o)
+                _ocol2 = _order_src.c.get(_fname2o)
                 if _ocol2 is not None:
                     outer_stmt = outer_stmt.order_by(
                         _ocol2.desc() if _desc2o else _ocol2.asc()
                     )
 
             # Ultimate tiebreaker on outer query (CTE ordering doesn't propagate).
-            _src_id = window_cte if window_filters else cte
-            _ocol_id = _src_id.c.get("id")
+            _ocol_id = _order_src.c.get("id")
             if _ocol_id is not None:
                 outer_stmt = outer_stmt.order_by(_ocol_id.asc())
 

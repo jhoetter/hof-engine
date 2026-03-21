@@ -72,8 +72,8 @@ def create_app() -> FastAPI:
     from hof.api.routes.admin import router as admin_router
     from hof.api.routes.flows import router as flows_router
     from hof.api.routes.functions import router as functions_router
-    from hof.api.routes.tables import router as tables_router
     from hof.api.routes.sse import router as sse_router
+    from hof.api.routes.tables import router as tables_router
     from hof.api.routes.ws import router as ws_router
     from hof.docs.router import router as docs_router
 

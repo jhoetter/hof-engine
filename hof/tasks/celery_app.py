@@ -156,12 +156,15 @@ def compute_bulk_task(
                 computed_count += 1
                 if sse_channel and isinstance(result, dict):
                     for field, value in result.get("computed", {}).items():
-                        publish_computation_event(sse_channel, {
-                            "step": "completed",
-                            "row_id": record_id,
-                            "field": field,
-                            "value": value,
-                        })
+                        publish_computation_event(
+                            sse_channel,
+                            {
+                                "step": "completed",
+                                "row_id": record_id,
+                                "field": field,
+                                "value": value,
+                            },
+                        )
             except Exception as exc:
                 errors.append({"record_id": record_id, "error": str(exc)})
     finally:

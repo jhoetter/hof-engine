@@ -54,10 +54,7 @@ def _ensure_env_py_postgres_uuid_autogen(project_root: Path) -> None:
     )
 
     # Custom env.py: local process_revision_directives (e.g. SERIAL no-op).
-    doc_tail = (
-        "(see ``hof db migrate`` autogenerate after each upgrade).\n"
-        '    """\n'
-    )
+    doc_tail = '(see ``hof db migrate`` autogenerate after each upgrade).\n    """\n'
     serial_noop_anchor = doc_tail + "    if not directives:"
     serial_noop_patched = (
         doc_tail

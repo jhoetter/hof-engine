@@ -334,18 +334,14 @@ class Table(Base, metaclass=TableMeta):
                 field_name = order_by.lstrip("-")
                 col = getattr(cls, field_name, None)
                 if col is not None:
-                    base_stmt = base_stmt.order_by(
-                        col.desc() if desc else col.asc()
-                    )
+                    base_stmt = base_stmt.order_by(col.desc() if desc else col.asc())
 
             if secondary_order_by:
                 _desc2 = secondary_order_by.startswith("-")
                 _fname2 = secondary_order_by.lstrip("-")
                 _col2 = getattr(cls, _fname2, None)
                 if _col2 is not None:
-                    base_stmt = base_stmt.order_by(
-                        _col2.desc() if _desc2 else _col2.asc()
-                    )
+                    base_stmt = base_stmt.order_by(_col2.desc() if _desc2 else _col2.asc())
 
             # Always append primary key as ultimate tiebreaker for deterministic
             # ordering (critical for bulk-inserted rows sharing the same timestamps).
@@ -414,11 +410,11 @@ class Table(Base, metaclass=TableMeta):
                             rows=(None, 0),
                         )
                     case "rank":
-                        rank_order = [over_col.desc(), cte.c["id"].asc()]
+                        # ORDER BY must not include id: SQL RANK ties on equal ``over`` values only.
                         expr = sa.over(
                             func.rank(),
                             partition_by=_partition(wc),
-                            order_by=rank_order,
+                            order_by=[over_col.desc()],
                         )
                     case "lag":
                         expr = sa.over(
@@ -507,18 +503,14 @@ class Table(Base, metaclass=TableMeta):
                 _fname = order_by.lstrip("-")
                 _ocol = _order_src.c.get(_fname)
                 if _ocol is not None:
-                    outer_stmt = outer_stmt.order_by(
-                        _ocol.desc() if _desc else _ocol.asc()
-                    )
+                    outer_stmt = outer_stmt.order_by(_ocol.desc() if _desc else _ocol.asc())
 
             if secondary_order_by:
                 _desc2o = secondary_order_by.startswith("-")
                 _fname2o = secondary_order_by.lstrip("-")
                 _ocol2 = _order_src.c.get(_fname2o)
                 if _ocol2 is not None:
-                    outer_stmt = outer_stmt.order_by(
-                        _ocol2.desc() if _desc2o else _ocol2.asc()
-                    )
+                    outer_stmt = outer_stmt.order_by(_ocol2.desc() if _desc2o else _ocol2.asc())
 
             # Ultimate tiebreaker on outer query (CTE ordering doesn't propagate).
             _ocol_id = _order_src.c.get("id")

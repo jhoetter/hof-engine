@@ -22,7 +22,7 @@ from fastapi.responses import StreamingResponse
 router = APIRouter()
 logger = logging.getLogger("hof.sse")
 
-_channels: dict[str, "ComputationChannel"] = {}
+_channels: dict[str, ComputationChannel] = {}
 
 CHANNEL_TTL_SECONDS = 300
 
@@ -53,7 +53,7 @@ class ComputationChannel:
     async def get(self, timeout: float = CHANNEL_TTL_SECONDS) -> dict[str, Any] | None:
         try:
             return await asyncio.wait_for(self._queue.get(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
 
@@ -76,6 +76,7 @@ def _get_sync_redis():
     global _sync_redis
     if _sync_redis is None:
         import redis as _redis
+
         from hof.config import get_config
 
         config = get_config()
@@ -89,12 +90,17 @@ def publish_computation_event(channel_id: str, event: dict[str, Any]) -> None:
         r = _get_sync_redis()
         r.publish(f"sse:{channel_id}", json.dumps(event, default=str))
     except Exception:
-        logger.warning("Failed to publish SSE event via Redis for channel %s", channel_id, exc_info=True)
+        logger.warning(
+            "Failed to publish SSE event via Redis for channel %s",
+            channel_id,
+            exc_info=True,
+        )
 
 
 async def _redis_subscriber(channel_id: str, queue: asyncio.Queue) -> None:
     """Subscribe to Redis pub/sub and forward messages into the channel queue."""
     import redis.asyncio as aioredis
+
     from hof.config import get_config
 
     config = get_config()

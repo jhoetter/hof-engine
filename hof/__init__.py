@@ -21,12 +21,14 @@ def emit_computation_event(channel_id: str, event: dict) -> None:
     Lazy-imports to avoid pulling in FastAPI at module load.
     """
     from hof.api.routes.sse import emit_computation_event as _emit
+
     _emit(channel_id, event)
 
 
 def publish_computation_event(channel_id: str, event: dict) -> None:
     """Publish an SSE event via Redis pub/sub (for cross-process callers like Celery workers)."""
     from hof.api.routes.sse import publish_computation_event as _publish
+
     _publish(channel_id, event)
 
 

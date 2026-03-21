@@ -143,6 +143,9 @@ def compute_bulk_task(
             publish_computation_event(sse_channel, {"status": "done"})
         raise ValueError(f"Compute function '{compute_fn_name}' not found")
 
+    if isinstance(record_ids, str):
+        record_ids = [record_ids]
+
     computed_count = 0
     errors: list[dict] = []
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -37,6 +38,85 @@ def _get_alembic_config(project_root: Path, config: Config) -> AlembicConfig:
         _create_script_mako(script_py)
 
     return alembic_cfg
+
+
+def _ensure_env_py_postgres_uuid_autogen(project_root: Path) -> None:
+    """Patch legacy env.py so autogenerate adds postgresql_using for varchar → uuid (Postgres)."""
+    env_py = project_root / "migrations" / "env.py"
+    if not env_py.is_file():
+        return
+    text = env_py.read_text()
+    if "process_revision_directives_postgres_uuid_using" in text:
+        return
+
+    hook_import = (
+        "from hof.db.alembic_hooks import process_revision_directives_postgres_uuid_using\n"
+    )
+
+    # Custom env.py: local process_revision_directives (e.g. SERIAL no-op).
+    doc_tail = (
+        "(see ``hof db migrate`` autogenerate after each upgrade).\n"
+        '    """\n'
+    )
+    serial_noop_anchor = doc_tail + "    if not directives:"
+    serial_noop_patched = (
+        doc_tail
+        + "    process_revision_directives_postgres_uuid_using(context, revision, directives)\n"
+        + "    if not directives:"
+    )
+    if serial_noop_anchor in text:
+        if hook_import not in text:
+            text = text.replace(
+                "from hof.db.engine import Base\n",
+                "from hof.db.engine import Base\n" + hook_import,
+                1,
+            )
+        text = text.replace(serial_noop_anchor, serial_noop_patched, 1)
+        env_py.write_text(text)
+        logger.info(
+            "Updated migrations/env.py: chained Postgres UUID hook into revision directives.",
+        )
+        return
+
+    # Default one-line context.configure() template (no process_revision_directives).
+    if "import hof.flows.models" in text:
+        text = re.sub(
+            r"(^(import hof\.flows\.models.*\n))",
+            r"\1" + hook_import,
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    else:
+        logger.warning(
+            "migrations/env.py has no import hof.flows.models; "
+            "cannot auto-patch Postgres UUID hook.",
+        )
+        return
+
+    old_offline = "context.configure(url=url, target_metadata=target_metadata, literal_binds=True)"
+    new_offline = (
+        "context.configure(url=url, target_metadata=target_metadata, literal_binds=True, "
+        "process_revision_directives=process_revision_directives_postgres_uuid_using)"
+    )
+    old_online = "context.configure(connection=connection, target_metadata=target_metadata)"
+    new_online = (
+        "context.configure(connection=connection, target_metadata=target_metadata, "
+        "process_revision_directives=process_revision_directives_postgres_uuid_using)"
+    )
+    if old_offline not in text or old_online not in text:
+        logger.warning(
+            "migrations/env.py is missing the Postgres UUID autogenerate hook and does not match "
+            "known templates; chain process_revision_directives_postgres_uuid_using manually "
+            "(hof.db.alembic_hooks)."
+        )
+        return
+
+    text = text.replace(old_offline, new_offline, 1).replace(old_online, new_online, 1)
+    env_py.write_text(text)
+    logger.info(
+        "Updated migrations/env.py: autogenerate adds postgresql_using for varchar→uuid alters.",
+    )
 
 
 def _upgrade_or_restamp(alembic_cfg: AlembicConfig, config: Config) -> None:
@@ -74,6 +154,7 @@ def _upgrade_or_restamp(alembic_cfg: AlembicConfig, config: Config) -> None:
 def run_migrations(project_root: Path, config: Config, *, dry_run: bool = False) -> None:
     """Apply pending migrations, then autogenerate new ones if models changed."""
     alembic_cfg = _get_alembic_config(project_root, config)
+    _ensure_env_py_postgres_uuid_autogen(project_root)
 
     _upgrade_or_restamp(alembic_cfg, config)
 
@@ -131,13 +212,19 @@ from alembic import context
 config = context.config
 
 from hof.db.engine import Base
+from hof.db.alembic_hooks import process_revision_directives_postgres_uuid_using
 import hof.flows.models  # noqa: F401 — register flow execution tables
 target_metadata = Base.metadata
 
 
 def run_migrations_offline():
     url = config.get_main_option("sqlalchemy.url")
-    context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        process_revision_directives=process_revision_directives_postgres_uuid_using,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
@@ -149,7 +236,11 @@ def run_migrations_online():
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            process_revision_directives=process_revision_directives_postgres_uuid_using,
+        )
         with context.begin_transaction():
             context.run_migrations()
 

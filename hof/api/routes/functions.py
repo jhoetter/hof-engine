@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Security
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Security
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBasicCredentials
 from pydantic import ValidationError
 
@@ -43,6 +45,47 @@ async def _optional_auth(
 async def list_functions(user: str = Depends(verify_auth)) -> list[dict]:
     """List all registered functions."""
     return [meta.to_dict() for meta in registry.functions.values()]
+
+
+@router.post("/{function_name}/stream")
+async def call_function_stream(
+    function_name: str,
+    body: dict[str, Any] | None = Body(default=None),
+    user: str = Depends(_optional_auth),
+) -> StreamingResponse:
+    """Stream NDJSON events from a registered ``stream`` generator (same auth/input as POST /{name})."""
+    meta = registry.get_function(function_name)
+    if meta is None:
+        raise HTTPException(404, f"Function '{function_name}' not found")
+    if meta.stream_fn is None:
+        raise HTTPException(404, f"Function '{function_name}' has no stream endpoint")
+
+    kwargs = body or {}
+    if meta.parameters:
+        schema = build_function_input_schema(meta)
+        try:
+            validated = schema(**kwargs)
+        except ValidationError as exc:
+            raise HTTPException(422, detail=exc.errors())
+        kwargs = validated.model_dump(exclude_none=False)
+
+    def ndjson_bytes() -> Any:
+        try:
+            for ev in meta.stream_fn(**kwargs):
+                line = json.dumps(ev, default=str, ensure_ascii=False) + "\n"
+                yield line.encode("utf-8")
+        except Exception as exc:
+            err_line = json.dumps({"type": "error", "detail": str(exc)}, ensure_ascii=False) + "\n"
+            yield err_line.encode("utf-8")
+
+    return StreamingResponse(
+        ndjson_bytes(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/{function_name}")

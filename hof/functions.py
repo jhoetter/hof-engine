@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from hof.core.registry import registry
@@ -20,6 +20,7 @@ def function(
     timeout: int = 60,
     retries: int = 0,
     public: bool = False,
+    stream: Callable[..., Iterator[dict[str, Any]]] | None = None,
 ) -> Callable:
     """Register a function in the hof registry.
 
@@ -34,6 +35,9 @@ def function(
         def my_public_fn(): ...
 
     Set ``public=True`` to allow unauthenticated access via the API.
+
+    Optional ``stream``: a **sync generator** with the same parameters as ``fn`` that yields
+    JSON-serializable dicts (e.g. NDJSON lines for ``POST /api/functions/<name>/stream``).
     """
 
     def decorator(fn: Callable) -> Callable:
@@ -51,6 +55,7 @@ def function(
             parameters=_extract_parameters(fn),
             return_type=inspect.signature(fn).return_annotation,
             public=public,
+            stream_fn=stream,
         )
 
         registry.register_function(metadata)
@@ -86,6 +91,7 @@ class FunctionMetadata:
         "parameters",
         "return_type",
         "public",
+        "stream_fn",
     )
 
     def __init__(
@@ -101,6 +107,7 @@ class FunctionMetadata:
         parameters: list[ParameterInfo],
         return_type: Any,
         public: bool = False,
+        stream_fn: Callable[..., Iterator[dict[str, Any]]] | None = None,
     ):
         self.name = name
         self.description = description
@@ -112,6 +119,7 @@ class FunctionMetadata:
         self.parameters = parameters
         self.return_type = return_type
         self.public = public
+        self.stream_fn = stream_fn
 
     def to_dict(self) -> dict:
         return {
@@ -122,6 +130,7 @@ class FunctionMetadata:
             "retries": self.retries,
             "is_async": self.is_async,
             "public": self.public,
+            "has_stream": self.stream_fn is not None,
             "parameters": [p.to_dict() for p in self.parameters],
         }
 

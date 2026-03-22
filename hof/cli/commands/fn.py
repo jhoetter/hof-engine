@@ -3,8 +3,9 @@
 Usage:
     hof fn list                          List all registered functions
     hof fn schema <name>                 Show function schema
-    hof fn <name>                        Call a function (no args)
-    hof fn <name> --json '{"key": ...}'  Call a function with JSON input
+    hof fn <name>                        Call a function (no args); human-readable output
+    hof fn <name> --json '{"key": ...}'  Call with JSON input (-j is input, not output)
+    hof fn <name> --format json          Machine JSON output (for scripts)
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from rich.console import Console
 from rich.table import Table as RichTable
 
 from hof.cli.commands import bootstrap
+from hof.cli.result_render import render_function_result
 
 console = Console()
 
@@ -39,14 +41,21 @@ class FnGroup(click.Group):
 
 def _make_call_command(function_name: str) -> click.Command:
     @click.command(name=function_name, hidden=True)
-    @click.option("--json", "-j", "input_json", default=None, help="JSON input.")
-    def call_fn(input_json: str | None) -> None:
-        _call_function(function_name, input_json)
+    @click.option("--json", "-j", "input_json", default=None, help="JSON input body for the function.")
+    @click.option(
+        "--format",
+        "output_format",
+        type=click.Choice(["auto", "json"]),
+        default="auto",
+        help="Output: auto (tables / key-value) or json (legacy pipe-friendly).",
+    )
+    def call_fn(input_json: str | None, output_format: str) -> None:
+        _call_function(function_name, input_json, output_format)
 
     return call_fn
 
 
-def _call_function(function_name: str, input_json: str | None) -> None:
+def _call_function(function_name: str, input_json: str | None, output_format: str = "auto") -> None:
     from hof.cli.api_client import get_client
 
     kwargs = json.loads(input_json) if input_json else {}
@@ -55,7 +64,8 @@ def _call_function(function_name: str, input_json: str | None) -> None:
     if client:
         try:
             data = client.call_function(function_name, kwargs)
-            console.print_json(json.dumps(data.get("result", data), default=str))
+            result = data.get("result", data)
+            render_function_result(result, fmt=output_format, console=console)
             return
         except Exception as exc:
             console.print(f"[red]API error: {exc}[/]")
@@ -74,7 +84,7 @@ def _call_function(function_name: str, input_json: str | None) -> None:
     else:
         result = meta.fn(**kwargs)
 
-    console.print_json(json.dumps(result, default=str))
+    render_function_result(result, fmt=output_format, console=console)
 
 
 @click.group("fn", cls=FnGroup)

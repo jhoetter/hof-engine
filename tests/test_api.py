@@ -123,6 +123,39 @@ class TestFunctionsRoutes:
         assert response.status_code == 200
         assert response.json()["result"]["x"] == 10
 
+    def test_stream_function_ndjson(self, client):
+        def _stream_echo(msg: str):
+            yield {"type": "run_start", "run_id": "r1"}
+            yield {"type": "assistant_delta", "text": msg}
+            yield {"type": "final", "reply": msg, "tool_rounds_used": 0, "model": "test"}
+
+        @function(stream=_stream_echo)
+        def echo_stream(msg: str) -> dict:
+            return {"reply": msg}
+
+        response = client.post("/api/functions/echo_stream/stream", json={"msg": "hi"})
+        assert response.status_code == 200
+        assert response.headers.get("content-type", "").startswith("application/x-ndjson")
+        lines = [ln for ln in response.text.strip().split("\n") if ln]
+        assert len(lines) == 3
+        import json as _json
+
+        assert _json.loads(lines[0])["type"] == "run_start"
+        assert _json.loads(lines[1]) == {"type": "assistant_delta", "text": "hi"}
+        assert _json.loads(lines[2])["reply"] == "hi"
+
+    def test_stream_function_not_found(self, client):
+        response = client.post("/api/functions/missing/stream", json={})
+        assert response.status_code == 404
+
+    def test_stream_function_without_stream_fn(self, client):
+        @function
+        def no_stream() -> dict:
+            return {}
+
+        response = client.post("/api/functions/no_stream/stream", json={})
+        assert response.status_code == 404
+
     def test_get_function_schema(self, client):
         @function
         def schema_fn(name: str, count: int = 1) -> dict:

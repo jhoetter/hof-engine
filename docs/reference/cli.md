@@ -62,6 +62,8 @@ Call and manage functions.
 # Call a function
 hof fn <function_name> --arg1=value1 --arg2=value2
 hof fn <function_name> --json '{"arg1": "value1"}'
+# Machine-readable output (default is human tables / key-value for dicts)
+hof fn <function_name> --format json
 
 # List functions
 hof fn list

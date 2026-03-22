@@ -97,15 +97,21 @@ class TestFnCall:
         with patch("hof.cli.commands.fn.bootstrap"):
             result = runner.invoke(app, ["greet"])
         assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert data["message"] == "Hello, World!"
+        assert "message" in result.output
+        assert "Hello, World!" in result.output
 
     def test_call_function_with_json_args(self, runner, registered_fn, no_api_client):
         with patch("hof.cli.commands.fn.bootstrap"):
             result = runner.invoke(app, ["greet", "--json", '{"name": "Alice"}'])
         assert result.exit_code == 0
+        assert "Hello, Alice!" in result.output
+
+    def test_call_function_format_json(self, runner, registered_fn, no_api_client):
+        with patch("hof.cli.commands.fn.bootstrap"):
+            result = runner.invoke(app, ["greet", "--format", "json"])
+        assert result.exit_code == 0
         data = json.loads(result.output)
-        assert data["message"] == "Hello, Alice!"
+        assert data["message"] == "Hello, World!"
 
     def test_call_missing_function_exits(self, runner, no_api_client):
         with patch("hof.cli.commands.fn.bootstrap"):
@@ -127,6 +133,16 @@ class TestFnCall:
 
         with patch("hof.cli.commands.fn.bootstrap"):
             result = runner.invoke(app, ["async_greet"])
+        assert result.exit_code == 0
+        assert "async" in result.output.lower()
+
+    def test_call_async_function_format_json(self, runner, no_api_client):
+        @function
+        async def async_greet(name: str = "Async") -> dict:
+            return {"message": f"Hello async, {name}!"}
+
+        with patch("hof.cli.commands.fn.bootstrap"):
+            result = runner.invoke(app, ["async_greet", "--format", "json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "async" in data["message"].lower()

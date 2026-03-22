@@ -68,6 +68,8 @@ hof db migrate
 hof dev
 ```
 
+**`hof fn` output:** By default, `hof fn <name>` prints human-friendly tables (for list-like results such as `{ "rows", "total" }`) or a key/value layout for plain dicts. Use `--format json` when you need machine-readable JSON for scripts or pipes. The `-j` / `--json` flag supplies **input** to the function only, not the output format.
+
 ## Self-Contained Docs
 
 Every hof application can ship its own documentation. Place Markdown files in a `docs/` directory at the project root and they are automatically served at `/api/docs` and rendered in the admin UI at `/docs`.

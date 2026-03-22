@@ -110,6 +110,19 @@ class TestFunctionDecorator:
         meta = registry.get_function("retry_fn")
         assert meta.retries == 3
 
+    def test_stream_fn_registers(self):
+        def _stream_gen(n: int):
+            yield {"type": "item", "n": n}
+
+        @function(stream=_stream_gen)
+        def with_stream(n: int) -> dict:
+            return {"n": n}
+
+        meta = registry.get_function("with_stream")
+        assert meta is not None
+        assert meta.stream_fn is not None
+        assert meta.to_dict()["has_stream"] is True
+
 
 class TestFunctionMetadataToDict:
     def test_to_dict_structure(self):
@@ -125,6 +138,7 @@ class TestFunctionMetadataToDict:
         assert d["tags"] == ["a", "b"]
         assert d["timeout"] == 45
         assert d["is_async"] is False
+        assert d.get("has_stream") is False
         assert isinstance(d["parameters"], list)
 
     def test_parameters_in_to_dict(self):

@@ -67,3 +67,36 @@ def test_render_no_crash_nested_value(fmt: str):
     nested = {"rows": [{"d": {"x": 1}}], "total": None}
     out = _capture(fmt, nested)
     assert len(out) > 0
+
+
+def test_render_auto_rows_column_subset_notice():
+    rows = [{"a": 1, "b": 2, "c": 3, "d": 4}]
+    buf = StringIO()
+    con = Console(file=buf, width=200, color_system=None, legacy_windows=False)
+    render_function_result(
+        {"rows": rows, "total": 1},
+        fmt="auto",
+        console=con,
+        max_columns=2,
+        wrap_cells=True,
+    )
+    out = buf.getvalue()
+    assert "Showing 2 of 4 columns" in out
+    assert "1" in out
+
+
+def test_render_wrap_cells_long_description():
+    long = "Monthly SaaS subscription – Acme Corp extended description text"
+    buf = StringIO()
+    con = Console(file=buf, width=72, color_system=None, legacy_windows=False)
+    render_function_result(
+        {"rows": [{"description": long, "amount": 8500}], "total": 1},
+        fmt="auto",
+        console=con,
+        max_columns=3,
+        max_cell=500,
+        wrap_cells=True,
+    )
+    out = buf.getvalue()
+    assert "Monthly SaaS" in out
+    assert "8500" in out

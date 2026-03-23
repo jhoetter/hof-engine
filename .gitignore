@@ -29,6 +29,9 @@ env/
 *.swo
 .cursor/
 
+# Editor / merge backups (never commit)
+*.bak
+
 # Node
 node_modules/
 hof/ui/admin/dist/

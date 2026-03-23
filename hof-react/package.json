@@ -20,6 +20,7 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts --clean --external react --external lucide-react",
     "dev": "tsup src/index.ts --format esm,cjs --dts --watch --external react --external lucide-react",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
@@ -36,6 +37,7 @@
     "@types/react": "^19.0.0",
     "lucide-react": "^0.468.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^3.2.4"
   }
 }

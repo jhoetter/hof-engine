@@ -129,6 +129,11 @@ hof-engine is part of the bithof platform:
 
 For application examples, see [hof-components/docs/examples/](https://github.com/jhoetter/hof-components/tree/main/docs/examples).
 
+## Contributing (PR hygiene)
+
+- Prefer **squashing** noisy WIP commits (duplicate messages, one-line “fix” iterations) on a feature branch before merging to `main`, so history stays readable.
+- When syncing the **components artifact** (`hof/components-manifest.json` and related generated output), **batch** updates into fewer commits instead of many back-to-back `chore: update components artifact` pushes.
+
 ## License
 
 MIT

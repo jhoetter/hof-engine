@@ -27,6 +27,31 @@ jobs:
       - name: Run ruff (format check)
         run: ruff format --check hof/ tests/
 
+  hof-react:
+    name: @hof-engine/react (typecheck + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: hof-react/package-lock.json
+
+      - name: Install npm dependencies
+        working-directory: hof-react
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: hof-react
+        run: npm run typecheck
+
+      - name: Unit tests
+        working-directory: hof-react
+        run: npm test
+
   test:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

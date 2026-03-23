@@ -511,6 +511,31 @@ function AssistantModelStreamShell({
   );
 }
 
+/**
+ * Strip HTML tags, markdown tables, bullet/numbered lists, headings, and code fences
+ * from reasoning text — the thinking pane should only show plain analytical notes.
+ */
+function sanitizeReasoningText(raw: string): string {
+  let s = raw;
+  // Strip HTML tags
+  s = s.replace(/<[^>]*>/g, "");
+  // Strip markdown headings
+  s = s.replace(/^#{1,6}\s+/gm, "");
+  // Strip markdown table rows (lines starting with |)
+  s = s.replace(/^\|.*\|$/gm, "");
+  // Strip horizontal rules / table separators
+  s = s.replace(/^[-|:]+$/gm, "");
+  // Strip code fences
+  s = s.replace(/^```[\s\S]*?^```/gm, "");
+  // Strip bullet / numbered list markers (keep the text)
+  s = s.replace(/^(\s*[-*+]|\s*\d+[.)]) /gm, "");
+  // Strip bold/italic markers
+  s = s.replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1");
+  // Collapse blank lines
+  s = s.replace(/\n{3,}/g, "\n\n");
+  return s.trim();
+}
+
 export function ReasoningCollapsible({
   text,
   streaming,
@@ -528,7 +553,9 @@ export function ReasoningCollapsible({
     }
   }, [streaming]);
 
-  if (!text.trim() && !streaming) {
+  const clean = sanitizeReasoningText(text);
+
+  if (!clean && !streaming) {
     return null;
   }
 
@@ -545,8 +572,8 @@ export function ReasoningCollapsible({
         />
         <span className="font-medium uppercase tracking-wide">Thinking</span>
       </summary>
-      <div className="border-l border-border/70 pl-2.5 pt-1 pb-0.5 text-[11px] leading-snug text-secondary">
-        {text.trim() ? <AssistantMarkdown source={text} /> : null}
+      <div className="border-l border-border/70 pl-2.5 pt-1 pb-0.5 text-[11px] leading-snug text-secondary whitespace-pre-line">
+        {clean || null}
         {streaming ? (
           <span className="ml-0.5 inline-block h-3 w-px animate-pulse bg-[var(--color-accent)] align-middle" />
         ) : null}

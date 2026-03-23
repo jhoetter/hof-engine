@@ -55,7 +55,7 @@ def agent_resume_mutations(run_id: str, resolutions: list) -> dict:
 
 **Env (reasoning):** `AGENT_REASONING_OPENAI_EXTRAS` — optional JSON object merged into the OpenAI chat request when mode is `native` (e.g. model-specific reasoning parameters). Incompatible with `agent_reasoning_mode` / `AGENT_REASONING_MODE` `off`.
 
-**Dependency:** `llm-markdown[openai,anthropic]` **>=0.3.16** (`stream_agent_turn`, `AgentSegmentStart`, `ReasoningConfig`, `ReasoningMode.fallback`). Capability matrix: [llm-markdown `docs/agent-streaming.md`](https://github.com/jhoetter/llm-markdown/blob/main/docs/agent-streaming.md). The default completion budget is **16_384** tokens so common chat models accept the request; raise it in config or `AGENT_MAX_COMPLETION_TOKENS` (capped at **128_000**) when your model allows more.
+**Dependency:** `llm-markdown[openai,anthropic]` **>=0.3.17** (`stream_agent_turn`, `AgentSegmentStart`, `ReasoningConfig`, `ReasoningMode.fallback`). Capability matrix: [llm-markdown `docs/agent-streaming.md`](https://github.com/jhoetter/llm-markdown/blob/main/docs/agent-streaming.md). The default completion budget is **16_384** tokens so common chat models accept the request; raise it in config or `AGENT_MAX_COMPLETION_TOKENS` (capped at **128_000**) when your model allows more.
 
 **Observability:** At **INFO**, logger `hof.agent.stream` emits `agent_chat …` lines to the API process stdout (uvicorn terminal): run start, each model round (`finish_reason`, delta counts, assistant text preview), each `tool_call` / `tool_done`, `awaiting_confirmation`, and `final`. No `.env` toggle required. Optional **`HOF_AGENT_STREAM_DEBUG_LOG`** still appends structured NDJSON to a file (see your app’s `agent-chat-stream.md`).
 

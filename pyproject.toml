@@ -42,7 +42,7 @@ dependencies = [
     "websockets>=14.0",
     # Agent streaming (stream_agent_turn, AgentSegmentStart, ReasoningMode.fallback). Requires PyPI >=0.3.14;
     # run `uv lock` in this repo after publishing that release (see llm-markdown docs/versioning.md).
-    "llm-markdown[openai,anthropic]>=0.3.16",
+    "llm-markdown[openai,anthropic]>=0.3.17",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
     "python-multipart>=0.0.9",

@@ -1,14 +1,24 @@
 "use client";
 
-import { Braces, ChevronRight, Terminal } from "lucide-react";
 import {
+  Braces,
+  Check,
+  CheckCircle2,
+  ChevronRight,
+  X,
+  XCircle,
+} from "lucide-react";
+import {
+  useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
   type Dispatch,
   type SetStateAction,
 } from "react";
+import { createPortal } from "react-dom";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { FunctionResultDisplay } from "./FunctionResultDisplay";
 import {
@@ -28,7 +38,7 @@ import {
   toolArgumentsAreEffectivelyEmpty,
   toolCallCliLine,
   toolGroupSummaryLine,
-  TOOL_INPUT_LABEL_CLASS,
+  toolResultUiStatus,
   mergeAdjacentContentSegments,
   mergeAdjacentReasoningSegments,
 } from "./hofAgentChatModel";
@@ -53,12 +63,16 @@ function formatToolJsonForDialog(raw: string): string {
   }
 }
 
-function ToolInputWithJsonDialog({
+/** One line: `$` + CLI, braces opens JSON dialog. Used inside the tool card body. */
+function ToolTerminalCommandRow({
   cliLine,
   argumentsStr,
+  borderBottom = true,
 }: {
   cliLine: string;
   argumentsStr?: string;
+  /** When false, no bottom rule (e.g. command-only block). */
+  borderBottom?: boolean;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const showJsonBtn =
@@ -66,28 +80,43 @@ function ToolInputWithJsonDialog({
   const formatted = argumentsStr ? formatToolJsonForDialog(argumentsStr) : "";
 
   return (
-    <div>
-      <div className={TOOL_INPUT_LABEL_CLASS}>Input</div>
-      <div className="flex min-h-[2.25rem] items-stretch overflow-hidden rounded-lg border border-border/60 bg-background/80">
-        <pre className="max-h-32 min-h-0 min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-all px-2.5 py-2 font-mono text-[10px] leading-snug text-secondary">
-          {cliLine}
-        </pre>
+    <>
+      <div
+        className={`flex w-full max-h-32 items-stretch overflow-hidden bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)] ${borderBottom ? "border-b border-border" : ""}`}
+      >
+        <div
+          className={`flex min-h-0 min-w-0 flex-1 items-center py-2 pl-3 ${showJsonBtn ? "pr-0" : "pr-3"}`}
+        >
+          <span
+            className="shrink-0 pr-1 font-mono text-[11px] leading-none text-tertiary select-none"
+            aria-hidden
+          >
+            $
+          </span>
+          <pre className="min-h-0 min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-all py-0 font-mono text-[11px] leading-snug text-foreground">
+            {cliLine}
+          </pre>
+        </div>
         {showJsonBtn ? (
-          <div className="flex shrink-0 border-l border-border/60 bg-surface/30">
+          <div className="flex shrink-0 self-stretch border-l border-border">
             <button
               type="button"
-              className="flex items-center justify-center px-2.5 py-2 text-tertiary transition-colors hover:bg-hover hover:text-foreground"
+              className="flex items-center justify-center px-2.5 py-0.5 text-tertiary transition-colors hover:bg-hover hover:text-foreground"
               aria-label="View JSON input"
               onClick={() => dialogRef.current?.showModal()}
             >
-              <Braces className="size-4 shrink-0" strokeWidth={2} aria-hidden />
+              <Braces
+                className="size-3.5 shrink-0"
+                strokeWidth={2}
+                aria-hidden
+              />
             </button>
           </div>
         ) : null}
       </div>
       <dialog
         ref={dialogRef}
-        className="fixed top-1/2 left-1/2 z-50 w-[min(100vw-2rem,36rem)] max-h-[min(90vh,32rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-background p-0 text-foreground shadow-lg backdrop:bg-black/40"
+        className="fixed top-1/2 left-1/2 z-50 w-[min(100vw-2rem,36rem)] max-h-[min(90vh,32rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-background p-0 font-sans text-foreground shadow-lg backdrop:bg-black/40"
         onMouseDown={(e) => {
           if (e.target === dialogRef.current) {
             dialogRef.current.close();
@@ -110,6 +139,138 @@ function ToolInputWithJsonDialog({
           {formatted}
         </pre>
       </dialog>
+    </>
+  );
+}
+
+function ToolResultStatusStrip({ result }: { result: ToolResultBlock }) {
+  const st = toolResultUiStatus(result);
+  const colorClass =
+    st.tone === "success"
+      ? "text-[var(--color-success)]"
+      : st.tone === "error"
+        ? "text-[var(--color-destructive)]"
+        : st.tone === "pending"
+          ? "text-[var(--color-accent)]"
+          : "text-secondary";
+  return (
+    <div className="flex items-center justify-between gap-2 bg-surface/30 px-3 py-1.5 font-mono text-[10px]">
+      <span className="text-tertiary">Result</span>
+      <span className={`shrink-0 font-medium tabular-nums ${colorClass}`}>
+        {st.code} <span className="font-normal opacity-90">{st.label}</span>
+      </span>
+    </div>
+  );
+}
+
+/** Check / cross in the tool card header: pick when waiting; shows outcome when done. */
+function ToolMutationCorner({
+  showApproval,
+  approvalItemsForMutation,
+  approvalDecisions,
+  setApprovalDecisions,
+  busy,
+  mutationOutcome,
+}: {
+  showApproval: boolean;
+  approvalItemsForMutation: {
+    pendingId: string;
+    name: string;
+    cli_line: string;
+  }[];
+  approvalDecisions: Record<string, boolean | null>;
+  setApprovalDecisions: Dispatch<
+    SetStateAction<Record<string, boolean | null>>
+  >;
+  busy: boolean;
+  mutationOutcome?: boolean;
+}) {
+  if (mutationOutcome === true) {
+    return (
+      <div
+        className="flex shrink-0 items-start pt-0.5"
+        title="Approved"
+        aria-label="Approved"
+      >
+        <CheckCircle2
+          className="size-[1.35rem] text-[var(--color-success)]"
+          strokeWidth={2}
+          aria-hidden
+        />
+      </div>
+    );
+  }
+  if (mutationOutcome === false) {
+    return (
+      <div
+        className="flex shrink-0 items-start pt-0.5"
+        title="Rejected"
+        aria-label="Rejected"
+      >
+        <XCircle
+          className="size-[1.35rem] text-[var(--color-destructive)]"
+          strokeWidth={2}
+          aria-hidden
+        />
+      </div>
+    );
+  }
+  if (!showApproval || approvalItemsForMutation.length === 0) {
+    return null;
+  }
+  return (
+    <div
+      className="flex shrink-0 flex-col items-end gap-1.5 pt-0.5"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
+      {approvalItemsForMutation.map((it) => {
+        const d = approvalDecisions[it.pendingId];
+        return (
+          <div key={it.pendingId} className="flex items-center gap-1">
+            <button
+              type="button"
+              disabled={busy}
+              title="Approve"
+              aria-label={`Approve ${it.name}`}
+              className={`rounded-md border p-1.5 transition-colors ${
+                d === true
+                  ? "border-[var(--color-success)] bg-[color:color-mix(in_srgb,var(--color-success)_12%,transparent)] text-foreground"
+                  : "border-border bg-background text-secondary hover:bg-hover hover:text-foreground"
+              }`}
+              onClick={() =>
+                setApprovalDecisions((prev) => ({
+                  ...prev,
+                  [it.pendingId]: true,
+                }))
+              }
+            >
+              <Check className="size-4" strokeWidth={2.5} aria-hidden />
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              title="Reject"
+              aria-label={`Reject ${it.name}`}
+              className={`rounded-md border p-1.5 transition-colors ${
+                d === false
+                  ? "border-[var(--color-destructive)] bg-[color:color-mix(in_srgb,var(--color-destructive)_12%,transparent)] text-foreground"
+                  : "border-border bg-background text-secondary hover:bg-hover hover:text-foreground"
+              }`}
+              onClick={() =>
+                setApprovalDecisions((prev) => ({
+                  ...prev,
+                  [it.pendingId]: false,
+                }))
+              }
+            >
+              <X className="size-4" strokeWidth={2.5} aria-hidden />
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -159,6 +320,23 @@ export function ToolGroupCard({
   const hideGenericResult = Boolean(
     mutation && result && isGenericAwaitingConfirmationSummary(result.summary),
   );
+  const showResultBlock = Boolean(
+    result && (result.data !== undefined || !hideGenericResult),
+  );
+  /** Tool output inside the expandable card only. */
+  const showInnerBody = showResultBlock;
+  const mutationHintWhenIdle =
+    Boolean(mutation) &&
+    !showApproval &&
+    mutationOutcome === undefined;
+  const showMutationCmdDup = Boolean(
+    mutation && cmd && !cmdDupOfLine,
+  );
+  const showDetailsFooter =
+    Boolean(result) ||
+    showInnerBody ||
+    mutationHintWhenIdle ||
+    showMutationCmdDup;
 
   const [detailsOpen, setDetailsOpen] = useState(false);
   useEffect(() => {
@@ -168,7 +346,10 @@ export function ToolGroupCard({
   }, [showApproval]);
 
   return (
-    <div id={anchorId} className={`${AGENT_CHAT_COLUMN_CLASS} scroll-mt-4`}>
+    <div
+      id={anchorId}
+      className={`${AGENT_CHAT_COLUMN_CLASS} scroll-mt-4 space-y-2`}
+    >
       <details
         open={detailsOpen}
         onToggle={(e) => setDetailsOpen(e.currentTarget.open)}
@@ -182,7 +363,15 @@ export function ToolGroupCard({
           <div className="min-w-0 flex-1">
             <span className="font-medium text-foreground">{title}</span>
             {mutation ? (
-              <span className="ml-2 text-[10px] font-medium uppercase tracking-wide text-[var(--color-accent)]">
+              <span
+                className={`ml-2 text-[10px] font-medium uppercase tracking-wide ${
+                  mutationOutcome === true
+                    ? "text-[var(--color-success)]"
+                    : mutationOutcome === false
+                      ? "text-[var(--color-destructive)]"
+                      : "text-[var(--color-accent)]"
+                }`}
+              >
                 Confirmation
               </span>
             ) : null}
@@ -197,70 +386,75 @@ export function ToolGroupCard({
               </p>
             ) : null}
           </div>
+          {mutation ? (
+            <ToolMutationCorner
+              showApproval={showApproval}
+              approvalItemsForMutation={approvalItemsForMutation}
+              approvalDecisions={approvalDecisions}
+              setApprovalDecisions={setApprovalDecisions}
+              busy={busy}
+              mutationOutcome={mutationOutcome}
+            />
+          ) : null}
         </summary>
-        <div className="space-y-3 border-t border-border/60 px-3 py-3">
-          <ToolInputWithJsonDialog
+        <div className="border-t border-border/60">
+          <ToolTerminalCommandRow
             cliLine={line}
             argumentsStr={call.arguments}
+            borderBottom={showDetailsFooter}
           />
-          {mutation ? (
-            <div className="rounded-lg border border-[color:color-mix(in_srgb,var(--color-accent)_35%,var(--color-border))] bg-[color:color-mix(in_srgb,var(--color-accent)_6%,transparent)] px-2.5 py-2 text-[11px] leading-snug">
-              <div className={TOOL_SECTION_LABEL_CLASS}>
-                Confirmation · status
-              </div>
-              {mutationOutcome === true ? (
-                <p className="text-[11px] font-semibold text-foreground">
-                  You approved this action — it was applied when you continued.
-                </p>
-              ) : mutationOutcome === false ? (
-                <p className="text-[11px] font-medium text-[var(--color-destructive)]">
-                  You rejected this action — no data change was made for this
-                  step.
-                </p>
-              ) : (
-                <p className="text-[10px] text-secondary">
-                  {showApproval
-                    ? "Use Approve or Reject below to run or skip this step (assistant mutation gate, not Inbox)."
-                    : "No Approve/Reject on this row — the assistant is not paused here anymore, or you already chose on another card. Inbox (Create expense / Leave unlinked) is a separate review flow."}
-                </p>
-              )}
-              {cmd && !cmdDupOfLine ? (
-                <div className="mt-2">
-                  <div className={TOOL_SECTION_LABEL_CLASS}>
-                    Input · CLI (pending step)
-                  </div>
-                  <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border/60 bg-background/90 px-2 py-1.5 font-mono text-[10px] text-tertiary">
-                    {cmd}
-                  </pre>
+          {result ? <ToolResultStatusStrip result={result} /> : null}
+          {showInnerBody ? (
+            <div className="space-y-3 px-3 pb-2 pt-1.5">
+              {showResultBlock ? (
+                <div>
+                  {result!.data !== undefined ? (
+                    <FunctionResultDisplay value={result!.data} />
+                  ) : (
+                    <p className="whitespace-pre-wrap font-mono text-[11px] leading-snug text-secondary">
+                      {result!.summary}
+                    </p>
+                  )}
                 </div>
               ) : null}
             </div>
           ) : null}
-          {result && (result.data !== undefined || !hideGenericResult) ? (
-            <div className="text-[11px] leading-snug">
-              <div className={TOOL_SECTION_LABEL_CLASS}>Output · result</div>
-              {result.data !== undefined ? (
-                <div className="mt-1 rounded-lg border border-border/60 bg-background/80 px-2 py-2">
-                  <FunctionResultDisplay value={result.data} />
-                </div>
-              ) : (
-                <p className="text-secondary">{result.summary}</p>
-              )}
+          {mutationHintWhenIdle ? (
+            <div className="px-3 pb-2 text-[10px] text-secondary">
+              No Approve/Reject here — you already chose on another card, or
+              this step is not paused. Inbox review is separate.
             </div>
           ) : null}
-          {showApproval && approvalItemsForMutation.length > 0 ? (
-            <InlineApprovalControls
-              items={approvalItemsForMutation}
-              approvalDecisions={approvalDecisions}
-              setApprovalDecisions={setApprovalDecisions}
-              busy={busy}
-              showBusyFooter={showBusyFooter}
-              omitItemMeta
-              embedCompact
-            />
+          {showMutationCmdDup ? (
+            <div className="px-3 pb-2">
+              <div className="flex items-center overflow-hidden rounded-md border border-border/60 bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)]">
+                <span
+                  className="shrink-0 pl-2 pr-1 py-1 font-mono text-[10px] leading-none text-tertiary select-none"
+                  aria-hidden
+                >
+                  $
+                </span>
+                <pre className="min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-all py-1 pr-2 font-mono text-[10px] leading-snug text-secondary">
+                  {cmd}
+                </pre>
+              </div>
+            </div>
           ) : null}
         </div>
       </details>
+      {mutation &&
+      showApproval &&
+      approvalItemsForMutation.length > 0 &&
+      busy &&
+      showBusyFooter ? (
+        <p className="flex items-center gap-2 text-[11px] text-secondary">
+          <span
+            className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+            aria-hidden
+          />
+          Continuing…
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -325,7 +519,7 @@ export function InlineApprovalControls({
                 disabled={busy}
                 className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
                   d === true
-                    ? "border-[var(--color-accent)] bg-[color:color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-foreground"
+                    ? "border-[var(--color-success)] bg-[color:color-mix(in_srgb,var(--color-success)_12%,transparent)] text-foreground"
                     : "border-border bg-[var(--color-hover)]/50 text-secondary hover:text-foreground"
                 }`}
                 onClick={() =>
@@ -495,21 +689,32 @@ export function RunBlocksList({
             b.pending_ids,
             mutationOutcomeByPendingId,
           );
-          const outcomeKnown =
-            !activeBarrier && footerDone !== "Confirmation completed.";
-          return (
-            <div
-              key={b.id}
-              className={`text-[11px] leading-snug ${outcomeKnown ? "font-medium text-secondary" : "text-tertiary"}`}
-            >
-              {activeBarrier ? (
+          if (activeBarrier) {
+            return (
+              <div
+                key={b.id}
+                className="text-[11px] leading-snug text-tertiary"
+              >
                 <p>
                   The assistant continues after you have chosen Approve or
                   Reject for each pending action above.
                 </p>
-              ) : (
-                <p>{footerDone}</p>
-              )}
+              </div>
+            );
+          }
+          if (!footerDone) {
+            return null;
+          }
+          return (
+            <div
+              key={b.id}
+              className={`text-[11px] leading-snug ${
+                footerDone !== "Confirmation completed."
+                  ? "font-medium text-secondary"
+                  : "text-tertiary"
+              }`}
+            >
+              <p>{footerDone}</p>
             </div>
           );
         }
@@ -574,6 +779,24 @@ function sanitizeReasoningText(raw: string): string {
   return s.trim();
 }
 
+const REASONING_SHIMMER_STYLE_ID = "hof-reasoning-shimmer-kf";
+
+function ensureReasoningShimmerKeyframes(): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  if (document.getElementById(REASONING_SHIMMER_STYLE_ID)) {
+    return;
+  }
+  const s = document.createElement("style");
+  s.id = REASONING_SHIMMER_STYLE_ID;
+  s.textContent = `@keyframes hof-reasoning-shimmer {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
+}`;
+  document.head.appendChild(s);
+}
+
 function ReasoningStreamPeek({
   text,
   streaming,
@@ -581,57 +804,123 @@ function ReasoningStreamPeek({
   text: string;
   streaming: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const bodyRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const columnRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const clean = sanitizeReasoningText(text);
+  const popoverId = useId();
+  const [popoverBox, setPopoverBox] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
 
-  useLayoutEffect(() => {
-    if (expanded) {
+  useEffect(() => {
+    ensureReasoningShimmerKeyframes();
+  }, []);
+
+  const updatePopoverPosition = useCallback(() => {
+    const col = columnRef.current;
+    const btn = triggerRef.current;
+    if (!col || !btn) {
       return;
     }
-    const el = bodyRef.current;
+    const cr = col.getBoundingClientRect();
+    const br = btn.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const margin = 12;
+    let width = cr.width;
+    let left = cr.left;
+    if (width > vw - 2 * margin) {
+      width = Math.max(vw - 2 * margin, 0);
+      left = margin;
+    } else {
+      if (left + width > vw - margin) {
+        left = vw - margin - width;
+      }
+      if (left < margin) {
+        left = margin;
+      }
+    }
+    setPopoverBox({
+      top: br.bottom + 8,
+      left,
+      width,
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPopoverBox(null);
+      return;
+    }
+    updatePopoverPosition();
+    const onScrollOrResize = () => updatePopoverPosition();
+    window.addEventListener("resize", onScrollOrResize);
+    document.addEventListener("scroll", onScrollOrResize, true);
+    return () => {
+      window.removeEventListener("resize", onScrollOrResize);
+      document.removeEventListener("scroll", onScrollOrResize, true);
+    };
+  }, [open, updatePopoverPosition]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    const onPointerDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || popoverRef.current?.contains(t)) {
+        return;
+      }
+      setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open || !streaming) {
+      return;
+    }
+    const el = popoverRef.current;
     if (!el) {
       return;
     }
     el.scrollTop = el.scrollHeight;
-  }, [clean, streaming, expanded]);
+  }, [clean, streaming, open]);
 
   if (!clean && !streaming) {
     return null;
   }
 
-  const canToggle = clean.trim().length > 0;
   const bodyClass =
     "font-sans text-[12px] leading-relaxed break-words whitespace-pre-wrap text-secondary";
 
-  return (
-    <div
-      className={`${AGENT_CHAT_COLUMN_CLASS} rounded-lg bg-hover/50 px-3 py-2 font-sans`}
-    >
-      <div className="mb-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <span
-          className="text-[11px] font-medium text-tertiary"
-          aria-live="polite"
-        >
-          Thinking
-        </span>
-        {canToggle ? (
-          <button
-            type="button"
-            className="text-[11px] text-tertiary underline-offset-2 hover:text-foreground hover:underline"
-            onClick={() => setExpanded((v) => !v)}
-          >
-            {expanded ? "Show less" : "Show full"}
-          </button>
-        ) : null}
-      </div>
+  const popoverContent =
+    open && popoverBox ? (
       <div
-        ref={bodyRef}
-        className={
-          expanded
-            ? `max-h-52 overflow-y-auto ${bodyClass}`
-            : `max-h-12 overflow-x-hidden overflow-y-auto py-0.5 ${bodyClass}`
-        }
+        ref={popoverRef}
+        id={popoverId}
+        role="dialog"
+        aria-label="Assistant reasoning"
+        className={`fixed z-[100] max-h-[min(70vh,20rem)] overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-background)] p-3 shadow-lg outline-none ring-1 ring-black/5 dark:ring-white/10 ${bodyClass}`}
+        style={{
+          top: popoverBox.top,
+          left: popoverBox.left,
+          width: popoverBox.width,
+        }}
+        tabIndex={-1}
         aria-live="polite"
       >
         {clean || (streaming ? "\u200b" : null)}
@@ -642,7 +931,38 @@ function ReasoningStreamPeek({
           />
         ) : null}
       </div>
-    </div>
+    ) : null;
+
+  return (
+    <>
+      <div ref={columnRef} className={`${AGENT_CHAT_COLUMN_CLASS} font-sans`}>
+        <button
+          ref={triggerRef}
+          type="button"
+          className="inline-flex max-w-full cursor-pointer items-center gap-1.5 rounded-md p-0 text-left rtl:text-right focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+          aria-expanded={open}
+          aria-haspopup="dialog"
+          aria-controls={open ? popoverId : undefined}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span
+            className="text-[11px] font-medium bg-clip-text text-transparent [background-image:linear-gradient(98deg,var(--color-muted-foreground)_0%,var(--color-accent)_42%,var(--color-foreground)_52%,var(--color-accent)_62%,var(--color-muted-foreground)_100%)] bg-[length:220%_100%] [animation:hof-reasoning-shimmer_2.5s_ease-in-out_infinite]"
+            aria-live="polite"
+          >
+            Thinking
+          </span>
+          {streaming ? (
+            <span
+              className="inline-block size-1 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+              aria-hidden
+            />
+          ) : null}
+        </button>
+      </div>
+      {typeof document !== "undefined" && popoverContent
+        ? createPortal(popoverContent, document.body)
+        : null}
+    </>
   );
 }
 
@@ -653,6 +973,7 @@ function AssistantModelStreamShell({
   replyBubbleClass,
   bodyClassName,
   emptyLabel,
+  streaming = true,
 }: {
   streamText: string;
   streamTextRole: "content" | "reasoning" | "mixed" | undefined;
@@ -660,10 +981,12 @@ function AssistantModelStreamShell({
   /** Optional override for the streaming markdown wrapper (defaults to ``replyBubbleClass``). */
   bodyClassName?: string;
   emptyLabel: string;
+  /** When false, no typing caret (e.g. stream finalized on wire but flag not yet cleared). */
+  streaming?: boolean;
 }) {
   const hasStreamText = streamText.trim().length > 0;
   if (streamTextRole === "reasoning") {
-    return <ReasoningStreamPeek text={streamText} streaming />;
+    return <ReasoningStreamPeek text={streamText} streaming={streaming} />;
   }
   if (!hasStreamText) {
     return (
@@ -685,7 +1008,9 @@ function AssistantModelStreamShell({
     <div className={AGENT_CHAT_COLUMN_CLASS}>
       <div className={bodyClass}>
         <AssistantMarkdown source={streamText} />
-        <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+        {streaming ? (
+          <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+        ) : null}
       </div>
     </div>
   );
@@ -825,9 +1150,14 @@ export function LiveBlockView({
     const isModel = b.streamPhase === "model";
     const streamSegs = b.streamSegments?.length ? b.streamSegments : null;
     const anySegText = streamSegs?.some((s) => s.text.trim()) ?? false;
+    const streamActive = b.streaming && b.pendingStreamFinalize !== true;
+    /** Summary often stays `streaming` on the wire until `assistant_done`; hide the caret once any text exists. */
+    const streamCaretActive =
+      streamActive &&
+      !(isSummary && (anySegText || b.text.trim().length > 0));
 
     if (afterToolResult || isSummary) {
-      if (b.streaming) {
+      if (streamActive) {
         const streamText = b.text;
         const hasStreamText = streamText.trim().length > 0;
         // Logs: first model round often has zero assistant_delta before tool_calls; post-tool
@@ -838,7 +1168,7 @@ export function LiveBlockView({
             return (
               <AssistantSegmentedBody
                 segments={streamSegs}
-                streaming
+                streaming={streamCaretActive}
                 replyBubbleClass={replyBubbleClass}
                 contentBubbleClass={replyBubbleClass}
                 assistantUiLane={lane}
@@ -864,7 +1194,9 @@ export function LiveBlockView({
           return (
             <div className={replyBubbleClass}>
               <AssistantMarkdown source={streamText} />
-              <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+              {streamCaretActive ? (
+                <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+              ) : null}
             </div>
           );
         }
@@ -872,7 +1204,7 @@ export function LiveBlockView({
           return (
             <AssistantSegmentedBody
               segments={streamSegs}
-              streaming
+              streaming={streamCaretActive}
               replyBubbleClass={replyBubbleClass}
               contentBubbleClass={replyBubbleClass}
               assistantUiLane={lane}
@@ -886,6 +1218,7 @@ export function LiveBlockView({
             streamTextRole={b.streamTextRole}
             replyBubbleClass={replyBubbleClass}
             emptyLabel="Drafting the answer…"
+            streaming={streamCaretActive}
           />
         );
       }
@@ -915,12 +1248,12 @@ export function LiveBlockView({
       );
     }
 
-    if (isModel && b.streaming) {
+    if (isModel && streamActive) {
       if (streamSegs) {
         return (
           <AssistantSegmentedBody
             segments={streamSegs}
-            streaming
+            streaming={streamActive}
             replyBubbleClass={replyBubbleClass}
             contentBubbleClass={replyBubbleClass}
             assistantUiLane={lane}
@@ -934,6 +1267,7 @@ export function LiveBlockView({
           streamTextRole={b.streamTextRole}
           replyBubbleClass={replyBubbleClass}
           emptyLabel="Tools may run before any reply text appears."
+          streaming={streamActive}
         />
       );
     }
@@ -1016,12 +1350,12 @@ export function LiveBlockView({
       return <ReasoningStreamPeek text={b.text} streaming={false} />;
     }
 
-    if (b.streaming) {
+    if (streamActive) {
       if (streamSegs) {
         return (
           <AssistantSegmentedBody
             segments={streamSegs}
-            streaming
+            streaming={streamActive}
             replyBubbleClass={replyBubbleClass}
             contentBubbleClass={replyBubbleClass}
             assistantUiLane={lane}
@@ -1035,6 +1369,7 @@ export function LiveBlockView({
           streamTextRole={b.streamTextRole}
           replyBubbleClass={replyBubbleClass}
           emptyLabel="Waiting for the model…"
+          streaming={streamActive}
         />
       );
     }
@@ -1067,17 +1402,13 @@ export function LiveBlockView({
     const title = humanizeToolName(b.name);
     const line = toolCallCliLine(b);
     return (
-      <div
-        className={`${AGENT_CHAT_COLUMN_CLASS} flex gap-2.5 text-[12px] leading-snug`}
-      >
-        <Terminal
-          className="mt-0.5 size-3.5 shrink-0 text-[var(--color-accent)] opacity-80"
-          aria-hidden
+      <div className={`${AGENT_CHAT_COLUMN_CLASS} space-y-1`}>
+        <div className="text-[11px] font-medium text-foreground">{title}</div>
+        <ToolTerminalCommandRow
+          cliLine={line}
+          argumentsStr={b.arguments}
+          borderBottom={false}
         />
-        <div className="min-w-0 flex-1 space-y-2">
-          <div className="font-medium text-foreground">{title}</div>
-          <ToolInputWithJsonDialog cliLine={line} argumentsStr={b.arguments} />
-        </div>
       </div>
     );
   }
@@ -1093,6 +1424,9 @@ export function LiveBlockView({
         />
         <div className="min-w-0 flex-1">
           <span className="font-medium text-foreground">{title}</span>
+          <div className="mt-1.5">
+            <ToolResultStatusStrip result={b} />
+          </div>
           <div className="mt-1">
             <div className={TOOL_SECTION_LABEL_CLASS}>Output · result</div>
             {b.data !== undefined ? (
@@ -1100,7 +1434,9 @@ export function LiveBlockView({
                 <FunctionResultDisplay value={b.data} />
               </div>
             ) : (
-              <p className="text-[11px] text-secondary">{b.summary}</p>
+              <p className="whitespace-pre-wrap font-mono text-[11px] leading-snug text-secondary">
+                {b.summary}
+              </p>
             )}
           </div>
         </div>

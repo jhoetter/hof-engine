@@ -48,7 +48,7 @@ function RowsTableView({
   const shown = rows.slice(0, MAX_ROWS_SHOWN);
   if (cols.length === 0) {
     return (
-      <div className="text-[10px] text-secondary">
+      <div className="font-mono text-[10px] text-secondary">
         <span className="italic">(empty rows)</span>
         {total !== undefined && total !== null ? (
           <p className="mt-1">
@@ -59,11 +59,11 @@ function RowsTableView({
     );
   }
   return (
-    <div className="space-y-1.5 overflow-x-auto">
+    <div className="space-y-1.5 overflow-x-auto font-mono">
       {allKeys.length > cols.length ? (
         <p className="text-[10px] text-tertiary">
           Showing {cols.length} of {allKeys.length} columns (use{" "}
-          <span className="font-mono text-secondary">hof fn … --format json</span> for full
+          <span className="text-secondary">hof fn … --format json</span> for full
           data).
         </p>
       ) : null}
@@ -112,7 +112,7 @@ function RowsTableView({
 function KvTableView({ data }: { data: Record<string, unknown> }) {
   const keys = Object.keys(data).sort((a, b) => String(a).localeCompare(String(b)));
   return (
-    <table className="w-full border-collapse border border-border text-left text-[10px]">
+    <table className="w-full border-collapse border border-border text-left font-mono text-[10px]">
       <thead>
         <tr className="border-b border-border bg-surface/80">
           <th className="w-[32%] px-2 py-1.5 font-semibold text-foreground">key</th>
@@ -122,7 +122,7 @@ function KvTableView({ data }: { data: Record<string, unknown> }) {
       <tbody>
         {keys.map((k) => (
           <tr key={k} className="border-b border-border/80 last:border-0">
-            <td className="whitespace-nowrap px-2 py-1.5 align-top font-mono text-[var(--color-accent)]">
+            <td className="whitespace-nowrap px-2 py-1.5 align-top text-[var(--color-accent)]">
               {k}
             </td>
             <td className="max-w-[min(100%,24rem)] whitespace-pre-wrap break-words px-2 py-1.5 align-top text-secondary">

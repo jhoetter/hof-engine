@@ -8,15 +8,17 @@ export type HofAgentComposerProps = {
   className?: string;
   /** Row: attach + text field + send. */
   rowClassName?: string;
-  /** Inner padded shell around the input row (default `rounded-xl bg-hover/40 …`). */
+  /** Inner padded shell around the input row (default bordered `bg-background` strip). */
   inputShellClassName?: string;
   disclaimerClassName?: string;
 };
 
 export function HofAgentComposer({
   className = "w-full",
-  rowClassName = "flex gap-2",
-  inputShellClassName = "rounded-xl bg-hover/40 p-2 sm:p-2.5",
+  rowClassName = "flex items-stretch gap-1.5 sm:gap-2",
+  /** One surface + outer border; inner controls stay flush (no nested white-on-gray band). */
+  inputShellClassName =
+    "rounded-xl border border-border bg-background p-1 sm:p-1.5",
   disclaimerClassName =
     "mt-2.5 text-center text-[11px] leading-snug text-tertiary",
 }: HofAgentComposerProps) {
@@ -39,7 +41,7 @@ export function HofAgentComposer({
       <button
         type="button"
         disabled={busy || uploadBusy || Boolean(approvalBarrier)}
-        className="flex shrink-0 items-center justify-center rounded-lg border border-border bg-surface px-2.5 text-secondary transition-colors hover:bg-hover hover:text-foreground disabled:opacity-50"
+        className="flex h-11 w-11 shrink-0 items-center justify-center self-center rounded-lg bg-hover text-secondary transition-colors hover:bg-[color:color-mix(in_srgb,var(--color-foreground)_6%,var(--color-hover))] hover:text-foreground disabled:opacity-50"
         onClick={() => fileInputRef.current?.click()}
         aria-label="Attach PDF"
       >
@@ -65,7 +67,7 @@ export function HofAgentComposer({
         }}
         placeholder="Message…"
         disabled={busy || uploadBusy || Boolean(approvalBarrier)}
-        className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-secondary outline-none transition-[box-shadow] focus:ring-2 focus:ring-[color:color-mix(in_srgb,var(--color-accent)_35%,transparent)] disabled:opacity-60"
+        className="min-h-11 min-w-0 flex-1 self-stretch rounded-md border-0 bg-transparent px-2 py-2 text-sm leading-snug text-foreground shadow-none placeholder:text-secondary outline-none ring-0 transition-[box-shadow] focus:ring-2 focus:ring-[color:color-mix(in_srgb,var(--color-accent)_35%,transparent)] focus:ring-offset-0 disabled:opacity-60"
       />
       <button
         type="button"
@@ -76,7 +78,7 @@ export function HofAgentComposer({
           Boolean(approvalBarrier) ||
           (!input.trim() && attachmentQueue.length === 0)
         }
-        className="shrink-0 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex h-11 shrink-0 items-center justify-center self-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
       >
         {uploadBusy ? "Uploading…" : "Send"}
       </button>

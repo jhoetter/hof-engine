@@ -45,6 +45,11 @@ export type LiveBlock =
        * without this field infer from `streamPhase` + `finishReason`).
        */
       uiLane?: "thinking" | "reply";
+      /**
+       * After `tool_call` / approval steps the visible stream has ended, but `assistant_done` may
+       * arrive later for usage + `uiLane`. While true, treat as non-streaming in the UI (no caret).
+       */
+      pendingStreamFinalize?: boolean;
       usage?: {
         prompt_tokens?: number;
         completion_tokens?: number;
@@ -69,6 +74,9 @@ export type LiveBlock =
       pending_confirmation?: boolean;
       /** Parsed JSON tool return (``hof fn`` / TUI auto-style render). */
       data?: unknown;
+      /** From stream: tool runner outcome (HTTP-shaped code for UI only). */
+      ok?: boolean;
+      status_code?: number;
     }
   | {
       kind: "mutation_pending";
@@ -135,10 +143,6 @@ export const CHAT_ASSISTANT_REPLY_BUBBLE_CLASS =
 
 export const TOOL_SECTION_LABEL_CLASS =
   "mb-1 text-[10px] font-medium uppercase tracking-wide text-tertiary";
-
-/** Sentence-case label for tool CLI + JSON input row (not all-caps). */
-export const TOOL_INPUT_LABEL_CLASS =
-  "mb-1 text-[10px] font-medium text-tertiary";
 
 /** First name (or email local-part) for welcome line; falls back when profile is minimal. */
 /** snake_case API name → readable label */
@@ -327,6 +331,46 @@ function dropTrailingEmptyStreamingAssistant(blocks: LiveBlock[]): LiveBlock[] {
   return blocks;
 }
 
+/** Model moved on to tools / approval — prose is complete even if `assistant_done` is not here yet. */
+function finalizeStreamingAssistantBeforeStructuredStep(
+  blocks: LiveBlock[],
+): LiveBlock[] {
+  for (let k = blocks.length - 1; k >= 0; k--) {
+    const bl = blocks[k];
+    if (bl?.kind === "assistant" && bl.streaming) {
+      return [
+        ...blocks.slice(0, k),
+        {
+          ...bl,
+          streaming: false,
+          pendingStreamFinalize: true,
+        },
+        ...blocks.slice(k + 1),
+      ];
+    }
+  }
+  return blocks;
+}
+
+function clearAssistantPendingStreamFinalize(blocks: LiveBlock[]): LiveBlock[] {
+  return blocks.map((b) => {
+    if (b.kind !== "assistant" || !b.pendingStreamFinalize) {
+      return b;
+    }
+    const { pendingStreamFinalize: _p, ...rest } = b;
+    return rest as LiveBlock;
+  });
+}
+
+function assistantRowMatchesAssistantDone(
+  b: LiveBlock,
+): b is Extract<LiveBlock, { kind: "assistant" }> {
+  return (
+    b.kind === "assistant" &&
+    Boolean(b.streaming || b.pendingStreamFinalize)
+  );
+}
+
 export function stampStreamPhase(
   ctx: AgentApplyStreamCtx,
   existing?: "model" | "summary",
@@ -451,7 +495,7 @@ export function applyStreamEvent(
     let streamingIdx = -1;
     for (let k = prev.length - 1; k >= 0; k--) {
       const bl = prev[k];
-      if (bl?.kind === "assistant" && bl.streaming) {
+      if (assistantRowMatchesAssistantDone(bl)) {
         streamingIdx = k;
         break;
       }
@@ -461,7 +505,7 @@ export function applyStreamEvent(
       let si = -1;
       for (let k = trimmed.length - 1; k >= 0; k--) {
         const bl = trimmed[k];
-        if (bl?.kind === "assistant" && bl.streaming) {
+        if (assistantRowMatchesAssistantDone(bl)) {
           si = k;
           break;
         }
@@ -484,6 +528,7 @@ export function applyStreamEvent(
         ];
       }
       const last = trimmed[si] as Extract<LiveBlock, { kind: "assistant" }>;
+      const { pendingStreamFinalize: _pFin, ...lastWithoutPending } = last;
       const sp = stampStreamPhase(ctx, last.streamPhase);
       const effPhase = sp ?? last.streamPhase;
       const lane = assistantDoneUiLane(fr, effPhase);
@@ -498,7 +543,7 @@ export function applyStreamEvent(
       return [
         ...trimmed.slice(0, si),
         {
-          ...last,
+          ...lastWithoutPending,
           streaming: false,
           finishReason: fr,
           usage: u,
@@ -535,8 +580,9 @@ export function applyStreamEvent(
     const base = dropTrailingEmptyStreamingAssistant(
       withoutThinkingSkeleton(prev),
     );
+    const ready = finalizeStreamingAssistantBeforeStructuredStep(base);
     return [
-      ...base,
+      ...ready,
       {
         kind: "tool_call",
         id: newId(),
@@ -556,8 +602,20 @@ export function applyStreamEvent(
       ev.pending_confirmation === true ||
       ev.pending_confirmation === "true" ||
       ev.pending_confirmation === 1;
+    const okRaw = (ev as { ok?: unknown }).ok;
+    const ok = typeof okRaw === "boolean" ? okRaw : undefined;
+    const scRaw = (ev as { status_code?: unknown }).status_code;
+    const status_code =
+      typeof scRaw === "number" && Number.isFinite(scRaw)
+        ? scRaw
+        : typeof scRaw === "string" && /^\d+$/.test(scRaw.trim())
+          ? parseInt(scRaw.trim(), 10)
+          : undefined;
+    const ready = finalizeStreamingAssistantBeforeStructuredStep(
+      withoutThinkingSkeleton(prev),
+    );
     return [
-      ...prev,
+      ...ready,
       {
         kind: "tool_result",
         id: newId(),
@@ -565,6 +623,8 @@ export function applyStreamEvent(
         summary,
         ...(pending ? { pending_confirmation: true as const } : {}),
         ...(hasData ? { data } : {}),
+        ...(ok !== undefined ? { ok } : {}),
+        ...(status_code !== undefined ? { status_code } : {}),
       },
     ];
   }
@@ -573,8 +633,11 @@ export function applyStreamEvent(
     const name = typeof ev.name === "string" ? ev.name : "";
     const cli_line = typeof ev.cli_line === "string" ? ev.cli_line : "";
     const args = typeof ev.arguments === "string" ? ev.arguments : "";
+    const ready = finalizeStreamingAssistantBeforeStructuredStep(
+      withoutThinkingSkeleton(prev),
+    );
     return [
-      ...prev,
+      ...ready,
       {
         kind: "mutation_pending",
         id: newId(),
@@ -590,17 +653,26 @@ export function applyStreamEvent(
     const pending_ids = Array.isArray(ev.pending_ids)
       ? (ev.pending_ids as unknown[]).map((x) => String(x)).filter(Boolean)
       : [];
+    const ready = finalizeStreamingAssistantBeforeStructuredStep(
+      withoutThinkingSkeleton(prev),
+    );
     return [
-      ...prev,
+      ...ready,
       { kind: "approval_required", id: newId(), run_id, pending_ids },
     ];
   }
   if (t === "error") {
     const detail = typeof ev.detail === "string" ? ev.detail : "error";
-    return [...prev, { kind: "error", id: newId(), detail }];
+    const ready = finalizeStreamingAssistantBeforeStructuredStep(
+      withoutThinkingSkeleton(prev),
+    );
+    return [...ready, { kind: "error", id: newId(), detail }];
   }
   // Terminal / control events — reply already streamed via assistant_*; do not add UI blocks.
-  if (t === "final" || t === "resume_start" || t === "run_start") {
+  if (t === "final") {
+    return clearAssistantPendingStreamFinalize(prev);
+  }
+  if (t === "resume_start" || t === "run_start") {
     return prev;
   }
   return prev;
@@ -710,7 +782,14 @@ export function compactBlocksForHistory(blocks: LiveBlock[]): LiveBlock[] {
   const base = dropRedundantModelPhaseBeforeAssistant(blocks).filter(
     (b) => !isEphemeralAssistantShell(b) && b.kind !== "thinking_skeleton",
   );
-  return dedupeAdjacentDuplicateAssistants(base);
+  const deduped = dedupeAdjacentDuplicateAssistants(base);
+  return deduped.map((b) => {
+    if (b.kind !== "assistant" || !b.pendingStreamFinalize) {
+      return b;
+    }
+    const { pendingStreamFinalize: _p, ...rest } = b;
+    return rest as LiveBlock;
+  });
 }
 
 export function applyStreamEventWithDedupe(
@@ -816,6 +895,68 @@ export function isGenericAwaitingConfirmationSummary(summary: string): boolean {
   return /awaiting your confirmation/i.test(summary.trim());
 }
 
+export type ToolResultUiStatus = {
+  code: number;
+  label: string;
+  tone: "success" | "error" | "warning" | "pending";
+};
+
+/** Human-readable HTTP-shaped status for the tool row (stream fields + fallbacks). */
+export function toolResultUiStatus(
+  result: Pick<
+    ToolResultBlock,
+    "pending_confirmation" | "data" | "summary" | "ok" | "status_code"
+  >,
+): ToolResultUiStatus {
+  if (result.pending_confirmation) {
+    return {
+      code: result.status_code ?? 202,
+      label: "Awaiting confirmation",
+      tone: "pending",
+    };
+  }
+  if (
+    result.status_code !== undefined &&
+    Number.isFinite(result.status_code)
+  ) {
+    const code = result.status_code;
+    const ok = result.ok;
+    if (ok === false || code >= 400) {
+      const label =
+        code === 422
+          ? "Validation error"
+          : code === 403
+            ? "Not allowed"
+            : code === 400
+              ? "Bad request"
+              : code === 501
+                ? "Unsupported"
+                : code === 499
+                  ? "Rejected"
+                  : "Error";
+      return { code, label, tone: "error" };
+    }
+    if (ok === true || (code >= 200 && code < 400)) {
+      return { code, label: "OK", tone: "success" };
+    }
+    return { code, label: "OK", tone: "success" };
+  }
+  const data = result.data;
+  if (
+    data !== null &&
+    typeof data === "object" &&
+    !Array.isArray(data) &&
+    "error" in data
+  ) {
+    return { code: 502, label: "Tool error", tone: "error" };
+  }
+  const s = result.summary?.trim() ?? "";
+  if (/^error:/i.test(s)) {
+    return { code: 502, label: "Error", tone: "error" };
+  }
+  return { code: 200, label: "OK", tone: "success" };
+}
+
 export function toolGroupSummaryLine(
   call: ToolCallBlock,
   mutation: MutationPendingBlock | undefined,
@@ -873,11 +1014,11 @@ export function barrierMatchesApprovalBlock(
   return true;
 }
 
-/** After resume; `true` = approved, `false` = rejected. */
+/** After resume; `true` = approved, `false` = rejected. `null` = nothing to say (cards show outcome). */
 export function confirmationFooterFromOutcomes(
   pendingIds: string[],
   outcomes: Record<string, boolean | undefined>,
-): string {
+): string | null {
   const norm = pendingIds.map((p) => p.trim()).filter(Boolean);
   if (norm.length === 0) {
     return "Confirmation completed.";
@@ -898,15 +1039,8 @@ export function confirmationFooterFromOutcomes(
   if (unknown > 0) {
     return "Waiting for Approve or Reject on each pending action above.";
   }
-  if (rejected === 0) {
-    return approved === 1
-      ? "Choice recorded — see each action card for details."
-      : "Choices recorded — see each action card for details.";
-  }
-  if (approved === 0) {
-    return rejected === 1
-      ? "Choice recorded — see each action card for details."
-      : "Choices recorded — see each action card for details.";
+  if (rejected === 0 || approved === 0) {
+    return null;
   }
   return `Recorded: ${approved} approved, ${rejected} rejected — see cards above.`;
 }

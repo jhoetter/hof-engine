@@ -18,14 +18,15 @@
     "src"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts --clean --external react --external lucide-react",
-    "dev": "tsup src/index.ts --format esm,cjs --dts --watch --external react --external lucide-react",
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean --external react --external react-dom --external lucide-react",
+    "dev": "tsup src/index.ts --format esm,cjs --dts --watch --external react --external react-dom --external lucide-react",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
     "lucide-react": ">=0.400.0",
-    "react": ">=18.0.0"
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
   },
   "dependencies": {
     "lowlight": "^3.3.0",
@@ -35,7 +36,9 @@
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "lucide-react": "^0.468.0",
+    "react-dom": "^19.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
     "vitest": "^3.2.4"

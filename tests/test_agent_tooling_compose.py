@@ -8,6 +8,7 @@ from hof.agent.tooling import (
     compose_agent_tool_description,
     format_tool_result_for_model,
     openai_tool_specs,
+    tool_result_status_for_ui,
 )
 from hof.core.registry import registry
 from hof.functions import function
@@ -112,3 +113,22 @@ def test_format_tool_result_for_model_marks_truncated() -> None:
     out = format_tool_result_for_model("list_expenses", raw)
     assert "[hof:list_expenses · truncated]\n" in out
     assert raw in out
+
+
+def test_tool_result_status_for_ui_success() -> None:
+    assert tool_result_status_for_ui('{"rows":[],"total":0}') == (True, 200)
+
+
+def test_tool_result_status_for_ui_error_payload() -> None:
+    assert tool_result_status_for_ui('{"error":"boom"}') == (False, 500)
+
+
+def test_tool_result_status_for_ui_validation() -> None:
+    raw = '{"error":"validation failed","detail":[]}'
+    assert tool_result_status_for_ui(raw) == (False, 422)
+
+
+def test_tool_result_status_for_ui_rejected() -> None:
+    assert tool_result_status_for_ui(
+        '{"rejected":true,"message":"no"}',
+    ) == (False, 499)

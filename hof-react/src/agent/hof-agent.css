@@ -4,6 +4,16 @@
  */
 .hof-agent {
   box-sizing: border-box;
+  /* Hosts that omit semantic success tokens still get a valid border (undefined breaks color-mix → currentColor/black). */
+  --color-success: var(--color-success, var(--hof-green, #2f7d59));
+  --color-success-bg: var(
+    --color-success-bg,
+    color-mix(in srgb, var(--color-success) 10%, transparent)
+  );
+  --color-destructive-bg: var(
+    --color-destructive-bg,
+    color-mix(in srgb, var(--color-destructive) 10%, transparent)
+  );
 }
 
 .hof-agent *,

@@ -11,8 +11,6 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from llm_markdown.providers import ReasoningConfig, ReasoningMode, stream_agent_turn
-
 from hof.agent.policy import AgentPolicy, get_agent_policy
 from hof.agent.state import (
     delete_agent_run,
@@ -28,8 +26,10 @@ from hof.agent.tooling import (
     format_tool_result_for_model,
     openai_tool_specs,
     parsed_tool_result_for_stream,
+    tool_result_status_for_ui,
 )
 from hof.config import get_config
+from llm_markdown.providers import ReasoningConfig, ReasoningMode, stream_agent_turn
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +455,10 @@ def collect_agent_chat_from_stream(events_iter: Iterator[dict[str, Any]]) -> dic
                 tr_legacy["data"] = ev["data"]
             if ev.get("pending_confirmation"):
                 tr_legacy["pending_confirmation"] = True
+            if "status_code" in ev:
+                tr_legacy["status_code"] = ev["status_code"]
+            if "ok" in ev:
+                tr_legacy["ok"] = ev["ok"]
             legacy.append(tr_legacy)
         elif t == "mutation_pending":
             legacy.append(
@@ -781,6 +785,7 @@ def _run_agent_openai_loop(
                                 "(Assistant panel or agent_resume_mutations)."
                             ),
                             "pending_confirmation": True,
+                            "status_code": 202,
                             "tool_call_id": tid,
                         }
                         oa_messages.append(
@@ -806,11 +811,14 @@ def _run_agent_openai_loop(
                             name,
                             _log_preview(summary, 200),
                         )
+                        ok, status_code = tool_result_status_for_ui(out_json)
                         tr_out: dict[str, Any] = {
                             "type": "tool_result",
                             "name": name,
                             "summary": summary,
                             "tool_call_id": tid,
+                            "ok": ok,
+                            "status_code": status_code,
                         }
                         pdata = parsed_tool_result_for_stream(out_json)
                         if pdata is not None:

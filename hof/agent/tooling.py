@@ -320,6 +320,34 @@ def execute_tool(
 _TOOL_TRUNCATION_MARKER = "\n…(truncated)"
 
 
+def tool_result_status_for_ui(out_json: str) -> tuple[bool, int]:
+    """Return (ok, http_shaped_code) for the assistant UI (not a real HTTP response)."""
+    try:
+        data = json.loads(out_json)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return False, 500
+
+    if isinstance(data, dict) and data.get("rejected") is True:
+        return False, 499
+
+    if not isinstance(data, dict):
+        return True, 200
+
+    if "error" in data:
+        err = str(data.get("error") or "").lower()
+        if data.get("detail") is not None or "validation" in err:
+            return False, 422
+        if "unknown or disallowed" in err:
+            return False, 403
+        if "invalid json" in err:
+            return False, 400
+        if "async functions" in err:
+            return False, 501
+        return False, 500
+
+    return True, 200
+
+
 def format_tool_result_for_model(function_name: str, out_json: str) -> str:
     """Tiny prefix so the model sees server-backed, complete-vs-truncated tool payloads (~40 chars).
 

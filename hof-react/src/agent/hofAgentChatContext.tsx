@@ -705,16 +705,7 @@ export function HofAgentChatProvider({
     setLiveBlocks([]);
     const afterFlush = baseThread;
     const snap = [...attachmentQueue];
-    const names = snap.map((a) => a.filename).filter(Boolean);
-    const attachNote =
-      snap.length > 0
-        ? `\n\n[Attached PDF: ${names.join(", ")} — keys are in the assistant context.]`
-        : "";
-    const content =
-      (t ||
-        (snap.length
-          ? `I've attached ${snap.length} PDF receipt${snap.length > 1 ? "s" : ""}.${attachNote}`
-          : "")) + (t && snap.length > 0 ? attachNote : "");
+    const content = t;
     const userItem: ThreadItem = {
       kind: "user",
       id: newId(),

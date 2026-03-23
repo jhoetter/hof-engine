@@ -65,6 +65,8 @@ export type LiveBlock =
       id: string;
       name: string;
       summary: string;
+      /** Mutation tool: waiting for user approve/reject (NDJSON ``pending_confirmation``). */
+      pending_confirmation?: boolean;
       /** Parsed JSON tool return (``hof fn`` / TUI auto-style render). */
       data?: unknown;
     }
@@ -145,24 +147,9 @@ export function humanizeToolName(name: string): string {
     .join(" ");
 }
 
-/** Strip API-only attachment hints; optional auto “I’ve attached…” when chips show files. */
-export function userMessageDisplayText(
-  content: string,
-  hasAttachments: boolean,
-): string {
-  let s = content
-    .replace(
-      /\n\n\[Attached PDF:[\s\S]*? — keys are in the assistant context\.\]/g,
-      "",
-    )
-    .trim();
-  if (
-    hasAttachments &&
-    /^I've attached \d+ PDF receipts?\.$/i.test(s)
-  ) {
-    return "";
-  }
-  return s;
+/** User bubble body: raw ``content`` only (attachments render as chips separately). */
+export function userMessageDisplayText(content: string, _hasAttachments: boolean): string {
+  return content.trim();
 }
 
 /** NDJSON may encode `run_id` as string or number; normalize for comparisons and resume. */
@@ -177,12 +164,16 @@ export function coerceRunId(value: unknown): string {
 }
 
 export function toolResultAwaitingUserConfirmation(blocks: LiveBlock[]): boolean {
-  return blocks.some(
-    (b) =>
-      b.kind === "tool_result" &&
-      typeof b.summary === "string" &&
-      /awaiting your confirmation/i.test(b.summary),
-  );
+  return blocks.some((b) => {
+    if (b.kind !== "tool_result") {
+      return false;
+    }
+    if (b.pending_confirmation === true) {
+      return true;
+    }
+    const s = b.summary;
+    return typeof s === "string" && /awaiting your confirmation/i.test(s);
+  });
 }
 
 /** Pending ids from mutation trace blocks (used if stream omits `pending_ids` on `awaiting_confirmation`). */
@@ -559,6 +550,10 @@ export function applyStreamEvent(
     const summary = typeof ev.summary === "string" ? ev.summary : "";
     const hasData = Object.prototype.hasOwnProperty.call(ev, "data");
     const data = hasData ? (ev as { data: unknown }).data : undefined;
+    const pending =
+      ev.pending_confirmation === true ||
+      ev.pending_confirmation === "true" ||
+      ev.pending_confirmation === 1;
     return [
       ...prev,
       {
@@ -566,6 +561,7 @@ export function applyStreamEvent(
         id: newId(),
         name,
         summary,
+        ...(pending ? { pending_confirmation: true as const } : {}),
         ...(hasData ? { data } : {}),
       },
     ];
@@ -785,7 +781,10 @@ export function toolGroupSummaryLine(
   }
   if (result?.summary) {
     const s = result.summary.trim();
-    if (mutation && isGenericAwaitingConfirmationSummary(s)) {
+    if (
+      mutation &&
+      (result.pending_confirmation === true || isGenericAwaitingConfirmationSummary(s))
+    ) {
       return null;
     }
     if (s.length > 72) {

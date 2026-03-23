@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from llm_markdown.agent_stream import AgentContentDelta, AgentMessageFinish
+
 from hof.agent.policy import AgentPolicy, configure_agent, get_agent_policy
 from hof.agent.stream import (
+    _append_client_messages,
     collect_agent_chat_from_stream,
     default_normalize_attachments,
     iter_agent_chat_stream,
 )
-from llm_markdown.agent_stream import AgentContentDelta, AgentMessageFinish
 
 
 def test_default_normalize_attachments_accepts_keys() -> None:
@@ -24,6 +26,49 @@ def test_default_normalize_attachments_rejects_non_list() -> None:
     out, err = default_normalize_attachments("nope")
     assert out == []
     assert err == "attachments must be a list"
+
+
+def test_append_client_messages_empty_last_user_with_attachments() -> None:
+    oa: list[dict] = [{"role": "system", "content": "sys"}]
+    _append_client_messages(
+        oa,
+        [{"role": "user", "content": ""}],
+        [{"object_key": "tenant/x.pdf"}],
+    )
+    assert len(oa) == 2
+    assert oa[1] == {"role": "user", "content": "\u2060"}
+
+
+def test_append_client_messages_empty_last_user_no_attachments_skipped() -> None:
+    oa: list[dict] = [{"role": "system", "content": "sys"}]
+    _append_client_messages(oa, [{"role": "user", "content": "   "}], [])
+    assert len(oa) == 1
+
+
+def test_append_client_messages_strips_user_and_assistant() -> None:
+    oa: list[dict] = [{"role": "system", "content": "sys"}]
+    _append_client_messages(
+        oa,
+        [
+            {"role": "user", "content": "  hi  "},
+            {"role": "assistant", "content": "  ok  "},
+        ],
+        [],
+    )
+    assert oa[1:] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "ok"},
+    ]
+
+
+def test_collect_agent_chat_from_stream_tool_result_pending_confirmation() -> None:
+    def events():
+        yield {"type": "tool_result", "name": "x", "summary": "s", "pending_confirmation": True}
+
+    out = collect_agent_chat_from_stream(events())
+    evs = out.get("events") or []
+    assert len(evs) == 1
+    assert evs[0].get("pending_confirmation") is True
 
 
 def test_configure_and_effective_allowlist() -> None:

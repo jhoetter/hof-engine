@@ -350,6 +350,35 @@ def _build_system_prompt(policy: AgentPolicy, *, attachment_note: str) -> str:
     return text
 
 
+def _append_client_messages(
+    oa_messages: list[dict[str, Any]],
+    messages: list,
+    att_norm: list[dict[str, str]],
+) -> None:
+    """Append client ``messages`` into ``oa_messages`` (mutates in place).
+
+    Skips empty user/assistant text except: last list item is ``user`` with whitespace-only
+    content and ``att_norm`` is non-empty — then append a user turn with U+2060 WORD JOINER
+    (strip() is non-empty for providers; attachment metadata is in the system prompt note).
+    """
+    n = len(messages)
+    for idx, m in enumerate(messages):
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if not isinstance(content, str):
+            continue
+        stripped = content.strip()
+        if role == "user":
+            if stripped:
+                oa_messages.append({"role": "user", "content": stripped})
+            elif att_norm and idx == n - 1:
+                oa_messages.append({"role": "user", "content": "\u2060"})
+        elif role == "assistant" and stripped:
+            oa_messages.append({"role": "assistant", "content": stripped})
+
+
 def _usage_to_dict(u: Any) -> dict[str, Any] | None:
     if u is None:
         return None
@@ -424,6 +453,8 @@ def collect_agent_chat_from_stream(events_iter: Iterator[dict[str, Any]]) -> dic
             }
             if "data" in ev:
                 tr_legacy["data"] = ev["data"]
+            if ev.get("pending_confirmation"):
+                tr_legacy["pending_confirmation"] = True
             legacy.append(tr_legacy)
         elif t == "mutation_pending":
             legacy.append(
@@ -749,6 +780,7 @@ def _run_agent_openai_loop(
                                 "Awaiting your confirmation "
                                 "(Assistant panel or agent_resume_mutations)."
                             ),
+                            "pending_confirmation": True,
                             "tool_call_id": tid,
                         }
                         oa_messages.append(
@@ -941,13 +973,7 @@ def _run_agent_chat_stream(
     att_note = note_fn(att_norm) if att_norm else ""
     system_content = _build_system_prompt(policy, attachment_note=att_note)
     oa_messages: list[dict[str, Any]] = [{"role": "system", "content": system_content}]
-    for m in messages:
-        if not isinstance(m, dict):
-            continue
-        role = m.get("role")
-        content = m.get("content")
-        if role in ("user", "assistant") and isinstance(content, str) and content.strip():
-            oa_messages.append({"role": role, "content": content})
+    _append_client_messages(oa_messages, messages, att_norm)
 
     logger.info(
         "agent_chat start run_id=%s backend=%s model=%s messages=%d tool_specs=%d",

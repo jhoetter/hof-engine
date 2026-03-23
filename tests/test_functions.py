@@ -123,6 +123,29 @@ class TestFunctionDecorator:
         assert meta.stream_fn is not None
         assert meta.to_dict()["has_stream"] is True
 
+    def test_agent_metadata_on_decorator(self):
+        @function(
+            tool_summary="One line.",
+            when_to_use="When needed.",
+            when_not_to_use="Not for X.",
+            related_tools=["b", "c"],
+        )
+        def meta_fn() -> dict:
+            """Full doc."""
+            return {}
+
+        meta = registry.get_function("meta_fn")
+        assert meta is not None
+        assert meta.tool_summary == "One line."
+        assert meta.when_to_use == "When needed."
+        assert meta.when_not_to_use == "Not for X."
+        assert meta.related_tools == ("b", "c")
+        d = meta.to_dict()
+        assert d["tool_summary"] == "One line."
+        assert d["when_to_use"] == "When needed."
+        assert d["when_not_to_use"] == "Not for X."
+        assert d["related_tools"] == ["b", "c"]
+
 
 class TestFunctionMetadataToDict:
     def test_to_dict_structure(self):

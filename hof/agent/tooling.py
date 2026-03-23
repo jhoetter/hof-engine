@@ -11,10 +11,14 @@ from pydantic import ValidationError
 
 from hof.core.registry import registry
 from hof.db.schemas import build_function_input_schema
+from hof.functions import FunctionMetadata
 
 logger = logging.getLogger(__name__)
 
 _REDACT_SUBSTRINGS = ("token", "password", "secret", "api_key", "authorization")
+
+# OpenAI and other providers accept long descriptions; keep a hard cap for stability.
+AGENT_TOOL_DESCRIPTION_MAX_CHARS = 2000
 
 
 def _json_type_for_param(type_name: str) -> str:
@@ -47,6 +51,107 @@ def _openai_property_schema_for_param(type_name: str) -> dict[str, Any]:
     }
 
 
+def compose_agent_tool_description(function_name: str, meta: FunctionMetadata) -> str:
+    """Build the model-facing tool description (docstring + optional metadata + policy hints)."""
+    from hof.agent.policy import try_get_agent_policy
+
+    policy = try_get_agent_policy()
+    parts: list[str] = []
+    summary = (meta.tool_summary or "").strip()
+    body = (meta.description or "").strip()
+    if summary and body:
+        parts.append(f"{summary}\n\n{body}")
+    elif summary:
+        parts.append(summary)
+    elif body:
+        parts.append(body)
+    else:
+        parts.append(function_name)
+
+    when = (meta.when_to_use or "").strip()
+    if not when and policy is not None:
+        when = (policy.tool_when_to_use.get(function_name) or "").strip()
+    if when:
+        parts.append(f"When to use: {when}")
+
+    when_not = (meta.when_not_to_use or "").strip()
+    if when_not:
+        parts.append(f"When not to use: {when_not}")
+
+    related = list(meta.related_tools) if meta.related_tools else []
+    if not related and policy is not None:
+        related = list(policy.tool_related_tools.get(function_name, []))
+    if related:
+        parts.append(f"Typical next steps: {', '.join(related)}")
+
+    text = "\n\n".join(parts)
+    if len(text) > AGENT_TOOL_DESCRIPTION_MAX_CHARS:
+        text = text[: AGENT_TOOL_DESCRIPTION_MAX_CHARS - 1] + "…"
+    return text
+
+
+def format_function_describe_from_static_meta(data: dict[str, Any]) -> str:
+    """Format ``function_schema`` / ``to_dict()`` JSON when no in-process policy/registry merge applies."""
+    name = str(data.get("name") or "")
+    lines: list[str] = [f"Function: {name}", ""]
+    parts: list[str] = []
+    summary = str(data.get("tool_summary") or "").strip()
+    body = str(data.get("description") or "").strip()
+    if summary and body:
+        parts.append(f"{summary}\n\n{body}")
+    elif summary:
+        parts.append(summary)
+    elif body:
+        parts.append(body)
+    else:
+        parts.append(name or "(no description)")
+    when = str(data.get("when_to_use") or "").strip()
+    if when:
+        parts.append(f"When to use: {when}")
+    when_not = str(data.get("when_not_to_use") or "").strip()
+    if when_not:
+        parts.append(f"When not to use: {when_not}")
+    related = data.get("related_tools")
+    if isinstance(related, list) and related:
+        parts.append(f"Typical next steps: {', '.join(str(x) for x in related)}")
+    lines.append("\n\n".join(parts))
+    lines.extend(["", "Parameters:"])
+    params = data.get("parameters") or []
+    if not params:
+        lines.append("  (none)")
+    else:
+        for p in params:
+            if not isinstance(p, dict):
+                continue
+            pname = p.get("name")
+            if not isinstance(pname, str) or pname.startswith("_"):
+                continue
+            tname = p.get("type") or "Any"
+            req = "required" if p.get("required") else "optional"
+            lines.append(f"  - {pname} ({tname}, {req})")
+    return "\n".join(lines)
+
+
+def format_function_describe_text(function_name: str, meta: FunctionMetadata) -> str:
+    """Human-readable multi-line help for ``hof fn describe`` (same facts as the agent, plus parameters)."""
+    lines: list[str] = [
+        f"Function: {function_name}",
+        "",
+        compose_agent_tool_description(function_name, meta),
+        "",
+        "Parameters:",
+    ]
+    for p in meta.parameters:
+        if p.name.startswith("_"):
+            continue
+        tname = getattr(p.type_annotation, "__name__", str(p.type_annotation))
+        req = "required" if p.required else "optional"
+        lines.append(f"  - {p.name} ({tname}, {req})")
+    if len(lines) == 5:
+        lines.append("  (none)")
+    return "\n".join(lines)
+
+
 def openai_tool_specs(allowlist: frozenset[str]) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
     for name in sorted(allowlist):
@@ -67,7 +172,7 @@ def openai_tool_specs(allowlist: frozenset[str]) -> list[dict[str, Any]]:
                 "type": "function",
                 "function": {
                     "name": name,
-                    "description": (meta.description or name)[:900],
+                    "description": compose_agent_tool_description(name, meta),
                     "parameters": {
                         "type": "object",
                         "properties": properties,

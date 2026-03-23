@@ -2,6 +2,7 @@
 
 Usage:
     hof fn list                          List all registered functions
+    hof fn describe <name>               Human-readable tool contract (when-to-use, related tools)
     hof fn schema <name>                 Show function schema
     hof fn <name>                        Call a function (no args); human-readable output
     hof fn <name> --json '{"key": ...}'  Call with JSON input (-j is input, not output)
@@ -113,7 +114,7 @@ def list_functions() -> None:
     table.add_column("Async")
 
     for fn_def in functions:
-        desc = fn_def.get("description", "")
+        desc = (fn_def.get("tool_summary") or fn_def.get("description") or "").strip()
         table.add_row(
             fn_def["name"],
             desc[:60] + "..." if len(desc) > 60 else desc,
@@ -122,6 +123,34 @@ def list_functions() -> None:
         )
 
     console.print(table)
+
+
+@app.command("describe")
+@click.argument("function_name")
+def describe_function(function_name: str) -> None:
+    """Show summary, when-to-use hints, related tools, and parameters (agent/CLI contract)."""
+    from hof.agent.tooling import format_function_describe_from_static_meta, format_function_describe_text
+
+    from hof.cli.api_client import get_client
+
+    client = get_client()
+    if client:
+        try:
+            data = client.function_schema(function_name)
+        except Exception as exc:
+            console.print(f"[red]API error: {exc}[/]")
+            raise SystemExit(1)
+        console.print(format_function_describe_from_static_meta(data))
+        return
+
+    bootstrap()
+    from hof.core.registry import registry
+
+    meta = registry.get_function(function_name)
+    if meta is None:
+        console.print(f"[red]Function '{function_name}' not found.[/]")
+        raise SystemExit(1)
+    console.print(format_function_describe_text(function_name, meta))
 
 
 @app.command("schema")

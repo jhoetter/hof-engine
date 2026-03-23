@@ -14,7 +14,9 @@ configure_agent(
         allowlist_read=frozenset({"list_items", "get_item"}),
         allowlist_mutation=frozenset({"create_item"}),
         system_prompt_intro="You are …\n",
-        # Optional: tool_internal_rationale, normalize_attachments, attachments_system_note
+        # Optional: tool_internal_rationale (short UI hints),
+        # tool_when_to_use / tool_related_tools (merged into OpenAI tool descriptions + hof fn describe),
+        # normalize_attachments, attachments_system_note
     ),
 )
 ```

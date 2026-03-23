@@ -16,6 +16,10 @@ def function(
     *,
     name: str | None = None,
     description: str | None = None,
+    tool_summary: str | None = None,
+    when_to_use: str | None = None,
+    when_not_to_use: str | None = None,
+    related_tools: list[str] | tuple[str, ...] | None = None,
     tags: list[str] | None = None,
     timeout: int = 60,
     retries: int = 0,
@@ -36,6 +40,10 @@ def function(
 
     Set ``public=True`` to allow unauthenticated access via the API.
 
+    Optional agent/CLI metadata (also surfaced in OpenAI tool descriptions when configured):
+    ``tool_summary`` (one line, e.g. for ``hof fn list``), ``when_to_use``, ``when_not_to_use``,
+    ``related_tools`` (ordered names for typical follow-up tools).
+
     Optional ``stream``: a **sync generator** with the same parameters as ``fn`` that yields
     JSON-serializable dicts (e.g. NDJSON lines for ``POST /api/functions/<name>/stream``).
     """
@@ -43,10 +51,17 @@ def function(
     def decorator(fn: Callable) -> Callable:
         fn_name = name or fn.__name__
         fn_description = description or fn.__doc__ or ""
+        rt: tuple[str, ...] = ()
+        if related_tools:
+            rt = tuple(related_tools)
 
         metadata = FunctionMetadata(
             name=fn_name,
             description=fn_description.strip(),
+            tool_summary=(tool_summary.strip() if tool_summary else None),
+            when_to_use=(when_to_use.strip() if when_to_use else None),
+            when_not_to_use=(when_not_to_use.strip() if when_not_to_use else None),
+            related_tools=rt,
             tags=tags or [],
             timeout=timeout,
             retries=retries,
@@ -83,6 +98,10 @@ class FunctionMetadata:
     __slots__ = (
         "name",
         "description",
+        "tool_summary",
+        "when_to_use",
+        "when_not_to_use",
+        "related_tools",
         "tags",
         "timeout",
         "retries",
@@ -99,6 +118,10 @@ class FunctionMetadata:
         *,
         name: str,
         description: str,
+        tool_summary: str | None = None,
+        when_to_use: str | None = None,
+        when_not_to_use: str | None = None,
+        related_tools: tuple[str, ...] = (),
         tags: list[str],
         timeout: int,
         retries: int,
@@ -111,6 +134,10 @@ class FunctionMetadata:
     ):
         self.name = name
         self.description = description
+        self.tool_summary = tool_summary
+        self.when_to_use = when_to_use
+        self.when_not_to_use = when_not_to_use
+        self.related_tools = related_tools
         self.tags = tags
         self.timeout = timeout
         self.retries = retries
@@ -122,7 +149,7 @@ class FunctionMetadata:
         self.stream_fn = stream_fn
 
     def to_dict(self) -> dict:
-        return {
+        d: dict[str, Any] = {
             "name": self.name,
             "description": self.description,
             "tags": self.tags,
@@ -133,6 +160,15 @@ class FunctionMetadata:
             "has_stream": self.stream_fn is not None,
             "parameters": [p.to_dict() for p in self.parameters],
         }
+        if self.tool_summary:
+            d["tool_summary"] = self.tool_summary
+        if self.when_to_use:
+            d["when_to_use"] = self.when_to_use
+        if self.when_not_to_use:
+            d["when_not_to_use"] = self.when_not_to_use
+        if self.related_tools:
+            d["related_tools"] = list(self.related_tools)
+        return d
 
 
 class ParameterInfo:

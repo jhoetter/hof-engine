@@ -58,7 +58,12 @@ class AgentPolicy:
     system_prompt_body: str = DEFAULT_SYSTEM_PROMPT_BODY
     system_prompt_mutation_suffix: str = DEFAULT_SYSTEM_PROMPT_MUTATION_SUFFIX
     confirmation_summary_user_message: str = DEFAULT_CONFIRMATION_SUMMARY_USER_MESSAGE
+    # Short hint for streamed tool_call events (UI); keep concise.
     tool_internal_rationale: dict[str, str] = field(default_factory=dict)
+    # Merged into OpenAI tool descriptions and hof fn describe.
+    tool_when_to_use: dict[str, str] = field(default_factory=dict)
+    # Typical follow-up tool names (hints only; no auto-chaining).
+    tool_related_tools: dict[str, list[str]] = field(default_factory=dict)
     normalize_attachments: NormalizeAttachmentsFn | None = None
     attachments_system_note: AttachmentsSystemNoteFn | None = None
 

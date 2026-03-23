@@ -69,6 +69,26 @@ class TestFnList:
         assert "api_fn" in result.output
 
 
+class TestFnDescribe:
+    def test_describe_shows_metadata(self, runner, no_api_client):
+        @function(
+            tool_summary="Short.",
+            when_to_use="Often.",
+            related_tools=["other"],
+        )
+        def described(name: str = "x") -> dict:
+            """Longer body."""
+            return {}
+
+        with patch("hof.cli.commands.fn.bootstrap"):
+            result = runner.invoke(app, ["describe", "described"])
+        assert result.exit_code == 0
+        assert "described" in result.output
+        assert "When to use: Often." in result.output
+        assert "Typical next steps: other" in result.output
+        assert "name" in result.output
+
+
 class TestFnSchema:
     def test_schema_shows_json(self, runner, registered_fn, no_api_client):
         with patch("hof.cli.commands.fn.bootstrap"):

@@ -2,6 +2,7 @@
 
 import { ChevronRight, Terminal, X } from "lucide-react";
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { AssistantMarkdown } from "./AssistantMarkdown";
 import { FunctionResultDisplay } from "./FunctionResultDisplay";
 import {
   CHAT_ASSISTANT_REPLY_BUBBLE_CLASS,
@@ -11,6 +12,7 @@ import {
   confirmationFooterFromOutcomes,
   dropRedundantModelPhaseBeforeAssistant,
   humanizeToolName,
+  isGenericAwaitingConfirmationSummary,
   postToolAssistantBlockIds,
   segmentLiveBlocks,
   showProposedActionsLabel,
@@ -525,11 +527,15 @@ export function LiveBlockView({
     }
 
     if (b.streaming) {
+      const streamText = b.text;
+      const hasStreamText = streamText.trim().length > 0;
       return (
         <div className={replyBubbleClass}>
-          <span className="whitespace-pre-wrap break-words">
-            {b.text || "…"}
-          </span>
+          {hasStreamText ? (
+            <AssistantMarkdown source={streamText} />
+          ) : (
+            <span className="text-secondary">…</span>
+          )}
           <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
         </div>
       );
@@ -542,7 +548,7 @@ export function LiveBlockView({
 
     return (
       <div className={replyBubbleClass}>
-        <span className="whitespace-pre-wrap break-words">{b.text}</span>
+        <AssistantMarkdown source={b.text} />
       </div>
     );
   }

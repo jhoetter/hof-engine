@@ -89,6 +89,96 @@ function isNearDuplicateSegText(reasoning: string, content: string): boolean {
   return wordOverlapRatio(short, long) >= 0.8;
 }
 
+/** Opening of assistant reply (first ~200 chars) for overlap checks. */
+function contentOpeningWindow(content: string, maxChars: number): string {
+  const t = normSegText(content);
+  if (t.length <= maxChars) {
+    return t;
+  }
+  const slice = t.slice(0, maxChars);
+  const lastSpace = slice.lastIndexOf(" ");
+  return lastSpace > 40 ? slice.slice(0, lastSpace) : slice;
+}
+
+/**
+ * Word-overlap between two strings using up to *maxWords* tokens each (opening focus).
+ */
+function openingWordOverlap(a: string, b: string, maxWords: number): number {
+  const wa = tokenWords(a).slice(0, maxWords);
+  const wb = tokenWords(b).slice(0, maxWords);
+  if (wa.length === 0 || wb.length === 0) {
+    return 0;
+  }
+  const short = wa.length <= wb.length ? wa : wb;
+  const long = wa.length <= wb.length ? wb : wa;
+  return wordOverlapRatio(short, long);
+}
+
+const GREETING_STOPWORDS = new Set([
+  "hi",
+  "hello",
+  "hey",
+  "there",
+  "how",
+  "can",
+  "could",
+  "i",
+  "help",
+  "you",
+  "your",
+  "today",
+  "assist",
+  "do",
+  "for",
+  "with",
+]);
+
+/** True when a short clause is mostly generic chat-offer wording (draft greeting). */
+function isGreetingHeavyClause(s: string): boolean {
+  const w = tokenWords(s);
+  if (w.length === 0 || w.length > 16) {
+    return false;
+  }
+  let hits = 0;
+  for (const x of w) {
+    if (GREETING_STOPWORDS.has(x)) {
+      hits += 1;
+    }
+  }
+  if (w.length <= 3) {
+    return hits >= 1 && w.some((x) => x === "hi" || x === "hello" || x === "hey");
+  }
+  return hits >= 3;
+}
+
+/**
+ * Drop leading reasoning sentences that mainly repeat the start of the visible reply
+ * (e.g. model drafts "Hi! How can I help…" in thinking then says "Hi there! …" in reply).
+ */
+function stripReasoningPrefixOverlappingReply(reasoning: string, content: string): string {
+  let r = reasoning.trim();
+  const open = contentOpeningWindow(content, 220);
+  if (!r || !open) {
+    return r;
+  }
+  const sentenceSplit = /(?<=[.!?…])\s+/u;
+  let parts = r.split(sentenceSplit).map((p) => p.trim()).filter(Boolean);
+  const overlapThreshold = 0.52;
+  while (parts.length > 0) {
+    const first = parts[0]!;
+    if (first.length >= 6 && openingWordOverlap(first, open, 14) >= overlapThreshold) {
+      parts = parts.slice(1);
+      continue;
+    }
+    if (isGreetingHeavyClause(first)) {
+      parts = parts.slice(1);
+      continue;
+    }
+    break;
+  }
+  return parts.join(" ").trim();
+}
+
 /** Drop trailing empty ``content`` shells and hide reasoning that duplicates the following reply. */
 export function normalizeAssistantStreamSegments(
   segments: AssistantStreamSegment[],
@@ -108,13 +198,19 @@ export function normalizeAssistantStreamSegments(
   for (let i = 0; i < trimmedEnd.length; i++) {
     const cur = trimmedEnd[i]!;
     const next = trimmedEnd[i + 1];
-    if (
-      cur.kind === "reasoning" &&
-      next?.kind === "content" &&
-      isNearDuplicateSegText(cur.text, next.text)
-    ) {
-      out.push(next);
-      i++;
+    if (cur.kind === "reasoning" && next?.kind === "content") {
+      const trimmed = stripReasoningPrefixOverlappingReply(cur.text, next.text);
+      if (!trimmed.trim()) {
+        out.push(next);
+        i++;
+        continue;
+      }
+      if (isNearDuplicateSegText(trimmed, next.text)) {
+        out.push(next);
+        i++;
+        continue;
+      }
+      out.push({ kind: "reasoning", text: trimmed });
       continue;
     }
     out.push(cur);

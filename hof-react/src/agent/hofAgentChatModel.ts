@@ -339,9 +339,9 @@ export function applyStreamEvent(
     // “Connecting…”.
     if (phase === "model") {
       const base = withoutThinkingSkeleton(prev);
-      const spNew = stampStreamPhase(ctx);
-      // Empty streaming assistant so `assistant_delta` / `reasoning_delta` merge into the same
-      // “Thinking” bubble (thinking_skeleton never received stream text, so users only saw copy).
+      // Always tag model rounds from the wire event. Do not rely on ctx.assistantStreamPhase here:
+      // React may run this updater after later events batched ref updates, leaving streamPhase
+      // undefined so LiveBlockView skips the model shell and shows the wrong empty state.
       return [
         ...base,
         {
@@ -350,7 +350,7 @@ export function applyStreamEvent(
           text: "",
           streaming: true,
           streamTextRole: "content",
-          ...(spNew ? { streamPhase: spNew } : {}),
+          streamPhase: "model",
         },
       ];
     }

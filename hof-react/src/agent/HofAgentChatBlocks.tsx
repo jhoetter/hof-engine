@@ -668,6 +668,14 @@ export function LiveBlockView({
     }
 
     if (isModel && !b.streaming && lane === "thinking") {
+      const t = b.text.trim();
+      if (!t) {
+        return (
+          <div className="max-w-[min(100%,42rem)] border-l-2 border-border pl-3 text-[11px] leading-snug text-tertiary">
+            No visible plan text before tools (normal for many models). See tool steps below.
+          </div>
+        );
+      }
       return <ReasoningCollapsible text={b.text} streaming={false} />;
     }
 

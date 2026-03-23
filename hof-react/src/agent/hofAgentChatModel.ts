@@ -248,11 +248,15 @@ function mergeStreamTextRole(
   prior: "content" | "reasoning" | "mixed" | undefined,
   incoming: "content" | "reasoning",
 ): "content" | "reasoning" | "mixed" {
-  const p = prior ?? "content";
-  if (p === "mixed") {
+  // `phase: model` creates an empty streaming row without a role so the first
+  // `reasoning_delta` maps to `reasoning` (ReasoningCollapsible), not `mixed`.
+  if (prior === undefined) {
+    return incoming;
+  }
+  if (prior === "mixed") {
     return "mixed";
   }
-  if (p === incoming) {
+  if (prior === incoming) {
     return incoming;
   }
   return "mixed";
@@ -349,7 +353,6 @@ export function applyStreamEvent(
           id: newId(),
           text: "",
           streaming: true,
-          streamTextRole: "content",
           streamPhase: "model",
         },
       ];

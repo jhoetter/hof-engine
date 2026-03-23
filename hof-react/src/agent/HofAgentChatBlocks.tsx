@@ -474,6 +474,21 @@ function AssistantModelStreamShell({
       <ReasoningCollapsible text={streamText} streaming={true} />
     );
   }
+  if (!hasStreamText) {
+    return (
+      <div
+        className="max-w-[min(100%,42rem)] flex items-center gap-1.5 py-0.5"
+        aria-busy="true"
+        aria-label={emptyLabel || "Assistant is working"}
+      >
+        <span
+          className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+          aria-hidden
+        />
+        <span className="inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+      </div>
+    );
+  }
   return (
     <div className="max-w-[min(100%,42rem)] space-y-1.5">
       <div
@@ -489,13 +504,7 @@ function AssistantModelStreamShell({
       <div
         className={`${replyBubbleClass} transition-opacity duration-200 opacity-[0.88]`}
       >
-        {hasStreamText ? (
-          <AssistantMarkdown source={streamText} />
-        ) : (
-          <span className="text-[11px] leading-snug text-secondary">
-            {emptyLabel}
-          </span>
-        )}
+        <AssistantMarkdown source={streamText} />
         <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
       </div>
     </div>
@@ -519,8 +528,7 @@ export function ReasoningCollapsible({
     }
   }, [streaming]);
 
-  const body = text || (streaming ? "…" : "");
-  if (!body.trim() && !streaming) {
+  if (!text.trim() && !streaming) {
     return null;
   }
 
@@ -538,7 +546,7 @@ export function ReasoningCollapsible({
         <span className="font-medium uppercase tracking-wide">Thinking</span>
       </summary>
       <div className="border-l border-border/70 pl-2.5 pt-1 pb-0.5 text-[11px] leading-snug text-secondary">
-        <AssistantMarkdown source={body} />
+        {text.trim() ? <AssistantMarkdown source={text} /> : null}
         {streaming ? (
           <span className="ml-0.5 inline-block h-3 w-px animate-pulse bg-[var(--color-accent)] align-middle" />
         ) : null}
@@ -573,15 +581,28 @@ function AssistantSegmentedBody({
             />
           );
         }
+        if (!s.text.trim() && !pulse) {
+          return null;
+        }
+        if (!s.text.trim() && pulse) {
+          return (
+            <div
+              key={`seg-c-${i}`}
+              className="max-w-[min(100%,42rem)] flex items-center gap-1.5 py-0.5"
+              aria-busy="true"
+              aria-label={emptyLabel || "Assistant is drafting"}
+            >
+              <span
+                className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+                aria-hidden
+              />
+              <span className="inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+            </div>
+          );
+        }
         return (
           <div key={`seg-c-${i}`} className={replyBubbleClass}>
-            {s.text.trim() ? (
-              <AssistantMarkdown source={s.text} />
-            ) : pulse ? (
-              <span className="text-[11px] leading-snug text-secondary">
-                {emptyLabel}
-              </span>
-            ) : null}
+            <AssistantMarkdown source={s.text} />
             {pulse ? (
               <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
             ) : null}
@@ -679,17 +700,28 @@ export function LiveBlockView({
                 segments={streamSegs}
                 streaming
                 replyBubbleClass={replyBubbleClass}
-                emptyLabel="…"
+                emptyLabel=""
               />
+            );
+          }
+          if (!hasStreamText) {
+            return (
+              <div
+                className="max-w-[min(100%,42rem)] flex items-center gap-1.5 py-0.5"
+                aria-busy="true"
+                aria-label="Assistant is drafting"
+              >
+                <span
+                  className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+                  aria-hidden
+                />
+                <span className="inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+              </div>
             );
           }
           return (
             <div className={replyBubbleClass}>
-              {hasStreamText ? (
-                <AssistantMarkdown source={streamText} />
-              ) : (
-                <span className="text-secondary">…</span>
-              )}
+              <AssistantMarkdown source={streamText} />
               <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
             </div>
           );

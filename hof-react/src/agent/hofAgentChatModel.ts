@@ -6,7 +6,7 @@ export type AgentAttachment = {
   content_type: string;
 };
 
-/** Reasoning vs visible reply chunks from NDJSON ``segment_start`` + deltas (llm-markdown 0.3.7+). */
+/** Reasoning vs visible reply chunks from NDJSON ``segment_start`` + deltas (llm-markdown 0.3.8+). */
 export type AssistantStreamSegment = {
   kind: "reasoning" | "content";
   text: string;
@@ -25,6 +25,43 @@ export function appendAssistantStreamSegmentChunk(
     segs.push({ kind, text: chunk });
   }
   return segs;
+}
+
+function normSegText(s: string): string {
+  return s.trim().replace(/\s+/g, " ");
+}
+
+/** Drop trailing empty ``content`` shells and hide reasoning that duplicates the following reply. */
+export function normalizeAssistantStreamSegments(
+  segments: AssistantStreamSegment[],
+): AssistantStreamSegment[] {
+  if (segments.length === 0) {
+    return segments;
+  }
+  const trimmedEnd = [...segments];
+  while (
+    trimmedEnd.length > 0 &&
+    trimmedEnd[trimmedEnd.length - 1]!.kind === "content" &&
+    !trimmedEnd[trimmedEnd.length - 1]!.text.trim()
+  ) {
+    trimmedEnd.pop();
+  }
+  const out: AssistantStreamSegment[] = [];
+  for (let i = 0; i < trimmedEnd.length; i++) {
+    const cur = trimmedEnd[i]!;
+    const next = trimmedEnd[i + 1];
+    if (
+      cur.kind === "reasoning" &&
+      next?.kind === "content" &&
+      normSegText(cur.text) === normSegText(next.text)
+    ) {
+      out.push(next);
+      i++;
+      continue;
+    }
+    out.push(cur);
+  }
+  return out;
 }
 
 export type LiveBlock =
@@ -496,6 +533,13 @@ export function applyStreamEvent(
       const sp = stampStreamPhase(ctx, last.streamPhase);
       const effPhase = sp ?? last.streamPhase;
       const lane = assistantDoneUiLane(last, fr, effPhase);
+      let streamSegmentsOut: AssistantStreamSegment[] | undefined;
+      if (last.streamSegments?.length) {
+        const n = normalizeAssistantStreamSegments(last.streamSegments);
+        streamSegmentsOut = n.length > 0 ? n : undefined;
+      } else {
+        streamSegmentsOut = last.streamSegments;
+      }
       return [
         ...trimmed.slice(0, si),
         {
@@ -504,6 +548,7 @@ export function applyStreamEvent(
           finishReason: fr,
           usage: u,
           uiLane: lane,
+          streamSegments: streamSegmentsOut,
           ...(sp ? { streamPhase: sp } : {}),
         },
         ...trimmed.slice(si + 1),

@@ -294,6 +294,22 @@ function withoutThinkingSkeleton(blocks: LiveBlock[]): LiveBlock[] {
   return blocks.filter((b) => b.kind !== "thinking_skeleton");
 }
 
+/** Remove a trailing in-flight assistant row with no text (placeholder for the next model round). */
+function dropTrailingEmptyStreamingAssistant(blocks: LiveBlock[]): LiveBlock[] {
+  if (blocks.length === 0) {
+    return blocks;
+  }
+  const last = blocks[blocks.length - 1];
+  if (
+    last.kind === "assistant" &&
+    last.streaming &&
+    last.text.trim() === ""
+  ) {
+    return blocks.slice(0, -1);
+  }
+  return blocks;
+}
+
 export function stampStreamPhase(
   ctx: AgentApplyStreamCtx,
   existing?: "model" | "summary",
@@ -323,7 +339,20 @@ export function applyStreamEvent(
     // “Connecting…”.
     if (phase === "model") {
       const base = withoutThinkingSkeleton(prev);
-      return [...base, { kind: "thinking_skeleton", id: newId() }];
+      const spNew = stampStreamPhase(ctx);
+      // Empty streaming assistant so `assistant_delta` / `reasoning_delta` merge into the same
+      // “Thinking” bubble (thinking_skeleton never received stream text, so users only saw copy).
+      return [
+        ...base,
+        {
+          kind: "assistant",
+          id: newId(),
+          text: "",
+          streaming: true,
+          streamTextRole: "content",
+          ...(spNew ? { streamPhase: spNew } : {}),
+        },
+      ];
     }
     return [...prev, { kind: "phase", id: newId(), round, phase }];
   }
@@ -426,8 +455,6 @@ export function applyStreamEvent(
     }
     const spFallback = stampStreamPhase(ctx);
     const laneFallback = computeAssistantUiLane(spFallback, fr);
-    // Keep `thinking_skeleton` so the user still sees “Thinking” until `tool_call` when the model
-    // emits no visible text before tools.
     return [
       ...prev,
       {
@@ -449,7 +476,9 @@ export function applyStreamEvent(
     const iraw = ev.internal_rationale;
     const internal_rationale =
       typeof iraw === "string" && iraw.trim() ? iraw.trim() : undefined;
-    const base = withoutThinkingSkeleton(prev);
+    const base = dropTrailingEmptyStreamingAssistant(
+      withoutThinkingSkeleton(prev),
+    );
     return [
       ...base,
       {

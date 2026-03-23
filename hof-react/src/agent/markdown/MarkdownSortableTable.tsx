@@ -123,7 +123,7 @@ export function MarkdownSortableTable({
             sortedBody.map((row, ri) => (
               <tr
                 key={ri}
-                className="border-b border-border/60 bg-background transition-colors last:border-b-0 hover:bg-hover/80"
+                className="border-b border-border/60 bg-transparent transition-colors last:border-b-0 hover:bg-hover/55"
               >
                 {row.map((cell, ci) => (
                   <td

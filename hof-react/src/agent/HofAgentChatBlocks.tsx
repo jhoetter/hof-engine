@@ -1,11 +1,18 @@
 "use client";
 
-import { ChevronRight, Terminal } from "lucide-react";
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { Braces, ChevronRight, Terminal } from "lucide-react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { FunctionResultDisplay } from "./FunctionResultDisplay";
 import {
-  CHAT_ASSISTANT_PRE_TOOL_CONTENT_CLASS,
+  AGENT_CHAT_COLUMN_CLASS,
   CHAT_ASSISTANT_REPLY_BUBBLE_CLASS,
   TOOL_SECTION_LABEL_CLASS,
   assistantUiRole,
@@ -18,21 +25,94 @@ import {
   postToolAssistantBlockIds,
   segmentLiveBlocks,
   showProposedActionsLabel,
-  toolCallArgsSnippet,
+  toolArgumentsAreEffectivelyEmpty,
   toolCallCliLine,
   toolGroupSummaryLine,
+  TOOL_INPUT_LABEL_CLASS,
   mergeAdjacentContentSegments,
   mergeAdjacentReasoningSegments,
 } from "./hofAgentChatModel";
 import type {
   ApprovalBarrier,
   AssistantStreamSegment,
-  BlockSegment,
   LiveBlock,
   MutationPendingBlock,
   ToolCallBlock,
   ToolResultBlock,
 } from "./hofAgentChatModel";
+
+function formatToolJsonForDialog(raw: string): string {
+  const t = raw.trim();
+  if (!t) {
+    return "";
+  }
+  try {
+    return JSON.stringify(JSON.parse(t) as unknown, null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+function ToolInputWithJsonDialog({
+  cliLine,
+  argumentsStr,
+}: {
+  cliLine: string;
+  argumentsStr?: string;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const showJsonBtn =
+    argumentsStr != null && !toolArgumentsAreEffectivelyEmpty(argumentsStr);
+  const formatted = argumentsStr ? formatToolJsonForDialog(argumentsStr) : "";
+
+  return (
+    <div>
+      <div className={TOOL_INPUT_LABEL_CLASS}>Input</div>
+      <div className="flex min-h-[2.25rem] items-stretch overflow-hidden rounded-lg border border-border/60 bg-background/80">
+        <pre className="max-h-32 min-h-0 min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-all px-2.5 py-2 font-mono text-[10px] leading-snug text-secondary">
+          {cliLine}
+        </pre>
+        {showJsonBtn ? (
+          <div className="flex shrink-0 border-l border-border/60 bg-surface/30">
+            <button
+              type="button"
+              className="flex items-center justify-center px-2.5 py-2 text-tertiary transition-colors hover:bg-hover hover:text-foreground"
+              aria-label="View JSON input"
+              onClick={() => dialogRef.current?.showModal()}
+            >
+              <Braces className="size-4 shrink-0" strokeWidth={2} aria-hidden />
+            </button>
+          </div>
+        ) : null}
+      </div>
+      <dialog
+        ref={dialogRef}
+        className="fixed top-1/2 left-1/2 z-50 w-[min(100vw-2rem,36rem)] max-h-[min(90vh,32rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-background p-0 text-foreground shadow-lg backdrop:bg-black/40"
+        onMouseDown={(e) => {
+          if (e.target === dialogRef.current) {
+            dialogRef.current.close();
+          }
+        }}
+      >
+        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+          <span className="text-sm font-medium text-foreground">
+            JSON input
+          </span>
+          <button
+            type="button"
+            className="rounded-md px-2 py-1 text-xs text-secondary hover:bg-hover hover:text-foreground"
+            onClick={() => dialogRef.current?.close()}
+          >
+            Close
+          </button>
+        </div>
+        <pre className="max-h-[min(70vh,24rem)] overflow-auto whitespace-pre-wrap break-all p-3 font-mono text-[11px] leading-snug text-secondary">
+          {formatted}
+        </pre>
+      </dialog>
+    </div>
+  );
+}
 
 export function ToolGroupCard({
   call,
@@ -51,7 +131,11 @@ export function ToolGroupCard({
   mutation?: MutationPendingBlock;
   result?: ToolResultBlock;
   showApproval: boolean;
-  approvalItemsForMutation: { pendingId: string; name: string; cli_line: string }[];
+  approvalItemsForMutation: {
+    pendingId: string;
+    name: string;
+    cli_line: string;
+  }[];
   approvalDecisions: Record<string, boolean | null>;
   setApprovalDecisions: Dispatch<
     SetStateAction<Record<string, boolean | null>>
@@ -64,7 +148,6 @@ export function ToolGroupCard({
 }) {
   const title = humanizeToolName(call.name);
   const line = toolCallCliLine(call);
-  const argsBlock = toolCallArgsSnippet(call);
   const summaryHint: string | null =
     mutation && mutationOutcome !== undefined
       ? `${title} · ${mutationOutcome ? "Approved" : "Rejected"}`
@@ -72,15 +155,10 @@ export function ToolGroupCard({
   const cmd = mutation
     ? mutation.cli_line || mutation.arguments_preview || ""
     : "";
-  const cmdDupOfLine =
-    Boolean(cmd.trim()) && cmd.trim() === line.trim();
-  const hideGenericResult =
-    Boolean(mutation && result && isGenericAwaitingConfirmationSummary(result.summary));
-  const argsNorm = argsBlock?.replace(/\s+/g, "") ?? "";
-  const argsRedundantWithLine =
-    Boolean(argsBlock && line) &&
-    argsNorm.length > 0 &&
-    line.replace(/\s+/g, "").includes(argsNorm.slice(0, 48));
+  const cmdDupOfLine = Boolean(cmd.trim()) && cmd.trim() === line.trim();
+  const hideGenericResult = Boolean(
+    mutation && result && isGenericAwaitingConfirmationSummary(result.summary),
+  );
 
   const [detailsOpen, setDetailsOpen] = useState(false);
   useEffect(() => {
@@ -90,11 +168,11 @@ export function ToolGroupCard({
   }, [showApproval]);
 
   return (
-    <div id={anchorId} className="scroll-mt-4">
+    <div id={anchorId} className={`${AGENT_CHAT_COLUMN_CLASS} scroll-mt-4`}>
       <details
         open={detailsOpen}
         onToggle={(e) => setDetailsOpen(e.currentTarget.open)}
-        className="group rounded-lg border border-border bg-surface/40 [&_summary::-webkit-details-marker]:hidden"
+        className="group w-full rounded-lg border border-border bg-surface/40 [&_summary::-webkit-details-marker]:hidden"
       >
         <summary className="flex cursor-pointer list-none items-start gap-2 px-3 py-2.5 text-[12px] leading-snug transition-colors hover:bg-hover/50">
           <ChevronRight
@@ -121,23 +199,15 @@ export function ToolGroupCard({
           </div>
         </summary>
         <div className="space-y-3 border-t border-border/60 px-3 py-3">
-          <div>
-            <div className={TOOL_SECTION_LABEL_CLASS}>Input · CLI</div>
-            <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border/60 bg-background/80 px-2.5 py-2 font-mono text-[10px] leading-snug text-secondary">
-              {line}
-            </pre>
-          </div>
-          {argsBlock && !argsRedundantWithLine ? (
-            <div>
-              <div className={TOOL_SECTION_LABEL_CLASS}>Input · JSON</div>
-              <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border/60 bg-background/80 px-2.5 py-2 font-mono text-[10px] text-tertiary">
-                {argsBlock}
-              </pre>
-            </div>
-          ) : null}
+          <ToolInputWithJsonDialog
+            cliLine={line}
+            argumentsStr={call.arguments}
+          />
           {mutation ? (
             <div className="rounded-lg border border-[color:color-mix(in_srgb,var(--color-accent)_35%,var(--color-border))] bg-[color:color-mix(in_srgb,var(--color-accent)_6%,transparent)] px-2.5 py-2 text-[11px] leading-snug">
-              <div className={TOOL_SECTION_LABEL_CLASS}>Confirmation · status</div>
+              <div className={TOOL_SECTION_LABEL_CLASS}>
+                Confirmation · status
+              </div>
               {mutationOutcome === true ? (
                 <p className="text-[11px] font-semibold text-foreground">
                   You approved this action — it was applied when you continued.
@@ -166,8 +236,7 @@ export function ToolGroupCard({
               ) : null}
             </div>
           ) : null}
-          {result &&
-          (result.data !== undefined || !hideGenericResult) ? (
+          {result && (result.data !== undefined || !hideGenericResult) ? (
             <div className="text-[11px] leading-snug">
               <div className={TOOL_SECTION_LABEL_CLASS}>Output · result</div>
               {result.data !== undefined ? (
@@ -362,11 +431,6 @@ export function RunBlocksList({
   }
 
   const postToolAssistantIds = postToolAssistantBlockIds(blocks);
-  const assistantIdsInOrder = blocks
-    .filter((x): x is Extract<LiveBlock, { kind: "assistant" }> => x.kind === "assistant")
-    .map((x) => x.id);
-  const preToolFirstAssistantId =
-    assistantIdsInOrder.length >= 2 ? assistantIdsInOrder[0] : null;
 
   return (
     <div className="space-y-3">
@@ -375,10 +439,8 @@ export function RunBlocksList({
           const pid = seg.mutation?.pending_id?.trim() ?? "";
           const showApproval = Boolean(
             activeBarrierForRun &&
-              pid &&
-              activeBarrierForRun.items.some(
-                (it) => it.pendingId.trim() === pid,
-              ),
+            pid &&
+            activeBarrierForRun.items.some((it) => it.pendingId.trim() === pid),
           );
           const approvalItemsForMutation =
             showApproval && activeBarrierForRun
@@ -390,8 +452,7 @@ export function RunBlocksList({
             showApproval && seg.key === firstPendingToolKey
               ? "hof-agent-pending-confirmation"
               : undefined;
-          const showBusyFooter =
-            showApproval && seg.key === lastPendingToolKey;
+          const showBusyFooter = showApproval && seg.key === lastPendingToolKey;
           const mutationOutcome =
             pid !== "" ? mutationOutcomeByPendingId[pid] : undefined;
           const proposedLabel = showProposedActionsLabel(
@@ -443,8 +504,8 @@ export function RunBlocksList({
             >
               {activeBarrier ? (
                 <p>
-                  The assistant continues after you have chosen Approve or Reject
-                  for each pending action above.
+                  The assistant continues after you have chosen Approve or
+                  Reject for each pending action above.
                 </p>
               ) : (
                 <p>{footerDone}</p>
@@ -457,73 +518,9 @@ export function RunBlocksList({
             key={b.id}
             b={b}
             afterToolResult={postToolAssistantIds.has(b.id)}
-            preToolPlanningForContent={
-              b.kind === "assistant" &&
-              preToolFirstAssistantId !== null &&
-              b.id === preToolFirstAssistantId
-            }
           />
         );
       })}
-    </div>
-  );
-}
-
-/** Shared shell for `streamPhase === "model"`: optional Thinking chrome + streaming markdown. */
-function AssistantModelStreamShell({
-  streamText,
-  streamTextRole,
-  replyBubbleClass,
-  bodyClassName,
-  emptyLabel,
-}: {
-  streamText: string;
-  streamTextRole: "content" | "reasoning" | "mixed" | undefined;
-  replyBubbleClass: string;
-  /** When set, used for the streaming markdown card (pre-tool plan styling). */
-  bodyClassName?: string;
-  emptyLabel: string;
-}) {
-  const hasStreamText = streamText.trim().length > 0;
-  if (streamTextRole === "reasoning") {
-    return (
-      <ReasoningCollapsible text={streamText} streaming={true} />
-    );
-  }
-  if (!hasStreamText) {
-    return (
-      <div
-        className="max-w-[min(100%,42rem)] flex items-center gap-1.5 py-0.5"
-        aria-busy="true"
-        aria-label={emptyLabel || "Assistant is working"}
-      >
-        <span
-          className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
-          aria-hidden
-        />
-        <span className="inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
-      </div>
-    );
-  }
-  const bodyClass = bodyClassName ?? replyBubbleClass;
-  return (
-    <div className="max-w-[min(100%,42rem)] space-y-1.5">
-      <div
-        className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-tertiary"
-        aria-live="polite"
-      >
-        <span
-          className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
-          aria-hidden
-        />
-        Thinking
-      </div>
-      <div
-        className={`${bodyClass} transition-opacity duration-200 opacity-[0.88]`}
-      >
-        <AssistantMarkdown source={streamText} />
-        <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
-      </div>
     </div>
   );
 }
@@ -577,49 +574,120 @@ function sanitizeReasoningText(raw: string): string {
   return s.trim();
 }
 
-export function ReasoningCollapsible({
+function ReasoningStreamPeek({
   text,
   streaming,
 }: {
   text: string;
   streaming: boolean;
 }) {
-  const [open, setOpen] = useState(
-    () => streaming || text.trim().length > 0,
-  );
-
-  useEffect(() => {
-    if (streaming) {
-      setOpen(true);
-    }
-  }, [streaming]);
-
+  const [expanded, setExpanded] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const clean = sanitizeReasoningText(text);
+
+  useLayoutEffect(() => {
+    if (expanded) {
+      return;
+    }
+    const el = bodyRef.current;
+    if (!el) {
+      return;
+    }
+    el.scrollTop = el.scrollHeight;
+  }, [clean, streaming, expanded]);
 
   if (!clean && !streaming) {
     return null;
   }
 
+  const canToggle = clean.trim().length > 0;
+  const bodyClass =
+    "font-sans text-[12px] leading-relaxed break-words whitespace-pre-wrap text-secondary";
+
   return (
-    <details
-      className="max-w-[min(100%,42rem)] [&[open]>summary_svg]:rotate-90"
-      open={open}
-      onToggle={(e) => setOpen(e.currentTarget.open)}
+    <div
+      className={`${AGENT_CHAT_COLUMN_CLASS} rounded-lg bg-hover/50 px-3 py-2 font-sans`}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-1 py-0.5 text-[10px] text-tertiary marker:content-none [&::-webkit-details-marker]:hidden">
-        <ChevronRight
-          className="size-3 shrink-0 text-tertiary transition-transform duration-150"
-          aria-hidden
-        />
-        <span className="font-medium uppercase tracking-wide">Thinking</span>
-      </summary>
-      <div className="border-l border-border/70 pl-2.5 pt-1 pb-0.5 text-[11px] leading-snug text-secondary whitespace-pre-line">
-        {clean || null}
-        {streaming ? (
-          <span className="ml-0.5 inline-block h-3 w-px animate-pulse bg-[var(--color-accent)] align-middle" />
+      <div className="mb-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span
+          className="text-[11px] font-medium text-tertiary"
+          aria-live="polite"
+        >
+          Thinking
+        </span>
+        {canToggle ? (
+          <button
+            type="button"
+            className="text-[11px] text-tertiary underline-offset-2 hover:text-foreground hover:underline"
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? "Show less" : "Show full"}
+          </button>
         ) : null}
       </div>
-    </details>
+      <div
+        ref={bodyRef}
+        className={
+          expanded
+            ? `max-h-52 overflow-y-auto ${bodyClass}`
+            : `max-h-12 overflow-x-hidden overflow-y-auto py-0.5 ${bodyClass}`
+        }
+        aria-live="polite"
+      >
+        {clean || (streaming ? "\u200b" : null)}
+        {streaming ? (
+          <span
+            className="ml-px inline-block h-[0.9em] w-px animate-pulse bg-foreground/35 align-middle"
+            aria-hidden
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Shared shell for `streamPhase === "model"`: reasoning stream vs content bubble (no mislabeled “Thinking”). */
+function AssistantModelStreamShell({
+  streamText,
+  streamTextRole,
+  replyBubbleClass,
+  bodyClassName,
+  emptyLabel,
+}: {
+  streamText: string;
+  streamTextRole: "content" | "reasoning" | "mixed" | undefined;
+  replyBubbleClass: string;
+  /** Optional override for the streaming markdown wrapper (defaults to ``replyBubbleClass``). */
+  bodyClassName?: string;
+  emptyLabel: string;
+}) {
+  const hasStreamText = streamText.trim().length > 0;
+  if (streamTextRole === "reasoning") {
+    return <ReasoningStreamPeek text={streamText} streaming />;
+  }
+  if (!hasStreamText) {
+    return (
+      <div
+        className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center gap-1.5 py-0.5`}
+        aria-busy="true"
+        aria-label={emptyLabel || "Assistant is working"}
+      >
+        <span
+          className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+          aria-hidden
+        />
+        <span className="inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+      </div>
+    );
+  }
+  const bodyClass = bodyClassName ?? replyBubbleClass;
+  return (
+    <div className={AGENT_CHAT_COLUMN_CLASS}>
+      <div className={bodyClass}>
+        <AssistantMarkdown source={streamText} />
+        <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+      </div>
+    </div>
   );
 }
 
@@ -630,6 +698,7 @@ function AssistantSegmentedBody({
   replyBubbleClass,
   contentBubbleClass,
   emptyLabel,
+  assistantUiLane,
 }: {
   segments: AssistantStreamSegment[];
   streaming: boolean;
@@ -637,19 +706,35 @@ function AssistantSegmentedBody({
   /** CSS class for ``content`` segments; defaults to ``replyBubbleClass``. */
   contentBubbleClass?: string;
   emptyLabel: string;
+  /** Finalized lane: when ``reply`` and segments are reasoning-only, render as chat bubble (not peek). */
+  assistantUiLane: "thinking" | "reply";
 }) {
   const contentClass = contentBubbleClass ?? replyBubbleClass;
   const merged = mergeAdjacentContentSegments(
     mergeAdjacentReasoningSegments(segments),
   );
+  const onlyReasoning =
+    merged.length > 0 && merged.every((s) => s.kind === "reasoning");
+  const reasoningAsReplyBubble =
+    onlyReasoning && assistantUiLane === "reply" && !streaming;
   return (
-    <div className="max-w-[min(100%,42rem)] space-y-3">
+    <div className={`${AGENT_CHAT_COLUMN_CLASS} space-y-3`}>
       {merged.map((s, i) => {
         const isLast = i === merged.length - 1;
         const pulse = streaming && isLast;
         if (s.kind === "reasoning") {
+          if (reasoningAsReplyBubble) {
+            return (
+              <div key={`seg-r-${i}`} className={contentClass}>
+                <AssistantMarkdown source={s.text} />
+                {pulse ? (
+                  <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+                ) : null}
+              </div>
+            );
+          }
           return (
-            <ReasoningCollapsible
+            <ReasoningStreamPeek
               key={`seg-r-${i}`}
               text={s.text}
               streaming={pulse}
@@ -663,7 +748,7 @@ function AssistantSegmentedBody({
           return (
             <div
               key={`seg-c-${i}`}
-              className="max-w-[min(100%,42rem)] flex items-center gap-1.5 py-0.5"
+              className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center gap-1.5 py-0.5`}
               aria-busy="true"
               aria-label={emptyLabel || "Assistant is drafting"}
             >
@@ -691,39 +776,24 @@ function AssistantSegmentedBody({
 export function LiveBlockView({
   b,
   afterToolResult = false,
-  preToolPlanningForContent = false,
 }: {
   b: LiveBlock;
   afterToolResult?: boolean;
-  /**
-   * When this run has multiple assistant blocks, the first is pre-tool planning; render its
-   * ``content`` stream segments with a muted style so the post-tool reply stays the only
-   * primary answer bubble.
-   */
-  preToolPlanningForContent?: boolean;
 }) {
   if (b.kind === "thinking_skeleton") {
-    const replyBubbleClass = CHAT_ASSISTANT_REPLY_BUBBLE_CLASS;
     return (
       <div
-        className="max-w-[min(100%,42rem)] space-y-1.5"
+        className={`${AGENT_CHAT_COLUMN_CLASS} rounded-lg bg-hover/50 px-3 py-2 font-sans`}
         aria-busy="true"
         aria-label="Assistant is thinking"
       >
-        <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-tertiary">
+        <div className="text-[11px] font-medium text-tertiary">Thinking</div>
+        <div className="mt-1 flex items-center gap-1.5 text-[12px] leading-relaxed text-secondary">
+          <span>Working through your request…</span>
           <span
-            className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+            className="inline-block h-[0.9em] w-px animate-pulse bg-foreground/35 align-middle"
             aria-hidden
           />
-          Thinking
-        </div>
-        <div
-          className={`${replyBubbleClass} transition-opacity duration-200 opacity-[0.88]`}
-        >
-          <span className="text-[11px] leading-snug text-secondary">
-            Working through your request…
-          </span>
-          <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
         </div>
       </div>
     );
@@ -733,19 +803,7 @@ export function LiveBlockView({
       return null;
     }
     if (b.phase === "tools") {
-      return (
-        <div
-          className="flex items-center gap-1.5 border-l-2 border-border pl-3 text-[11px] leading-snug text-tertiary"
-          aria-busy="true"
-          aria-label="Running tools"
-        >
-          <span
-            className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
-            aria-hidden
-          />
-          Running tools…
-        </div>
-      );
+      return null;
     }
     if (b.phase === "model") {
       return (
@@ -762,9 +820,6 @@ export function LiveBlockView({
   }
   if (b.kind === "assistant") {
     const replyBubbleClass = CHAT_ASSISTANT_REPLY_BUBBLE_CLASS;
-    const contentBubbleClass = preToolPlanningForContent
-      ? CHAT_ASSISTANT_PRE_TOOL_CONTENT_CLASS
-      : replyBubbleClass;
     const lane = inferAssistantUiLane(b);
     const isSummary = b.streamPhase === "summary";
     const isModel = b.streamPhase === "model";
@@ -785,7 +840,8 @@ export function LiveBlockView({
                 segments={streamSegs}
                 streaming
                 replyBubbleClass={replyBubbleClass}
-                contentBubbleClass={contentBubbleClass}
+                contentBubbleClass={replyBubbleClass}
+                assistantUiLane={lane}
                 emptyLabel=""
               />
             );
@@ -793,7 +849,7 @@ export function LiveBlockView({
           if (!hasStreamText) {
             return (
               <div
-                className="max-w-[min(100%,42rem)] flex items-center gap-1.5 py-0.5"
+                className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center gap-1.5 py-0.5`}
                 aria-busy="true"
                 aria-label="Assistant is drafting"
               >
@@ -818,7 +874,8 @@ export function LiveBlockView({
               segments={streamSegs}
               streaming
               replyBubbleClass={replyBubbleClass}
-              contentBubbleClass={contentBubbleClass}
+              contentBubbleClass={replyBubbleClass}
+              assistantUiLane={lane}
               emptyLabel="Drafting the answer…"
             />
           );
@@ -828,7 +885,6 @@ export function LiveBlockView({
             streamText={streamText}
             streamTextRole={b.streamTextRole}
             replyBubbleClass={replyBubbleClass}
-            bodyClassName={preToolPlanningForContent ? contentBubbleClass : undefined}
             emptyLabel="Drafting the answer…"
           />
         );
@@ -842,7 +898,8 @@ export function LiveBlockView({
             segments={streamSegs}
             streaming={false}
             replyBubbleClass={replyBubbleClass}
-            contentBubbleClass={contentBubbleClass}
+            contentBubbleClass={replyBubbleClass}
+            assistantUiLane={lane}
             emptyLabel=""
           />
         );
@@ -865,7 +922,8 @@ export function LiveBlockView({
             segments={streamSegs}
             streaming
             replyBubbleClass={replyBubbleClass}
-            contentBubbleClass={contentBubbleClass}
+            contentBubbleClass={replyBubbleClass}
+            assistantUiLane={lane}
             emptyLabel="Tools may run before any reply text appears."
           />
         );
@@ -875,7 +933,6 @@ export function LiveBlockView({
           streamText={b.text}
           streamTextRole={b.streamTextRole}
           replyBubbleClass={replyBubbleClass}
-          bodyClassName={preToolPlanningForContent ? contentBubbleClass : undefined}
           emptyLabel="Tools may run before any reply text appears."
         />
       );
@@ -885,8 +942,11 @@ export function LiveBlockView({
       if (streamSegs) {
         if (!anySegText) {
           return (
-            <div className="max-w-[min(100%,42rem)] border-l-2 border-border pl-3 text-[11px] leading-snug text-tertiary">
-              No visible plan text before tools (normal for many models). See tool steps below.
+            <div
+              className={`${AGENT_CHAT_COLUMN_CLASS} border-l-2 border-border pl-3 text-[11px] leading-snug text-tertiary`}
+            >
+              No visible plan text before tools (normal for many models). See
+              tool steps below.
             </div>
           );
         }
@@ -895,7 +955,8 @@ export function LiveBlockView({
             segments={streamSegs}
             streaming={false}
             replyBubbleClass={replyBubbleClass}
-            contentBubbleClass={contentBubbleClass}
+            contentBubbleClass={replyBubbleClass}
+            assistantUiLane={lane}
             emptyLabel=""
           />
         );
@@ -903,12 +964,15 @@ export function LiveBlockView({
       const t = b.text.trim();
       if (!t) {
         return (
-          <div className="max-w-[min(100%,42rem)] border-l-2 border-border pl-3 text-[11px] leading-snug text-tertiary">
-            No visible plan text before tools (normal for many models). See tool steps below.
+          <div
+            className={`${AGENT_CHAT_COLUMN_CLASS} border-l-2 border-border pl-3 text-[11px] leading-snug text-tertiary`}
+          >
+            No visible plan text before tools (normal for many models). See tool
+            steps below.
           </div>
         );
       }
-      return <ReasoningCollapsible text={b.text} streaming={false} />;
+      return <ReasoningStreamPeek text={b.text} streaming={false} />;
     }
 
     if (isModel && !b.streaming && lane === "reply") {
@@ -918,7 +982,8 @@ export function LiveBlockView({
             segments={streamSegs}
             streaming={false}
             replyBubbleClass={replyBubbleClass}
-            contentBubbleClass={contentBubbleClass}
+            contentBubbleClass={replyBubbleClass}
+            assistantUiLane={lane}
             emptyLabel=""
           />
         );
@@ -942,12 +1007,13 @@ export function LiveBlockView({
             segments={streamSegs}
             streaming={false}
             replyBubbleClass={replyBubbleClass}
-            contentBubbleClass={contentBubbleClass}
+            contentBubbleClass={replyBubbleClass}
+            assistantUiLane={lane}
             emptyLabel=""
           />
         );
       }
-      return <ReasoningCollapsible text={b.text} streaming={false} />;
+      return <ReasoningStreamPeek text={b.text} streaming={false} />;
     }
 
     if (b.streaming) {
@@ -957,7 +1023,8 @@ export function LiveBlockView({
             segments={streamSegs}
             streaming
             replyBubbleClass={replyBubbleClass}
-            contentBubbleClass={contentBubbleClass}
+            contentBubbleClass={replyBubbleClass}
+            assistantUiLane={lane}
             emptyLabel="Waiting for the model…"
           />
         );
@@ -967,7 +1034,6 @@ export function LiveBlockView({
           streamText={b.text}
           streamTextRole={b.streamTextRole}
           replyBubbleClass={replyBubbleClass}
-          bodyClassName={preToolPlanningForContent ? contentBubbleClass : undefined}
           emptyLabel="Waiting for the model…"
         />
       );
@@ -979,7 +1045,8 @@ export function LiveBlockView({
           segments={streamSegs}
           streaming={false}
           replyBubbleClass={replyBubbleClass}
-          contentBubbleClass={contentBubbleClass}
+          contentBubbleClass={replyBubbleClass}
+          assistantUiLane={lane}
           emptyLabel=""
         />
       );
@@ -999,29 +1066,17 @@ export function LiveBlockView({
   if (b.kind === "tool_call") {
     const title = humanizeToolName(b.name);
     const line = toolCallCliLine(b);
-    const argsBlock = toolCallArgsSnippet(b);
     return (
-      <div className="flex gap-2.5 text-[12px] leading-snug">
+      <div
+        className={`${AGENT_CHAT_COLUMN_CLASS} flex gap-2.5 text-[12px] leading-snug`}
+      >
         <Terminal
           className="mt-0.5 size-3.5 shrink-0 text-[var(--color-accent)] opacity-80"
           aria-hidden
         />
         <div className="min-w-0 flex-1 space-y-2">
           <div className="font-medium text-foreground">{title}</div>
-          <div>
-            <div className={TOOL_SECTION_LABEL_CLASS}>Input · CLI</div>
-            <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border/60 bg-background/80 px-2.5 py-2 font-mono text-[10px] leading-snug text-secondary">
-              {line}
-            </pre>
-          </div>
-          {argsBlock ? (
-            <div>
-              <div className={TOOL_SECTION_LABEL_CLASS}>Input · JSON</div>
-              <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border/60 bg-background/80 px-2.5 py-2 font-mono text-[10px] text-tertiary">
-                {argsBlock}
-              </pre>
-            </div>
-          ) : null}
+          <ToolInputWithJsonDialog cliLine={line} argumentsStr={b.arguments} />
         </div>
       </div>
     );
@@ -1029,12 +1084,14 @@ export function LiveBlockView({
   if (b.kind === "tool_result") {
     const title = humanizeToolName(b.name);
     return (
-      <div className="flex gap-2.5 pl-0.5 text-[12px] leading-snug">
+      <div
+        className={`${AGENT_CHAT_COLUMN_CLASS} flex gap-2.5 pl-0.5 text-[12px] leading-snug`}
+      >
         <span
           className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[var(--color-accent)] opacity-70"
           aria-hidden
         />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <span className="font-medium text-foreground">{title}</span>
           <div className="mt-1">
             <div className={TOOL_SECTION_LABEL_CLASS}>Output · result</div>
@@ -1054,7 +1111,9 @@ export function LiveBlockView({
     const title = humanizeToolName(b.name);
     const cmd = b.cli_line || b.arguments_preview || "";
     return (
-      <div className="rounded-xl border border-[color:color-mix(in_srgb,var(--color-accent)_35%,var(--color-border))] bg-[color:color-mix(in_srgb,var(--color-accent)_6%,transparent)] px-3 py-2.5 text-[12px] leading-snug">
+      <div
+        className={`${AGENT_CHAT_COLUMN_CLASS} rounded-xl border border-[color:color-mix(in_srgb,var(--color-accent)_35%,var(--color-border))] bg-[color:color-mix(in_srgb,var(--color-accent)_6%,transparent)] px-3 py-2.5 text-[12px] leading-snug`}
+      >
         <div className="font-medium text-foreground">
           Awaiting your approval · {title}
         </div>

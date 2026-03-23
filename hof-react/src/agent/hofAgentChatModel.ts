@@ -95,7 +95,9 @@ export type ThreadItem =
     }
   | { kind: "run"; id: string; blocks: LiveBlock[] };
 
-export function collectThreadAttachments(items: ThreadItem[]): AgentAttachment[] {
+export function collectThreadAttachments(
+  items: ThreadItem[],
+): AgentAttachment[] {
   const seen = new Set<string>();
   const out: AgentAttachment[] = [];
   for (const it of items) {
@@ -118,20 +120,25 @@ export function newId(): string {
 }
 
 /**
- * Chat bubbles use Tailwind theme radii from app.css `@theme` (`rounded-lg` → `--radius-lg` →
- * `--hof-radius-*` in the active design-system bundle). Avoid ad-hoc radii so tokens control shape.
+ * User messages: filled bubble. Assistant replies: plain prose wrapper (no bg/border — one style
+ * for pre-tool and post-tool). Radii for user bubble come from app `@theme` / design-system.
  */
 export const CHAT_USER_BUBBLE_CLASS =
   "max-w-full rounded-lg bg-hover px-4 py-2.5 text-sm leading-relaxed text-foreground";
-export const CHAT_ASSISTANT_REPLY_BUBBLE_CLASS =
-  "max-w-[min(100%,42rem)] rounded-lg bg-hover/70 px-4 py-2.5 text-sm leading-relaxed text-foreground";
 
-/** Muted prose for pre-tool visible plan (policy: sentence before tools) — not a second “answer” bubble. */
-export const CHAT_ASSISTANT_PRE_TOOL_CONTENT_CLASS =
-  "max-w-[min(100%,42rem)] rounded-md bg-hover/40 px-3 py-2 text-[13px] leading-relaxed text-secondary";
+/** Same horizontal rail as thinking, tool cards, and assistant text (avoids mixed widths). */
+export const AGENT_CHAT_COLUMN_CLASS =
+  "w-full max-w-[min(100%,42rem)]";
+
+export const CHAT_ASSISTANT_REPLY_BUBBLE_CLASS =
+  `${AGENT_CHAT_COLUMN_CLASS} text-sm leading-relaxed text-foreground`;
 
 export const TOOL_SECTION_LABEL_CLASS =
   "mb-1 text-[10px] font-medium uppercase tracking-wide text-tertiary";
+
+/** Sentence-case label for tool CLI + JSON input row (not all-caps). */
+export const TOOL_INPUT_LABEL_CLASS =
+  "mb-1 text-[10px] font-medium text-tertiary";
 
 /** First name (or email local-part) for welcome line; falls back when profile is minimal. */
 /** snake_case API name → readable label */
@@ -148,7 +155,10 @@ export function humanizeToolName(name: string): string {
 }
 
 /** User bubble body: raw ``content`` only (attachments render as chips separately). */
-export function userMessageDisplayText(content: string, _hasAttachments: boolean): string {
+export function userMessageDisplayText(
+  content: string,
+  _hasAttachments: boolean,
+): string {
   return content.trim();
 }
 
@@ -163,7 +173,9 @@ export function coerceRunId(value: unknown): string {
   return "";
 }
 
-export function toolResultAwaitingUserConfirmation(blocks: LiveBlock[]): boolean {
+export function toolResultAwaitingUserConfirmation(
+  blocks: LiveBlock[],
+): boolean {
   return blocks.some((b) => {
     if (b.kind !== "tool_result") {
       return false;
@@ -261,7 +273,7 @@ function mergeStreamTextRole(
   incoming: "content" | "reasoning",
 ): "content" | "reasoning" | "mixed" {
   // `phase: model` creates an empty streaming row without a role so the first
-  // `reasoning_delta` maps to `reasoning` (ReasoningCollapsible), not `mixed`.
+  // `reasoning_delta` maps to `reasoning` (ReasoningStreamPeek), not `mixed`.
   if (prior === undefined) {
     return incoming;
   }
@@ -276,17 +288,9 @@ function mergeStreamTextRole(
 
 /** Lane when finalizing a streaming assistant block (`assistant_done`). */
 function assistantDoneUiLane(
-  last: Extract<LiveBlock, { kind: "assistant" }>,
   finishReason: string | undefined,
   streamPhase: "model" | "summary" | undefined,
 ): "thinking" | "reply" {
-  if (
-    last.streamTextRole === "reasoning" &&
-    finishReason === "stop" &&
-    streamPhase !== "summary"
-  ) {
-    return "thinking";
-  }
   return computeAssistantUiLane(streamPhase, finishReason);
 }
 
@@ -294,14 +298,15 @@ export function inferAssistantUiLane(
   b: Extract<LiveBlock, { kind: "assistant" }>,
 ): "thinking" | "reply" {
   if (b.uiLane === "thinking" || b.uiLane === "reply") {
+    // Older clients stamped reasoning-channel + `stop` as `thinking`; that prose is the visible reply.
+    if (
+      b.uiLane === "thinking" &&
+      b.finishReason === "stop" &&
+      b.streamPhase !== "summary"
+    ) {
+      return "reply";
+    }
     return b.uiLane;
-  }
-  if (
-    b.streamTextRole === "reasoning" &&
-    b.finishReason === "stop" &&
-    b.streamPhase !== "summary"
-  ) {
-    return "thinking";
   }
   return computeAssistantUiLane(b.streamPhase, b.finishReason);
 }
@@ -316,11 +321,7 @@ function dropTrailingEmptyStreamingAssistant(blocks: LiveBlock[]): LiveBlock[] {
     return blocks;
   }
   const last = blocks[blocks.length - 1];
-  if (
-    last.kind === "assistant" &&
-    last.streaming &&
-    last.text.trim() === ""
-  ) {
+  if (last.kind === "assistant" && last.streaming && last.text.trim() === "") {
     return blocks.slice(0, -1);
   }
   return blocks;
@@ -428,7 +429,11 @@ export function applyStreamEvent(
         text: chunk,
         streaming: true,
         streamTextRole: incoming,
-        streamSegments: appendAssistantStreamSegmentChunk(undefined, incoming, chunk),
+        streamSegments: appendAssistantStreamSegmentChunk(
+          undefined,
+          incoming,
+          chunk,
+        ),
         ...(spNew ? { streamPhase: spNew } : {}),
       },
     ];
@@ -478,13 +483,10 @@ export function applyStreamEvent(
           },
         ];
       }
-      const last = trimmed[si] as Extract<
-        LiveBlock,
-        { kind: "assistant" }
-      >;
+      const last = trimmed[si] as Extract<LiveBlock, { kind: "assistant" }>;
       const sp = stampStreamPhase(ctx, last.streamPhase);
       const effPhase = sp ?? last.streamPhase;
-      const lane = assistantDoneUiLane(last, fr, effPhase);
+      const lane = assistantDoneUiLane(fr, effPhase);
       let streamSegmentsOut: AssistantStreamSegment[] | undefined;
       if (last.streamSegments?.length) {
         const n = normalizeAssistantStreamSegments(last.streamSegments);
@@ -605,7 +607,10 @@ export function applyStreamEvent(
 }
 
 export type ToolCallBlock = Extract<LiveBlock, { kind: "tool_call" }>;
-export type MutationPendingBlock = Extract<LiveBlock, { kind: "mutation_pending" }>;
+export type MutationPendingBlock = Extract<
+  LiveBlock,
+  { kind: "mutation_pending" }
+>;
 export type ToolResultBlock = Extract<LiveBlock, { kind: "tool_result" }>;
 
 export type BlockSegment =
@@ -622,7 +627,9 @@ export type BlockSegment =
  * Backend emits `phase: model` before `assistant_*` for each round. The assistant bubble
  * already represents model activity, so keeping both looks like a second stuck "Reasoning…" row.
  */
-export function dropRedundantModelPhaseBeforeAssistant(blocks: LiveBlock[]): LiveBlock[] {
+export function dropRedundantModelPhaseBeforeAssistant(
+  blocks: LiveBlock[],
+): LiveBlock[] {
   const out: LiveBlock[] = [];
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
@@ -659,14 +666,18 @@ export function normalizeAssistantTextForDedupe(s: string): string {
  * Rare stream / multi-round edge cases can yield two completed assistant rows with the same
  * body; the UI would show duplicate reply bubbles. Collapse consecutive duplicates.
  */
-function assistantDedupeFingerprint(b: Extract<LiveBlock, { kind: "assistant" }>): string {
+function assistantDedupeFingerprint(
+  b: Extract<LiveBlock, { kind: "assistant" }>,
+): string {
   if (b.streamSegments?.length) {
     return b.streamSegments.map((s) => s.text).join("\n");
   }
   return b.text;
 }
 
-export function dedupeAdjacentDuplicateAssistants(blocks: LiveBlock[]): LiveBlock[] {
+export function dedupeAdjacentDuplicateAssistants(
+  blocks: LiveBlock[],
+): LiveBlock[] {
   const out: LiveBlock[] = [];
   for (const b of blocks) {
     if (b.kind !== "assistant") {
@@ -678,8 +689,12 @@ export function dedupeAdjacentDuplicateAssistants(blocks: LiveBlock[]): LiveBloc
     if (prev?.kind === "assistant") {
       const pa = prev as Extract<LiveBlock, { kind: "assistant" }>;
       if (!pa.streaming && !cur.streaming) {
-        const a = normalizeAssistantTextForDedupe(assistantDedupeFingerprint(pa));
-        const c = normalizeAssistantTextForDedupe(assistantDedupeFingerprint(cur));
+        const a = normalizeAssistantTextForDedupe(
+          assistantDedupeFingerprint(pa),
+        );
+        const c = normalizeAssistantTextForDedupe(
+          assistantDedupeFingerprint(cur),
+        );
         if (a.length > 0 && a === c) {
           continue;
         }
@@ -693,8 +708,7 @@ export function dedupeAdjacentDuplicateAssistants(blocks: LiveBlock[]): LiveBloc
 /** Drop noisy rows before persisting a completed run to the thread. */
 export function compactBlocksForHistory(blocks: LiveBlock[]): LiveBlock[] {
   const base = dropRedundantModelPhaseBeforeAssistant(blocks).filter(
-    (b) =>
-      !isEphemeralAssistantShell(b) && b.kind !== "thinking_skeleton",
+    (b) => !isEphemeralAssistantShell(b) && b.kind !== "thinking_skeleton",
   );
   return dedupeAdjacentDuplicateAssistants(base);
 }
@@ -763,7 +777,39 @@ export function toolCallArgsSnippet(b: ToolCallBlock): string | null {
   if (!b.arguments || !b.cli_line || b.arguments.length === 0) {
     return null;
   }
-  return b.arguments.length > 600 ? `${b.arguments.slice(0, 600)}…` : b.arguments;
+  return b.arguments.length > 600
+    ? `${b.arguments.slice(0, 600)}…`
+    : b.arguments;
+}
+
+/** True when tool `arguments` is missing, whitespace, or empty `{}` / `[]` (JSON). */
+export function toolArgumentsAreEffectivelyEmpty(
+  argumentsStr: string | undefined | null,
+): boolean {
+  if (argumentsStr == null || !argumentsStr.trim()) {
+    return true;
+  }
+  const t = argumentsStr.trim();
+  if (t === "{}" || t === "[]") {
+    return true;
+  }
+  try {
+    const v = JSON.parse(t) as unknown;
+    if (
+      v !== null &&
+      typeof v === "object" &&
+      !Array.isArray(v) &&
+      Object.keys(v as object).length === 0
+    ) {
+      return true;
+    }
+    if (Array.isArray(v) && v.length === 0) {
+      return true;
+    }
+  } catch {
+    /* non-JSON still counts as non-empty for the dialog affordance */
+  }
+  return false;
 }
 
 export function isGenericAwaitingConfirmationSummary(summary: string): boolean {
@@ -783,7 +829,8 @@ export function toolGroupSummaryLine(
     const s = result.summary.trim();
     if (
       mutation &&
-      (result.pending_confirmation === true || isGenericAwaitingConfirmationSummary(s))
+      (result.pending_confirmation === true ||
+        isGenericAwaitingConfirmationSummary(s))
     ) {
       return null;
     }

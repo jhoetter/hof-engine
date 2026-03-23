@@ -50,7 +50,7 @@ def agent_resume_mutations(run_id: str, resolutions: list) -> dict:
 | `agent_max_model_text_chars` | Legacy JSON trace truncation (default `8000`) |
 | `agent_max_cli_line_chars` | Pseudo-CLI width for UI (default `240`) |
 
-**Dependency:** `llm-markdown[openai]` **0.3.2+** with `OpenAIProvider.stream_chat_completion_events`. The lockfile may pin the Git tag `v0.3.2` until the package is published to PyPI; after publishing, depend on `llm-markdown[openai]>=0.3.2` from PyPI only. The agent requests up to **128_000** completion tokens per turn (high ceiling; the model still enforces its own cap).
+**Dependency:** `llm-markdown[openai]` **0.3.4+** with `OpenAIProvider.stream_chat_completion_events`. The lockfile may pin the Git tag `v0.3.4` until the package is published to PyPI; after publishing, depend on `llm-markdown[openai]>=0.3.4` from PyPI only. The agent requests up to **128_000** completion tokens per turn (high ceiling; the model still enforces its own cap).
 
 **Reasoning / chain-of-thought:** When the OpenAI stream exposes `reasoning_content` (or `reasoning`) on deltas, the server emits NDJSON `reasoning_delta` lines. Clients should treat them like other incremental thinking text (see your app’s `agent-chat-stream.md`).
 

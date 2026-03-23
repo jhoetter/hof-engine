@@ -32,7 +32,7 @@ def publish_computation_event(channel_id: str, event: dict) -> None:
     _publish(channel_id, event)
 
 
-__version__ = "0.1.59"
+__version__ = "0.1.60"
 
 __all__ = [
     "HofApp",

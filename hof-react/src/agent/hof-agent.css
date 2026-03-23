@@ -1,0 +1,13 @@
+/**
+ * Scoped defaults for HofAgentChat. Host apps map design tokens to --color-* (see hof UI theme).
+ * Add this file to your Vite/Tailwind content paths if you import HofAgentChat from source.
+ */
+.hof-agent {
+  box-sizing: border-box;
+}
+
+.hof-agent *,
+.hof-agent *::before,
+.hof-agent *::after {
+  box-sizing: border-box;
+}

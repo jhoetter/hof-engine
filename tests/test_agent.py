@@ -1,0 +1,61 @@
+"""Tests for hof.agent (policy, attachment defaults, stream fold)."""
+
+from __future__ import annotations
+
+from hof.agent.policy import AgentPolicy, configure_agent, get_agent_policy
+from hof.agent.stream import (
+    collect_agent_chat_from_stream,
+    default_normalize_attachments,
+    iter_agent_chat_stream,
+)
+
+
+def test_default_normalize_attachments_accepts_keys() -> None:
+    raw = [{"object_key": "tenant/x.pdf", "filename": "x.pdf"}]
+    out, err = default_normalize_attachments(raw)
+    assert err is None
+    assert out == [{"object_key": "tenant/x.pdf", "filename": "x.pdf"}]
+
+
+def test_default_normalize_attachments_rejects_non_list() -> None:
+    out, err = default_normalize_attachments("nope")
+    assert out == []
+    assert err == "attachments must be a list"
+
+
+def test_configure_and_effective_allowlist() -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset({"a", "b"}),
+            allowlist_mutation=frozenset({"c"}),
+            system_prompt_intro="intro ",
+        )
+    )
+    p = get_agent_policy()
+    assert p.effective_allowlist() == frozenset({"a", "b", "c"})
+
+
+def test_collect_agent_chat_from_stream_final() -> None:
+    def events():
+        yield {"type": "run_start", "run_id": "r1", "model": "m1"}
+        yield {"type": "final", "reply": "hi", "tool_rounds_used": 1, "model": "m1"}
+
+    out = collect_agent_chat_from_stream(events())
+    assert out["reply"] == "hi"
+    assert out["tool_rounds_used"] == 1
+    assert out["model"] == "m1"
+    assert not out.get("error")
+
+
+def test_iter_agent_chat_stream_requires_api_key(monkeypatch) -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+        )
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
+    assert ev and ev[0].get("type") == "error"
+    assert "OPENAI_API_KEY" in str(ev[0].get("detail", ""))

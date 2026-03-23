@@ -80,6 +80,12 @@ class Config:
         llm_provider: Any = None,
         llm_model: str = "",
         llm_api_key: str = "",
+        # Agent (OpenAI tool loop) — see docs/reference/agent.md
+        agent_model: str = "",
+        agent_max_rounds: int = 10,
+        agent_max_tool_output_chars: int = 18_000,
+        agent_max_model_text_chars: int = 8000,
+        agent_max_cli_line_chars: int = 240,
         # Langfuse
         langfuse_public_key: str = "",
         langfuse_secret_key: str = "",
@@ -122,6 +128,12 @@ class Config:
         self.llm_provider = llm_provider
         self.llm_model = llm_model
         self.llm_api_key = llm_api_key
+
+        self.agent_model = agent_model
+        self.agent_max_rounds = agent_max_rounds
+        self.agent_max_tool_output_chars = agent_max_tool_output_chars
+        self.agent_max_model_text_chars = agent_max_model_text_chars
+        self.agent_max_cli_line_chars = agent_max_cli_line_chars
 
         self.langfuse_public_key = langfuse_public_key
         self.langfuse_secret_key = langfuse_secret_key

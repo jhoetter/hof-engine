@@ -49,6 +49,13 @@ config = Config(
     llm_model="gpt-5",                          # Default model
     llm_api_key="${OPENAI_API_KEY}",             # API key (reads from env var)
 
+    # Agent (OpenAI tool loop) — see docs/reference/agent.md
+    agent_model="",                              # Optional default model (env AGENT_MODEL overrides)
+    agent_max_rounds=10,
+    agent_max_tool_output_chars=18_000,
+    agent_max_model_text_chars=8000,
+    agent_max_cli_line_chars=240,
+
     # Langfuse (optional)
     langfuse_public_key="${LANGFUSE_PUBLIC_KEY}",
     langfuse_secret_key="${LANGFUSE_SECRET_KEY}",

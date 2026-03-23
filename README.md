@@ -111,6 +111,7 @@ See the [docs/](docs/) directory:
 - [Flows Reference](docs/reference/flows.md)
 - [UI Reference](docs/reference/ui.md)
 - [LLM Reference](docs/reference/llm.md)
+- [Agent Reference](docs/reference/agent.md)
 - [CLI Reference](docs/reference/cli.md)
 - [Configuration](docs/reference/config.md)
 

@@ -18,10 +18,15 @@ Do not infer language from attachment filenames, PDF or invoice body text,
 or other document content—only from what the user typed.
 If there are no user messages yet, use English. If a tool errors, explain briefly and suggest a fix.
 
-During a model round (before tool calls), the app labels your streaming text as Reasoning,
-not as the final reply. After tools, text meant for the user appears as Assistant reply.
-Keep pre-tool sentences short (what you will try next and why).
-Each tool row includes a technical description automatically."""
+## Visible text before tools (required for the in-app “Thinking” stream)
+Before you call any tool, you MUST output at least one short sentence in the normal assistant
+message (the same visible `content` stream users see—not only tool calls). Say what you will
+look up or change and why. Do not jump to tools with an empty assistant message: the UI
+streams this pre-tool text as “Thinking” and it must not be blank.
+Keep it to one or two sentences; after tools, answer the user in the final reply pass.
+
+After tool results, write for the user in clear language (that pass is the main reply, not
+labeled as thinking). Each tool row still shows technical details separately."""
 
 DEFAULT_SYSTEM_PROMPT_MUTATION_SUFFIX = """
 
@@ -40,7 +45,7 @@ DEFAULT_CONFIRMATION_SUMMARY_USER_MESSAGE = (
     "Reply with 1–3 short sentences in the same language as the user's chat messages "
     "(role user only), "
     "not the language of any attached document or filename. "
-    "Use future or conditional wording only (e.g. \"will\", \"after you approve\", \"proposed\"). "
+    'Use future or conditional wording only (e.g. "will", "after you approve", "proposed"). '
     "Never use past tense as if the mutation already succeeded (do not say you already registered, "
     "created, updated, saved, or completed the action).\n"
     "Briefly remind them what will happen after they approve or reject in that panel. "

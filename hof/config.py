@@ -86,6 +86,8 @@ class Config:
         agent_max_tool_output_chars: int = 18_000,
         agent_max_model_text_chars: int = 8000,
         agent_max_cli_line_chars: int = 240,
+        # OpenAI completion cap per request; many chat models max at 16_384 (override via env).
+        agent_max_completion_tokens: int = 16_384,
         # Langfuse
         langfuse_public_key: str = "",
         langfuse_secret_key: str = "",
@@ -134,6 +136,7 @@ class Config:
         self.agent_max_tool_output_chars = agent_max_tool_output_chars
         self.agent_max_model_text_chars = agent_max_model_text_chars
         self.agent_max_cli_line_chars = agent_max_cli_line_chars
+        self.agent_max_completion_tokens = agent_max_completion_tokens
 
         self.langfuse_public_key = langfuse_public_key
         self.langfuse_secret_key = langfuse_secret_key

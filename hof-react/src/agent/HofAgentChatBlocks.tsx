@@ -455,6 +455,52 @@ export function RunBlocksList({
   );
 }
 
+/** Shared shell for `streamPhase === "model"`: optional Thinking chrome + streaming markdown. */
+function AssistantModelStreamShell({
+  streamText,
+  streamTextRole,
+  replyBubbleClass,
+  emptyLabel,
+}: {
+  streamText: string;
+  streamTextRole: "content" | "reasoning" | "mixed" | undefined;
+  replyBubbleClass: string;
+  emptyLabel: string;
+}) {
+  const hasStreamText = streamText.trim().length > 0;
+  if (streamTextRole === "reasoning") {
+    return (
+      <ReasoningCollapsible text={streamText} streaming={true} />
+    );
+  }
+  return (
+    <div className="max-w-[min(100%,42rem)] space-y-1.5">
+      <div
+        className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-tertiary"
+        aria-live="polite"
+      >
+        <span
+          className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+          aria-hidden
+        />
+        Thinking
+      </div>
+      <div
+        className={`${replyBubbleClass} transition-opacity duration-200 opacity-[0.88]`}
+      >
+        {hasStreamText ? (
+          <AssistantMarkdown source={streamText} />
+        ) : (
+          <span className="text-[11px] leading-snug text-secondary">
+            {emptyLabel}
+          </span>
+        )}
+        <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+      </div>
+    </div>
+  );
+}
+
 export function ReasoningCollapsible({
   text,
   streaming,
@@ -534,8 +580,23 @@ export function LiveBlockView({
     );
   }
   if (b.kind === "phase") {
-    if (b.phase === "summary" || b.phase === "tools") {
+    if (b.phase === "summary") {
       return null;
+    }
+    if (b.phase === "tools") {
+      return (
+        <div
+          className="flex items-center gap-1.5 border-l-2 border-border pl-3 text-[11px] leading-snug text-tertiary"
+          aria-busy="true"
+          aria-label="Running tools"
+        >
+          <span
+            className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+            aria-hidden
+          />
+          Running tools…
+        </div>
+      );
     }
     if (b.phase === "model") {
       return (
@@ -560,15 +621,28 @@ export function LiveBlockView({
       if (b.streaming) {
         const streamText = b.text;
         const hasStreamText = streamText.trim().length > 0;
+        // Logs: first model round often has zero assistant_delta before tool_calls; post-tool
+        // rounds stream text into the same assistant block. Use Thinking shell for model-phase
+        // streaming so tokens are visible like pre-tool; summary round stays a plain bubble.
+        if (b.streamPhase === "summary") {
+          return (
+            <div className={replyBubbleClass}>
+              {hasStreamText ? (
+                <AssistantMarkdown source={streamText} />
+              ) : (
+                <span className="text-secondary">…</span>
+              )}
+              <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+            </div>
+          );
+        }
         return (
-          <div className={replyBubbleClass}>
-            {hasStreamText ? (
-              <AssistantMarkdown source={streamText} />
-            ) : (
-              <span className="text-secondary">…</span>
-            )}
-            <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
-          </div>
+          <AssistantModelStreamShell
+            streamText={streamText}
+            streamTextRole={b.streamTextRole}
+            replyBubbleClass={replyBubbleClass}
+            emptyLabel="Drafting the answer…"
+          />
         );
       }
       const text = b.text.trim();
@@ -583,39 +657,13 @@ export function LiveBlockView({
     }
 
     if (isModel && b.streaming) {
-      const streamText = b.text;
-      const hasStreamText = streamText.trim().length > 0;
-      if (b.streamTextRole === "reasoning") {
-        return (
-          <ReasoningCollapsible
-            text={streamText}
-            streaming={true}
-          />
-        );
-      }
       return (
-        <div className="max-w-[min(100%,42rem)] space-y-1.5">
-          <div
-            className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-tertiary"
-            aria-live="polite"
-          >
-            <span
-              className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
-              aria-hidden
-            />
-            Thinking
-          </div>
-          <div
-            className={`${replyBubbleClass} transition-opacity duration-200 opacity-[0.88]`}
-          >
-            {hasStreamText ? (
-              <AssistantMarkdown source={streamText} />
-            ) : (
-              <span className="text-secondary">…</span>
-            )}
-            <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
-          </div>
-        </div>
+        <AssistantModelStreamShell
+          streamText={b.text}
+          streamTextRole={b.streamTextRole}
+          replyBubbleClass={replyBubbleClass}
+          emptyLabel="Tools may run before any reply text appears."
+        />
       );
     }
 
@@ -641,39 +689,13 @@ export function LiveBlockView({
     }
 
     if (b.streaming) {
-      const streamText = b.text;
-      const hasStreamText = streamText.trim().length > 0;
-      if (b.streamTextRole === "reasoning") {
-        return (
-          <ReasoningCollapsible
-            text={streamText}
-            streaming={true}
-          />
-        );
-      }
       return (
-        <div className="max-w-[min(100%,42rem)] space-y-1.5">
-          <div
-            className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-tertiary"
-            aria-live="polite"
-          >
-            <span
-              className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
-              aria-hidden
-            />
-            Thinking
-          </div>
-          <div
-            className={`${replyBubbleClass} transition-opacity duration-200 opacity-[0.88]`}
-          >
-            {hasStreamText ? (
-              <AssistantMarkdown source={streamText} />
-            ) : (
-              <span className="text-secondary">…</span>
-            )}
-            <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
-          </div>
-        </div>
+        <AssistantModelStreamShell
+          streamText={b.text}
+          streamTextRole={b.streamTextRole}
+          replyBubbleClass={replyBubbleClass}
+          emptyLabel="Waiting for the model…"
+        />
       );
     }
 

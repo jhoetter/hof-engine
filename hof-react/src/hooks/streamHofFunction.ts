@@ -49,7 +49,8 @@ export async function streamHofFunction(
         continue;
       }
       try {
-        options.onEvent(JSON.parse(t) as HofStreamEvent);
+        const parsed = JSON.parse(t) as HofStreamEvent;
+        options.onEvent(parsed);
       } catch {
         /* ignore malformed line */
       }
@@ -59,7 +60,8 @@ export async function streamHofFunction(
   const tail = buffer.trim();
   if (tail) {
     try {
-      options.onEvent(JSON.parse(tail) as HofStreamEvent);
+      const parsed = JSON.parse(tail) as HofStreamEvent;
+      options.onEvent(parsed);
     } catch {
       /* ignore */
     }

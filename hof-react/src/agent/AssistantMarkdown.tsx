@@ -1,9 +1,19 @@
 "use client";
 
 import type { Components } from "react-markdown";
+import { useEffect } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
+import { CodeFence } from "./markdown/CodeFence";
+import { InlineCodeWithCopy } from "./markdown/InlineCodeWithCopy";
+import { HLJS_SCOPED_CSS } from "./markdown/hljsTokens";
+import { MarkdownSortableTable } from "./markdown/MarkdownSortableTable";
 
+/**
+ * Streaming can yield ragged GFM tables or half-open fences; sortable table
+ * then falls back to the default DOM until the matrix is rectangular.
+ */
 const mdComponents: Components = {
   p: ({ children, ...props }) => (
     <p className="mb-2 last:mb-0 [&:first-child]:mt-0" {...props}>
@@ -53,56 +63,40 @@ const mdComponents: Components = {
   ),
   hr: (props) => <hr className="my-3 border-border" {...props} />,
   a: ({ href, children, ...props }) => {
-    const external =
-      typeof href === "string" && /^https?:\/\//i.test(href);
+    const external = typeof href === "string" && /^https?:\/\//i.test(href);
     return (
       <a
         href={href}
         className="font-medium text-[var(--color-accent)] underline decoration-[var(--color-accent)]/40 underline-offset-2 hover:decoration-[var(--color-accent)]"
-        {...(external
-          ? { target: "_blank", rel: "noopener noreferrer" }
-          : {})}
+        {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
         {...props}
       >
         {children}
       </a>
     );
   },
-  code: ({ className, children, ...props }) => {
-    const isBlock = /language-[\w-]+/.test(className ?? "");
+  code: ({ className, children, node, ...props }) => {
+    const isBlock = Boolean(className && /language-[\w-]+/.test(className));
     if (isBlock) {
       return (
-        <code
-          className={`font-mono text-[12px] leading-snug text-foreground ${className ?? ""}`}
-          {...props}
-        >
+        <code className={className} {...props}>
           {children}
         </code>
       );
     }
     return (
-      <code
-        className="rounded border border-border/60 bg-background/90 px-1 py-0.5 font-mono text-[12px] text-foreground"
-        {...props}
-      >
+      <InlineCodeWithCopy node={node} className={className} {...props}>
         {children}
-      </code>
+      </InlineCodeWithCopy>
     );
   },
-  pre: ({ children, ...props }) => (
-    <pre
-      className="mb-2 max-h-64 overflow-x-auto overflow-y-auto rounded-lg border border-border/60 bg-background/80 p-3 font-mono text-[12px] leading-snug text-secondary last:mb-0"
-      {...props}
-    >
+  pre: ({ node, children, ...props }) => (
+    <CodeFence node={node} {...props}>
       {children}
-    </pre>
+    </CodeFence>
   ),
-  table: ({ children, ...props }) => (
-    <div className="mb-2 max-w-full overflow-x-auto last:mb-0">
-      <table className="w-full border-collapse text-left text-[12px] text-foreground" {...props}>
-        {children}
-      </table>
-    </div>
+  table: ({ node, children }) => (
+    <MarkdownSortableTable node={node}>{children}</MarkdownSortableTable>
   ),
   thead: ({ children, ...props }) => (
     <thead className="border-b border-border bg-surface/40" {...props}>
@@ -143,13 +137,32 @@ export type AssistantMarkdownProps = {
 };
 
 /**
- * Renders assistant Markdown with GFM (tables, strikethrough, task lists, etc.).
- * No raw HTML — safe for model-generated text.
+ * Renders assistant Markdown with GFM, syntax highlighting (lowlight / hljs),
+ * sortable pipe tables when structurally valid, and copy on code blocks.
  */
+const HLJS_STYLE_ID = "hof-agent-md-hljs-styles";
+
 export function AssistantMarkdown({ source }: AssistantMarkdownProps) {
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+    if (document.getElementById(HLJS_STYLE_ID)) {
+      return;
+    }
+    const el = document.createElement("style");
+    el.id = HLJS_STYLE_ID;
+    el.textContent = HLJS_SCOPED_CSS;
+    document.head.appendChild(el);
+  }, []);
+
   return (
     <div className="hof-agent-md min-w-0 break-words [&_*]:max-w-full">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight]}
+        components={mdComponents}
+      >
         {source}
       </ReactMarkdown>
     </div>

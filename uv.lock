@@ -1078,7 +1078,7 @@ wheels = [
 
 [[package]]
 name = "llm-markdown"
-version = "0.3.7"
+version = "0.3.14"
 source = { editable = "../llm-markdown" }
 dependencies = [
     { name = "pydantic" },

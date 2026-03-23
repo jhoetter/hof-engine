@@ -31,6 +31,64 @@ function normSegText(s: string): string {
   return s.trim().replace(/\s+/g, " ");
 }
 
+function tokenWords(s: string): string[] {
+  return normSegText(s)
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => w.replace(/[^\p{L}\p{N}]+/gu, ""))
+    .filter(Boolean);
+}
+
+/** Share of *shorterWords* that appear in *longerWords* (bag intersection via set). */
+function wordOverlapRatio(shorterWords: string[], longerWords: string[]): number {
+  if (shorterWords.length === 0) {
+    return 0;
+  }
+  const longSet = new Set(longerWords);
+  let hits = 0;
+  for (const w of shorterWords) {
+    if (longSet.has(w)) {
+      hits += 1;
+    }
+  }
+  return hits / shorterWords.length;
+}
+
+/**
+ * True when visible reply largely repeats the preceding reasoning (exact, prefix/substring,
+ * or high word overlap on the shorter side).
+ */
+function isNearDuplicateSegText(reasoning: string, content: string): boolean {
+  const r = normSegText(reasoning);
+  const c = normSegText(content);
+  if (!r || !c) {
+    return false;
+  }
+  if (r === c) {
+    return true;
+  }
+  const minLen = Math.min(r.length, c.length);
+  if (minLen >= 10) {
+    if (c.startsWith(r) || r.startsWith(c)) {
+      return true;
+    }
+    if (c.includes(r) || r.includes(c)) {
+      return true;
+    }
+  }
+  const wr = tokenWords(r);
+  const wc = tokenWords(c);
+  if (wr.length === 0 || wc.length === 0) {
+    return false;
+  }
+  const short = wr.length <= wc.length ? wr : wc;
+  const long = wr.length <= wc.length ? wc : wr;
+  if (short.length < 4) {
+    return false;
+  }
+  return wordOverlapRatio(short, long) >= 0.8;
+}
+
 /** Drop trailing empty ``content`` shells and hide reasoning that duplicates the following reply. */
 export function normalizeAssistantStreamSegments(
   segments: AssistantStreamSegment[],
@@ -53,7 +111,7 @@ export function normalizeAssistantStreamSegments(
     if (
       cur.kind === "reasoning" &&
       next?.kind === "content" &&
-      normSegText(cur.text) === normSegText(next.text)
+      isNearDuplicateSegText(cur.text, next.text)
     ) {
       out.push(next);
       i++;

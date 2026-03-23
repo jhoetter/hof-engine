@@ -797,6 +797,30 @@ function ensureReasoningShimmerKeyframes(): void {
   document.head.appendChild(s);
 }
 
+/** Matches streaming “Thinking” in {@link ReasoningStreamPeek} (shimmer gradient). */
+const REASONING_THINKING_SHIMMER_LABEL_CLASS =
+  "text-[11px] font-medium bg-clip-text text-transparent [background-image:linear-gradient(98deg,var(--color-muted-foreground)_0%,var(--color-accent)_42%,var(--color-foreground)_52%,var(--color-accent)_62%,var(--color-muted-foreground)_100%)] bg-[length:220%_100%] [animation:hof-reasoning-shimmer_2.5s_ease-in-out_infinite]";
+
+/**
+ * Shown while the agent run is busy but no live blocks exist yet (before first NDJSON row).
+ * Replaces the old “Connecting” copy with the same visual “Thinking” treatment.
+ */
+export function AgentEarlyThinkingIndicator() {
+  useEffect(() => {
+    ensureReasoningShimmerKeyframes();
+  }, []);
+  return (
+    <div
+      className={`${AGENT_CHAT_COLUMN_CLASS} font-sans`}
+      aria-busy="true"
+      aria-live="polite"
+      aria-label="Thinking"
+    >
+      <span className={REASONING_THINKING_SHIMMER_LABEL_CLASS}>Thinking</span>
+    </div>
+  );
+}
+
 function ReasoningStreamPeek({
   text,
   streaming,
@@ -808,6 +832,7 @@ function ReasoningStreamPeek({
   const columnRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const hoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clean = sanitizeReasoningText(text);
   const popoverId = useId();
   const [popoverBox, setPopoverBox] = useState<{
@@ -819,6 +844,28 @@ function ReasoningStreamPeek({
   useEffect(() => {
     ensureReasoningShimmerKeyframes();
   }, []);
+
+  const cancelScheduledPopoverClose = useCallback(() => {
+    if (hoverCloseTimerRef.current != null) {
+      window.clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+  }, []);
+
+  const schedulePopoverCloseAfterLeave = useCallback(() => {
+    cancelScheduledPopoverClose();
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      setOpen(false);
+      hoverCloseTimerRef.current = null;
+    }, 200);
+  }, [cancelScheduledPopoverClose]);
+
+  useEffect(
+    () => () => {
+      cancelScheduledPopoverClose();
+    },
+    [cancelScheduledPopoverClose],
+  );
 
   const updatePopoverPosition = useCallback(() => {
     const col = columnRef.current;
@@ -900,9 +947,20 @@ function ReasoningStreamPeek({
     el.scrollTop = el.scrollHeight;
   }, [clean, streaming, open]);
 
-  if (!clean && !streaming) {
+  /**
+   * Same shimmer as {@link AgentEarlyThinkingIndicator} so there is no blank beat after the
+   * live assistant row mounts but before the first reasoning character.
+   */
+  if (!text.trim() && !clean) {
+    if (streaming) {
+      return <AgentEarlyThinkingIndicator />;
+    }
     return null;
   }
+
+  const thinkingLabelClass = streaming
+    ? REASONING_THINKING_SHIMMER_LABEL_CLASS
+    : "text-[11px] font-medium text-tertiary";
 
   const bodyClass =
     "font-sans text-[12px] leading-relaxed break-words whitespace-pre-wrap text-secondary";
@@ -913,7 +971,9 @@ function ReasoningStreamPeek({
         ref={popoverRef}
         id={popoverId}
         role="dialog"
-        aria-label="Assistant reasoning"
+        aria-label={
+          streaming ? "Reasoning in progress" : "Completed reasoning"
+        }
         className={`fixed z-[100] max-h-[min(70vh,20rem)] overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-background)] p-3 shadow-lg outline-none ring-1 ring-black/5 dark:ring-white/10 ${bodyClass}`}
         style={{
           top: popoverBox.top,
@@ -922,6 +982,8 @@ function ReasoningStreamPeek({
         }}
         tabIndex={-1}
         aria-live="polite"
+        onPointerEnter={cancelScheduledPopoverClose}
+        onPointerLeave={schedulePopoverCloseAfterLeave}
       >
         {clean || (streaming ? "\u200b" : null)}
         {streaming ? (
@@ -943,20 +1005,20 @@ function ReasoningStreamPeek({
           aria-expanded={open}
           aria-haspopup="dialog"
           aria-controls={open ? popoverId : undefined}
+          onPointerEnter={() => {
+            cancelScheduledPopoverClose();
+            setOpen(true);
+          }}
+          onPointerLeave={schedulePopoverCloseAfterLeave}
+          onFocus={() => {
+            cancelScheduledPopoverClose();
+            setOpen(true);
+          }}
           onClick={() => setOpen((v) => !v)}
         >
-          <span
-            className="text-[11px] font-medium bg-clip-text text-transparent [background-image:linear-gradient(98deg,var(--color-muted-foreground)_0%,var(--color-accent)_42%,var(--color-foreground)_52%,var(--color-accent)_62%,var(--color-muted-foreground)_100%)] bg-[length:220%_100%] [animation:hof-reasoning-shimmer_2.5s_ease-in-out_infinite]"
-            aria-live="polite"
-          >
-            Thinking
+          <span className={thinkingLabelClass} aria-live="polite">
+            {streaming ? "Thinking" : "Thought"}
           </span>
-          {streaming ? (
-            <span
-              className="inline-block size-1 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
-              aria-hidden
-            />
-          ) : null}
         </button>
       </div>
       {typeof document !== "undefined" && popoverContent
@@ -989,19 +1051,10 @@ function AssistantModelStreamShell({
     return <ReasoningStreamPeek text={streamText} streaming={streaming} />;
   }
   if (!hasStreamText) {
-    return (
-      <div
-        className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center gap-1.5 py-0.5`}
-        aria-busy="true"
-        aria-label={emptyLabel || "Assistant is working"}
-      >
-        <span
-          className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
-          aria-hidden
-        />
-        <span className="inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
-      </div>
-    );
+    if (!streaming) {
+      return null;
+    }
+    return <AgentEarlyThinkingIndicator />;
   }
   const bodyClass = bodyClassName ?? replyBubbleClass;
   return (
@@ -1058,6 +1111,11 @@ function AssistantSegmentedBody({
               </div>
             );
           }
+          if (!s.text.trim()) {
+            return pulse ? (
+              <AgentEarlyThinkingIndicator key={`seg-r-${i}`} />
+            ) : null;
+          }
           return (
             <ReasoningStreamPeek
               key={`seg-r-${i}`}
@@ -1106,22 +1164,7 @@ export function LiveBlockView({
   afterToolResult?: boolean;
 }) {
   if (b.kind === "thinking_skeleton") {
-    return (
-      <div
-        className={`${AGENT_CHAT_COLUMN_CLASS} rounded-lg bg-hover/50 px-3 py-2 font-sans`}
-        aria-busy="true"
-        aria-label="Assistant is thinking"
-      >
-        <div className="text-[11px] font-medium text-tertiary">Thinking</div>
-        <div className="mt-1 flex items-center gap-1.5 text-[12px] leading-relaxed text-secondary">
-          <span>Working through your request…</span>
-          <span
-            className="inline-block h-[0.9em] w-px animate-pulse bg-foreground/35 align-middle"
-            aria-hidden
-          />
-        </div>
-      </div>
-    );
+    return null;
   }
   if (b.kind === "phase") {
     if (b.phase === "summary") {
@@ -1131,11 +1174,7 @@ export function LiveBlockView({
       return null;
     }
     if (b.phase === "model") {
-      return (
-        <div className="border-l-2 border-border pl-3 text-[11px] italic leading-snug text-tertiary">
-          Thinking…
-        </div>
-      );
+      return null;
     }
     return (
       <div className="flex items-start gap-2 border-l-2 border-border pl-3 text-[12px] leading-snug text-secondary">

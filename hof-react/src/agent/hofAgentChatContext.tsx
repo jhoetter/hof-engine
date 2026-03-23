@@ -52,7 +52,6 @@ export type HofAgentChatProps = {
     input: HofAgentChatPresignInput,
   ) => Promise<HofAgentChatPresignResult>;
   className?: string;
-  connectingLabel?: string;
   initialPersisted?: AgentConversationStateV1 | null;
   onPersist?: (state: AgentConversationStateV1) => void | Promise<void>;
   persistDebounceMs?: number;
@@ -64,7 +63,6 @@ export type HofAgentChatProviderProps = Omit<HofAgentChatProps, "className"> & {
 
 export type HofAgentChatContextValue = {
   welcomeName: string;
-  connectingLabel: string;
   thread: ThreadItem[];
   liveBlocks: LiveBlock[];
   busy: boolean;
@@ -103,7 +101,6 @@ export function useHofAgentChat(): HofAgentChatContextValue {
 export function HofAgentChatProvider({
   welcomeName,
   presignUpload,
-  connectingLabel = "Connecting…",
   initialPersisted = null,
   onPersist,
   persistDebounceMs = 1200,
@@ -724,7 +721,6 @@ export function HofAgentChatProvider({
   const value = useMemo<HofAgentChatContextValue>(
     () => ({
       welcomeName,
-      connectingLabel,
       thread,
       liveBlocks,
       busy,
@@ -745,7 +741,6 @@ export function HofAgentChatProvider({
     }),
     [
       welcomeName,
-      connectingLabel,
       thread,
       liveBlocks,
       busy,

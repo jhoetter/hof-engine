@@ -17,10 +17,9 @@ export function HofAgentComposer({
   className = "w-full",
   rowClassName = "flex items-stretch gap-1.5 sm:gap-2",
   /** One surface + outer border; inner controls stay flush (no nested white-on-gray band). */
-  inputShellClassName =
-    "rounded-xl border border-border bg-background p-1 sm:p-1.5",
+  inputShellClassName = "rounded-xl border border-border bg-background p-1 sm:p-1.5",
   disclaimerClassName =
-    "mt-2.5 text-center text-[11px] leading-snug text-tertiary",
+    "mt-2.5 mb-3 text-center text-[11px] leading-snug text-tertiary",
 }: HofAgentComposerProps) {
   const {
     input,

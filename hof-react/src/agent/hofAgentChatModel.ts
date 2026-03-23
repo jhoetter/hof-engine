@@ -199,6 +199,23 @@ export function mergeAdjacentReasoningSegments(
   return out;
 }
 
+/** Merge consecutive reply segments so one model turn does not render as multiple bubbles. */
+export function mergeAdjacentContentSegments(
+  segments: AssistantStreamSegment[],
+): AssistantStreamSegment[] {
+  const out: AssistantStreamSegment[] = [];
+  for (const s of segments) {
+    const tail = out[out.length - 1];
+    if (s.kind === "content" && tail?.kind === "content") {
+      const merged = `${tail.text}\n\n${s.text}`.trim();
+      out[out.length - 1] = { kind: "content", text: merged };
+    } else {
+      out.push({ ...s });
+    }
+  }
+  return out;
+}
+
 /** Do not drop reasoning that still has substantive text after overlap trimming (avoids “thinking vanished”). */
 const MIN_SUBSTANTIVE_REASONING_CHARS = 40;
 
@@ -241,7 +258,7 @@ export function normalizeAssistantStreamSegments(
     }
     out.push(cur);
   }
-  const merged = mergeAdjacentReasoningSegments(out);
+  const merged = mergeAdjacentContentSegments(mergeAdjacentReasoningSegments(out));
   return merged.filter(
     (s) => s.kind !== "reasoning" || s.text.trim().length > 0,
   );
@@ -349,6 +366,10 @@ export const CHAT_USER_BUBBLE_CLASS =
   "max-w-full rounded-lg bg-hover px-4 py-2.5 text-sm leading-relaxed text-foreground";
 export const CHAT_ASSISTANT_REPLY_BUBBLE_CLASS =
   "max-w-[min(100%,42rem)] rounded-lg bg-hover/70 px-4 py-2.5 text-sm leading-relaxed text-foreground";
+
+/** Muted prose for pre-tool visible plan (policy: sentence before tools) — not a second “answer” bubble. */
+export const CHAT_ASSISTANT_PRE_TOOL_CONTENT_CLASS =
+  "max-w-[min(100%,42rem)] rounded-md bg-hover/40 px-3 py-2 text-[13px] leading-relaxed text-secondary";
 
 export const TOOL_SECTION_LABEL_CLASS =
   "mb-1 text-[10px] font-medium uppercase tracking-wide text-tertiary";

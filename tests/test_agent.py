@@ -50,6 +50,85 @@ def test_collect_agent_chat_from_stream_final() -> None:
     assert not out.get("error")
 
 
+def test_iter_agent_chat_stream_passes_anthropic_output_config_effort(monkeypatch) -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+        )
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("AGENT_LLM_BACKEND", "anthropic")
+
+    captured: list[dict] = []
+
+    def _fake_stream_agent_turn(*_a, **kw):
+        captured.append({k: v for k, v in kw.items() if k != "messages"})
+        yield AgentContentDelta(text="ok")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=_fake_stream_agent_turn):
+        ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
+    assert not any(x.get("type") == "error" for x in ev)
+    assert len(captured) >= 1
+    assert captured[0].get("output_config") == {"effort": "high"}
+
+
+def test_iter_agent_chat_stream_openai_native_defaults_to_fallback_without_extras(
+    monkeypatch,
+) -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+        )
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AGENT_REASONING_MODE", raising=False)
+    monkeypatch.delenv("AGENT_REASONING_OPENAI_EXTRAS", raising=False)
+
+    def _fake_stream_agent_turn(*_a, reasoning, **_kw):
+        assert reasoning.mode.value == "fallback"
+        yield AgentContentDelta(text="ok")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=_fake_stream_agent_turn):
+        ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
+    assert not any(x.get("type") == "error" for x in ev)
+
+
+def test_iter_agent_chat_stream_openai_native_with_extras_merges_reasoning_effort(
+    monkeypatch,
+) -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+        )
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AGENT_REASONING_MODE", raising=False)
+    monkeypatch.setenv("AGENT_REASONING_OPENAI_EXTRAS", "{}")
+
+    seen: list = []
+
+    def _fake_stream_agent_turn(*_a, reasoning, **_kw):
+        seen.append(reasoning)
+        yield AgentContentDelta(text="ok")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=_fake_stream_agent_turn):
+        ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
+    assert not any(x.get("type") == "error" for x in ev)
+    assert len(seen) == 1
+    assert seen[0].mode.value == "native"
+    assert seen[0].openai_extras == {"reasoning_effort": "high"}
+
+
 def test_iter_agent_chat_stream_uses_anthropic_when_configured(monkeypatch) -> None:
     configure_agent(
         AgentPolicy(
@@ -119,7 +198,10 @@ def test_iter_agent_chat_stream_anthropic_native_respects_thinking_off(monkeypat
     monkeypatch.setenv("AGENT_REASONING_MODE", "native")
     monkeypatch.setenv("AGENT_ANTHROPIC_THINKING", "off")
 
-    def _fake_stream_agent_turn(prov, backend, *_a, reasoning, **_kw):
+    captured: list[dict] = []
+
+    def _fake_stream_agent_turn(*_a, reasoning, **kw):
+        captured.append({k: v for k, v in kw.items() if k != "messages"})
         assert reasoning.anthropic_thinking is None
         yield AgentContentDelta(text="ok")
         yield AgentMessageFinish(finish_reason="stop", usage=None)
@@ -127,6 +209,7 @@ def test_iter_agent_chat_stream_anthropic_native_respects_thinking_off(monkeypat
     with patch("hof.agent.stream.stream_agent_turn", side_effect=_fake_stream_agent_turn):
         ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
     assert not any(x.get("type") == "error" for x in ev)
+    assert captured and "output_config" not in captured[0]
 
 
 def test_iter_agent_chat_stream_rejects_openai_extras_with_anthropic(monkeypatch) -> None:

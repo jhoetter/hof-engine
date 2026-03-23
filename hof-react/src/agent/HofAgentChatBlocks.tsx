@@ -5,6 +5,7 @@ import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { FunctionResultDisplay } from "./FunctionResultDisplay";
 import {
+  CHAT_ASSISTANT_PRE_TOOL_CONTENT_CLASS,
   CHAT_ASSISTANT_REPLY_BUBBLE_CLASS,
   TOOL_SECTION_LABEL_CLASS,
   assistantUiRole,
@@ -20,6 +21,7 @@ import {
   toolCallArgsSnippet,
   toolCallCliLine,
   toolGroupSummaryLine,
+  mergeAdjacentContentSegments,
   mergeAdjacentReasoningSegments,
 } from "./hofAgentChatModel";
 import type {
@@ -360,6 +362,11 @@ export function RunBlocksList({
   }
 
   const postToolAssistantIds = postToolAssistantBlockIds(blocks);
+  const assistantIdsInOrder = blocks
+    .filter((x): x is Extract<LiveBlock, { kind: "assistant" }> => x.kind === "assistant")
+    .map((x) => x.id);
+  const preToolFirstAssistantId =
+    assistantIdsInOrder.length >= 2 ? assistantIdsInOrder[0] : null;
 
   return (
     <div className="space-y-3">
@@ -450,6 +457,11 @@ export function RunBlocksList({
             key={b.id}
             b={b}
             afterToolResult={postToolAssistantIds.has(b.id)}
+            preToolPlanningForContent={
+              b.kind === "assistant" &&
+              preToolFirstAssistantId !== null &&
+              b.id === preToolFirstAssistantId
+            }
           />
         );
       })}
@@ -462,11 +474,14 @@ function AssistantModelStreamShell({
   streamText,
   streamTextRole,
   replyBubbleClass,
+  bodyClassName,
   emptyLabel,
 }: {
   streamText: string;
   streamTextRole: "content" | "reasoning" | "mixed" | undefined;
   replyBubbleClass: string;
+  /** When set, used for the streaming markdown card (pre-tool plan styling). */
+  bodyClassName?: string;
   emptyLabel: string;
 }) {
   const hasStreamText = streamText.trim().length > 0;
@@ -490,6 +505,7 @@ function AssistantModelStreamShell({
       </div>
     );
   }
+  const bodyClass = bodyClassName ?? replyBubbleClass;
   return (
     <div className="max-w-[min(100%,42rem)] space-y-1.5">
       <div
@@ -503,7 +519,7 @@ function AssistantModelStreamShell({
         Thinking
       </div>
       <div
-        className={`${replyBubbleClass} transition-opacity duration-200 opacity-[0.88]`}
+        className={`${bodyClass} transition-opacity duration-200 opacity-[0.88]`}
       >
         <AssistantMarkdown source={streamText} />
         <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
@@ -535,6 +551,8 @@ function looksLikeJsonOrToolCallLine(t: string): boolean {
  */
 function sanitizeReasoningText(raw: string): string {
   let s = raw;
+  // Strip HTML details/summary blocks (models sometimes dump these into thinking)
+  s = s.replace(/<details\b[^>]*>[\s\S]*?<\/details>/gi, "");
   // Strip HTML tags
   s = s.replace(/<[^>]*>/g, "");
   // Strip markdown headings
@@ -654,18 +672,24 @@ function AssistantSegmentedBody({
   segments,
   streaming,
   replyBubbleClass,
+  contentBubbleClass,
   emptyLabel,
 }: {
   segments: AssistantStreamSegment[];
   streaming: boolean;
   replyBubbleClass: string;
+  /** CSS class for ``content`` segments; defaults to ``replyBubbleClass``. */
+  contentBubbleClass?: string;
   emptyLabel: string;
 }) {
-  const merged = mergeAdjacentReasoningSegments(segments);
+  const contentClass = contentBubbleClass ?? replyBubbleClass;
+  const merged = mergeAdjacentContentSegments(
+    mergeAdjacentReasoningSegments(segments),
+  );
   return (
     <div className="max-w-[min(100%,42rem)] space-y-3">
       {merged.map((s, i) => {
-        const isLast = i === segments.length - 1;
+        const isLast = i === merged.length - 1;
         const pulse = streaming && isLast;
         if (s.kind === "reasoning") {
           return (
@@ -696,7 +720,7 @@ function AssistantSegmentedBody({
           );
         }
         return (
-          <div key={`seg-c-${i}`} className={replyBubbleClass}>
+          <div key={`seg-c-${i}`} className={contentClass}>
             <AssistantMarkdown source={s.text} />
             {pulse ? (
               <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
@@ -711,9 +735,16 @@ function AssistantSegmentedBody({
 export function LiveBlockView({
   b,
   afterToolResult = false,
+  preToolPlanningForContent = false,
 }: {
   b: LiveBlock;
   afterToolResult?: boolean;
+  /**
+   * When this run has multiple assistant blocks, the first is pre-tool planning; render its
+   * ``content`` stream segments with a muted style so the post-tool reply stays the only
+   * primary answer bubble.
+   */
+  preToolPlanningForContent?: boolean;
 }) {
   if (b.kind === "thinking_skeleton") {
     const replyBubbleClass = CHAT_ASSISTANT_REPLY_BUBBLE_CLASS;
@@ -775,6 +806,9 @@ export function LiveBlockView({
   }
   if (b.kind === "assistant") {
     const replyBubbleClass = CHAT_ASSISTANT_REPLY_BUBBLE_CLASS;
+    const contentBubbleClass = preToolPlanningForContent
+      ? CHAT_ASSISTANT_PRE_TOOL_CONTENT_CLASS
+      : replyBubbleClass;
     const lane = inferAssistantUiLane(b);
     const isSummary = b.streamPhase === "summary";
     const isModel = b.streamPhase === "model";
@@ -795,6 +829,7 @@ export function LiveBlockView({
                 segments={streamSegs}
                 streaming
                 replyBubbleClass={replyBubbleClass}
+                contentBubbleClass={contentBubbleClass}
                 emptyLabel=""
               />
             );
@@ -827,6 +862,7 @@ export function LiveBlockView({
               segments={streamSegs}
               streaming
               replyBubbleClass={replyBubbleClass}
+              contentBubbleClass={contentBubbleClass}
               emptyLabel="Drafting the answer…"
             />
           );
@@ -836,6 +872,7 @@ export function LiveBlockView({
             streamText={streamText}
             streamTextRole={b.streamTextRole}
             replyBubbleClass={replyBubbleClass}
+            bodyClassName={preToolPlanningForContent ? contentBubbleClass : undefined}
             emptyLabel="Drafting the answer…"
           />
         );
@@ -849,6 +886,7 @@ export function LiveBlockView({
             segments={streamSegs}
             streaming={false}
             replyBubbleClass={replyBubbleClass}
+            contentBubbleClass={contentBubbleClass}
             emptyLabel=""
           />
         );
@@ -871,6 +909,7 @@ export function LiveBlockView({
             segments={streamSegs}
             streaming
             replyBubbleClass={replyBubbleClass}
+            contentBubbleClass={contentBubbleClass}
             emptyLabel="Tools may run before any reply text appears."
           />
         );
@@ -880,6 +919,7 @@ export function LiveBlockView({
           streamText={b.text}
           streamTextRole={b.streamTextRole}
           replyBubbleClass={replyBubbleClass}
+          bodyClassName={preToolPlanningForContent ? contentBubbleClass : undefined}
           emptyLabel="Tools may run before any reply text appears."
         />
       );
@@ -899,6 +939,7 @@ export function LiveBlockView({
             segments={streamSegs}
             streaming={false}
             replyBubbleClass={replyBubbleClass}
+            contentBubbleClass={contentBubbleClass}
             emptyLabel=""
           />
         );
@@ -921,6 +962,7 @@ export function LiveBlockView({
             segments={streamSegs}
             streaming={false}
             replyBubbleClass={replyBubbleClass}
+            contentBubbleClass={contentBubbleClass}
             emptyLabel=""
           />
         );
@@ -944,6 +986,7 @@ export function LiveBlockView({
             segments={streamSegs}
             streaming={false}
             replyBubbleClass={replyBubbleClass}
+            contentBubbleClass={contentBubbleClass}
             emptyLabel=""
           />
         );
@@ -958,6 +1001,7 @@ export function LiveBlockView({
             segments={streamSegs}
             streaming
             replyBubbleClass={replyBubbleClass}
+            contentBubbleClass={contentBubbleClass}
             emptyLabel="Waiting for the model…"
           />
         );
@@ -967,6 +1011,7 @@ export function LiveBlockView({
           streamText={b.text}
           streamTextRole={b.streamTextRole}
           replyBubbleClass={replyBubbleClass}
+          bodyClassName={preToolPlanningForContent ? contentBubbleClass : undefined}
           emptyLabel="Waiting for the model…"
         />
       );
@@ -978,6 +1023,7 @@ export function LiveBlockView({
           segments={streamSegs}
           streaming={false}
           replyBubbleClass={replyBubbleClass}
+          contentBubbleClass={contentBubbleClass}
           emptyLabel=""
         />
       );

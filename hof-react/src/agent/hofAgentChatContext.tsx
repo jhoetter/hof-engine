@@ -165,8 +165,21 @@ export function HofAgentChatProvider({
     const d = snap.draft;
     if (d?.liveBlocks && Array.isArray(d.liveBlocks)) {
       const lb = d.liveBlocks as LiveBlock[];
-      liveBlocksRef.current = lb;
-      setLiveBlocks(lb);
+      const th = (Array.isArray(snap.thread) ? snap.thread : []) as ThreadItem[];
+      const last = th.length > 0 ? th[th.length - 1] : undefined;
+      // Saved state sometimes had both a final ``run`` on the thread and the same blocks still
+      // in ``draft.liveBlocks`` (persist race). That paints the whole turn twice after reload/fetch.
+      const discardDraftLive =
+        lb.length > 0 &&
+        !d.approvalBarrier?.runId &&
+        last?.kind === "run";
+      if (discardDraftLive) {
+        liveBlocksRef.current = [];
+        setLiveBlocks([]);
+      } else {
+        liveBlocksRef.current = lb;
+        setLiveBlocks(lb);
+      }
       if (d.approvalBarrier?.runId) {
         setApprovalBarrier(d.approvalBarrier as ApprovalBarrier);
       } else {
@@ -205,15 +218,48 @@ export function HofAgentChatProvider({
           outcomes[k] = v;
         }
       }
+      const lastForDraft =
+        thread.length > 0 ? thread[thread.length - 1] : undefined;
+      const draftLiveStale =
+        !busy &&
+        !approvalBarrier &&
+        lastForDraft?.kind === "run" &&
+        liveBlocks.length > 0;
+      const draftLiveBlocks = draftLiveStale ? [] : liveBlocks;
+      // #region agent log
+      if (draftLiveStale) {
+        fetch(
+          "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Debug-Session-Id": "ec2c0a",
+            },
+            body: JSON.stringify({
+              sessionId: "ec2c0a",
+              hypothesisId: "H2-persist-omit-stale-draft",
+              location: "hofAgentChatContext.tsx:persist",
+              message: "omit duplicate draft.liveBlocks (thread ends with run)",
+              data: {
+                threadLen: thread.length,
+                liveLen: liveBlocks.length,
+              },
+              timestamp: Date.now(),
+            }),
+          },
+        ).catch(() => {});
+      }
+      // #endregion
       const hasDraft =
-        liveBlocks.length > 0 || approvalBarrier !== null || busy;
+        draftLiveBlocks.length > 0 || approvalBarrier !== null || busy;
       const state: AgentConversationStateV1 = {
         version: 1,
         thread: structuredClone(thread) as unknown[],
         mutationOutcomes: outcomes,
         draft: hasDraft
           ? {
-              liveBlocks: structuredClone(liveBlocks) as unknown[],
+              liveBlocks: structuredClone(draftLiveBlocks) as unknown[],
               approvalBarrier,
               approvalDecisions: { ...approvalDecisions },
             }
@@ -236,6 +282,42 @@ export function HofAgentChatProvider({
   useEffect(() => {
     threadRef.current = thread;
   }, [thread]);
+
+  /** Drop ``liveBlocks`` when they are leftover from a turn already stored as the last ``run`` row. */
+  useEffect(() => {
+    if (busy || approvalBarrier) {
+      return;
+    }
+    if (liveBlocks.length === 0) {
+      return;
+    }
+    const last = thread[thread.length - 1];
+    if (last?.kind !== "run") {
+      return;
+    }
+    // #region agent log
+    fetch("http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": "ec2c0a",
+      },
+      body: JSON.stringify({
+        sessionId: "ec2c0a",
+        hypothesisId: "H1-clear-stale-live",
+        location: "hofAgentChatContext.tsx:staleLiveEffect",
+        message: "clearing stale liveBlocks (last thread item is run)",
+        data: {
+          threadLen: thread.length,
+          liveLen: liveBlocks.length,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+    liveBlocksRef.current = [];
+    setLiveBlocks([]);
+  }, [thread, liveBlocks, busy, approvalBarrier]);
 
   const threadToApiMessages = useCallback((items: ThreadItem[]) => {
     const out: { role: "user" | "assistant"; content: string }[] = [];
@@ -421,6 +503,8 @@ export function HofAgentChatProvider({
           return;
         }
         if (e instanceof Error && e.name === "AbortError") {
+          liveBlocksRef.current = [];
+          setLiveBlocks([]);
           return;
         }
         const msg = e instanceof Error ? e.message : String(e);
@@ -525,6 +609,8 @@ export function HofAgentChatProvider({
         return;
       }
       if (e instanceof Error && e.name === "AbortError") {
+        liveBlocksRef.current = [];
+        setLiveBlocks([]);
         return;
       }
       const msg = e instanceof Error ? e.message : String(e);
@@ -656,27 +742,33 @@ export function HofAgentChatProvider({
     setBusy(true);
     setInput("");
     abortRef.current?.abort();
-    const pending = liveBlocksRef.current;
     const baseThread = threadRef.current;
-    const pendingCompact =
-      pending.length > 0 ? compactBlocksForHistory(pending) : [];
-    const blocksToArchive =
-      pending.length > 0 && pendingCompact.length === 0
-        ? pending
-        : pendingCompact;
-    const afterFlush =
-      blocksToArchive.length > 0
-        ? [
-            ...baseThread,
-            {
-              kind: "run" as const,
-              id: newId(),
-              blocks: structuredClone(blocksToArchive),
-            },
-          ]
-        : baseThread;
+    // #region agent log
+    fetch("http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": "ec2c0a",
+      },
+      body: JSON.stringify({
+        sessionId: "ec2c0a",
+        hypothesisId: "H3-send",
+        location: "hofAgentChatContext.tsx:send",
+        message: "send() before clearing live",
+        data: {
+          threadLen: baseThread.length,
+          liveLen: liveBlocksRef.current.length,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+    // Do not merge ``liveBlocks`` into ``thread`` here. Completed turns are appended only via
+    // ``flushLiveToThread`` inside ``runAgent`` / ``runResume`` / error handling. Re-archiving
+    // stale ``liveBlocksRef`` on send duplicated the whole run (thread already had it + live area).
     liveBlocksRef.current = [];
     setLiveBlocks([]);
+    const afterFlush = baseThread;
     const snap = [...attachmentQueue];
     const names = snap.map((a) => a.filename).filter(Boolean);
     const attachNote =

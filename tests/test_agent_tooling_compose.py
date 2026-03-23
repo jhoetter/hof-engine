@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from hof.agent.policy import AgentPolicy, configure_agent
-from hof.agent.tooling import AGENT_TOOL_DESCRIPTION_MAX_CHARS, compose_agent_tool_description, openai_tool_specs
+from hof.agent.tooling import (
+    AGENT_TOOL_DESCRIPTION_MAX_CHARS,
+    compose_agent_tool_description,
+    format_tool_result_for_model,
+    openai_tool_specs,
+)
 from hof.core.registry import registry
 from hof.functions import function
 
@@ -93,3 +98,17 @@ class TestComposeAgentToolDescription:
         assert meta is not None
         text = compose_agent_tool_description("long_doc_fn", meta)
         assert len(text) <= AGENT_TOOL_DESCRIPTION_MAX_CHARS
+
+
+def test_format_tool_result_for_model_marks_complete() -> None:
+    raw = '{"rows":[]}'
+    out = format_tool_result_for_model("list_expenses", raw)
+    assert out.startswith("[hof:list_expenses · complete]\n")
+    assert out.endswith(raw)
+
+
+def test_format_tool_result_for_model_marks_truncated() -> None:
+    raw = '{"rows":[]}\n…(truncated)'
+    out = format_tool_result_for_model("list_expenses", raw)
+    assert "[hof:list_expenses · truncated]\n" in out
+    assert raw in out

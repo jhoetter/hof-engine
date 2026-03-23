@@ -12,6 +12,10 @@ NormalizeAttachmentsFn = Callable[[Any], tuple[list[dict[str, str]], str | None]
 AttachmentsSystemNoteFn = Callable[[list[dict[str, str]]], str]
 
 DEFAULT_SYSTEM_PROMPT_BODY = """Use tools to fetch real data; do not invent row counts or amounts.
+Tool JSON is live output from executed tools on this backend (not training recall). Treat it as
+authoritative: state counts, amounts, and labels directly. Avoid meta-disclaimers such as "based on
+actual/real data" unless the tool errored or the payload is incomplete (ends with "…(truncated)" or
+rows clearly short of a stated total).
 Answer concisely in the same language as the user's chat messages
 (the `messages` entries with role user).
 Do not infer language from attachment filenames, PDF or invoice body text,
@@ -45,7 +49,7 @@ DEFAULT_CONFIRMATION_SUMMARY_USER_MESSAGE = (
     "Reply with 1–3 short sentences in the same language as the user's chat messages "
     "(role user only), "
     "not the language of any attached document or filename. "
-    'Use future or conditional wording only (e.g. "will", "after you approve", "proposed"). '
+    "Use future or conditional wording only (e.g. \"will\", \"after you approve\", \"proposed\"). "
     "Never use past tense as if the mutation already succeeded (do not say you already registered, "
     "created, updated, saved, or completed the action).\n"
     "Briefly remind them what will happen after they approve or reject in that panel. "

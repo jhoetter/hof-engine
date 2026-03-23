@@ -315,3 +315,17 @@ def execute_tool(
     if len(raw) > max_tool_output_chars:
         raw = raw[: max_tool_output_chars - 24] + "\n…(truncated)"
     return raw, summarize_tool_json(name, raw)
+
+
+_TOOL_TRUNCATION_MARKER = "\n…(truncated)"
+
+
+def format_tool_result_for_model(function_name: str, out_json: str) -> str:
+    """Tiny prefix so the model sees server-backed, complete-vs-truncated tool payloads (~40 chars).
+
+    Keeps the JSON body unchanged (still valid for ``parsed_tool_result_for_stream`` on the raw
+    string before wrapping).
+    """
+    name = (function_name or "").strip() or "tool"
+    status = "truncated" if _TOOL_TRUNCATION_MARKER in out_json else "complete"
+    return f"[hof:{name} · {status}]\n{out_json}"

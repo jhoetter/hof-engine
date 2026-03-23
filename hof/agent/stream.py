@@ -25,6 +25,7 @@ from hof.agent.state import (
 from hof.agent.tooling import (
     execute_tool,
     format_cli_line,
+    format_tool_result_for_model,
     openai_tool_specs,
     parsed_tool_result_for_stream,
 )
@@ -176,6 +177,20 @@ def _resolve_agent_model() -> str:
     return "gpt-4o-mini"
 
 
+def _anthropic_stream_turn_extras(
+    lm_backend: str,
+    reasoning: ReasoningConfig,
+) -> dict[str, Any]:
+    """Always bias adaptive thinking so Claude emits a thinking block (not env-tunable)."""
+    if lm_backend != "anthropic":
+        return {}
+    if reasoning.mode is not ReasoningMode.NATIVE:
+        return {}
+    if not reasoning.anthropic_thinking:
+        return {}
+    return {"output_config": {"effort": "high"}}
+
+
 def _resolve_anthropic_thinking_kw() -> dict[str, Any] | None:
     """``thinking=...`` for Anthropic Messages API (native mode only).
 
@@ -235,7 +250,8 @@ def _resolve_agent_reasoning_config(backend: str | None = None) -> ReasoningConf
     if mode_src in ("fallback",):
         if extras:
             msg = (
-                "AGENT_REASONING_OPENAI_EXTRAS is not allowed when AGENT_REASONING_MODE is fallback"
+                "AGENT_REASONING_OPENAI_EXTRAS is not allowed when "
+                "AGENT_REASONING_MODE is fallback"
             )
             raise ValueError(msg)
         if backend_norm == "anthropic":
@@ -253,7 +269,17 @@ def _resolve_agent_reasoning_config(backend: str | None = None) -> ReasoningConf
             msg = "AGENT_REASONING_OPENAI_EXTRAS is not used when AGENT_LLM_BACKEND=anthropic"
             raise ValueError(msg)
         return ReasoningConfig.native(anthropic_thinking=_resolve_anthropic_thinking_kw())
-    return ReasoningConfig.native(openai_extras=extras)
+    # OpenAI (default backend): "native" in config means "show thinking for every turn".
+    # Chat Completions on gpt-4o-class models usually emit no reasoning_delta; llm-markdown
+    # FALLBACK always streams a planning/thinking lane. Opt into true Chat Completions native
+    # reasoning (o-series etc.) by setting AGENT_REASONING_OPENAI_EXTRAS to any JSON object
+    # (e.g. {}); we merge reasoning_effort=high so reasoning tends to appear when supported.
+    if not raw_extras:
+        return ReasoningConfig(mode=ReasoningMode.FALLBACK)
+    assert extras is not None
+    merged_openai: dict[str, Any] = {"reasoning_effort": "high"}
+    merged_openai.update(extras)
+    return ReasoningConfig.native(openai_extras=merged_openai)
 
 
 def _resolve_agent_max_completion_tokens() -> int:
@@ -478,6 +504,7 @@ def _stream_confirmation_summary_for_ui(
             tool_choice=None,
             max_tokens=_AGENT_SUMMARY_MAX_TOKENS,
             reasoning=reasoning,
+            **_anthropic_stream_turn_extras(lm_backend, reasoning),
         ):
             if isinstance(ev, AgentContentDelta):
                 assistant_text += ev.text
@@ -571,6 +598,7 @@ def _run_agent_openai_loop(
                 tool_choice="auto",
                 max_tokens=_resolve_agent_max_completion_tokens(),
                 reasoning=reasoning,
+                **_anthropic_stream_turn_extras(lm_backend, reasoning),
             ):
                 if isinstance(ev, AgentSegmentStart):
                     yield {"type": "segment_start", "segment": ev.segment}
@@ -757,7 +785,11 @@ def _run_agent_openai_loop(
                             tr_out["data"] = pdata
                         yield tr_out
                         oa_messages.append(
-                            {"role": "tool", "tool_call_id": tid, "content": out_json},
+                            {
+                                "role": "tool",
+                                "tool_call_id": tid,
+                                "content": format_tool_result_for_model(name, out_json),
+                            },
                         )
                 if pending_ids:
                     yield from _stream_confirmation_summary_for_ui(
@@ -1065,6 +1097,7 @@ def _run_agent_resume_stream(
                     allowlist,
                     max_tool_output_chars=max_tool_output_chars,
                 )
+                model_tool_body = format_tool_result_for_model(fname, out_json)
             else:
                 out_json = json.dumps(
                     {
@@ -1072,7 +1105,8 @@ def _run_agent_resume_stream(
                         "message": "User rejected this action in the assistant.",
                     }
                 )
-            _replace_tool_message_content(oa_messages, tid, out_json)
+                model_tool_body = format_tool_result_for_model(fname, out_json)
+            _replace_tool_message_content(oa_messages, tid, model_tool_body)
             delete_pending(pid)
     except ValueError as exc:
         yield {"type": "error", "detail": str(exc)}

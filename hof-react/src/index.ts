@@ -4,6 +4,10 @@ export {
   type HofAgentChatPresignResult,
   type HofAgentChatProps,
 } from "./agent/HofAgentChat";
+export type {
+  AgentConversationDraftV1,
+  AgentConversationStateV1,
+} from "./agent/conversationTypes";
 export { FunctionResultDisplay } from "./agent/FunctionResultDisplay";
 export { useHofTable } from "./hooks/useHofTable";
 export { useHofFunction } from "./hooks/useHofFunction";

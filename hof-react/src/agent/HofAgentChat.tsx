@@ -16,11 +16,13 @@ import { FunctionResultDisplay } from "./FunctionResultDisplay";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type Dispatch,
   type SetStateAction,
 } from "react";
+import type { AgentConversationStateV1 } from "./conversationTypes";
 
 type AgentAttachment = {
   object_key: string;
@@ -1338,6 +1340,14 @@ export type HofAgentChatProps = {
   className?: string;
   /** Override loading copy under the message list. */
   connectingLabel?: string;
+  /**
+   * Hydrate once on mount. Parent should remount with a new ``key`` when switching
+   * stored conversations so this snapshot is applied exactly once.
+   */
+  initialPersisted?: AgentConversationStateV1 | null;
+  /** Called after local edits (debounced); persist to your backend. */
+  onPersist?: (state: AgentConversationStateV1) => void | Promise<void>;
+  persistDebounceMs?: number;
 };
 
 export function HofAgentChat({
@@ -1345,6 +1355,9 @@ export function HofAgentChat({
   presignUpload,
   className = "",
   connectingLabel = "Connecting…",
+  initialPersisted = null,
+  onPersist,
+  persistDebounceMs = 1200,
 }: HofAgentChatProps) {
   const [thread, setThread] = useState<ThreadItem[]>([]);
   const [liveBlocks, setLiveBlocks] = useState<LiveBlock[]>([]);
@@ -1380,6 +1393,100 @@ export function HofAgentChat({
   const currentAgentRunIdRef = useRef("");
   /** Last `phase: model|summary` before assistant deltas (NDJSON stream). */
   const assistantStreamPhaseRef = useRef<"model" | "summary" | null>(null);
+  /** Skip first post-hydration persist (avoids immediate rewrite right after load). */
+  const skipNextPersistRef = useRef(true);
+
+  useLayoutEffect(() => {
+    skipNextPersistRef.current = true;
+    const snap = initialPersisted;
+    if (!snap || snap.version !== 1) {
+      return;
+    }
+    if (Array.isArray(snap.thread)) {
+      setThread(snap.thread as ThreadItem[]);
+    }
+    const mo = snap.mutationOutcomes;
+    if (mo && typeof mo === "object") {
+      const nextMo: Record<string, boolean | undefined> = {};
+      for (const [k, v] of Object.entries(mo)) {
+        if (v === true || v === false) {
+          nextMo[k] = v;
+        }
+      }
+      setMutationOutcomeByPendingId(nextMo);
+    } else {
+      setMutationOutcomeByPendingId({});
+    }
+    const d = snap.draft;
+    if (d?.liveBlocks && Array.isArray(d.liveBlocks)) {
+      const lb = d.liveBlocks as LiveBlock[];
+      liveBlocksRef.current = lb;
+      setLiveBlocks(lb);
+      if (d.approvalBarrier?.runId) {
+        setApprovalBarrier(d.approvalBarrier as ApprovalBarrier);
+      } else {
+        setApprovalBarrier(null);
+      }
+      setApprovalDecisions(
+        d.approvalDecisions && typeof d.approvalDecisions === "object"
+          ? { ...d.approvalDecisions }
+          : {},
+      );
+    } else {
+      liveBlocksRef.current = [];
+      setLiveBlocks([]);
+      setApprovalBarrier(null);
+      setApprovalDecisions({});
+    }
+    setAttachmentQueue([]);
+    setInput("");
+    setUploadErr(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: hydrate only from initial mount props; parent uses ``key`` to switch conversations
+  }, []);
+
+  useEffect(() => {
+    if (!onPersist) {
+      return;
+    }
+    if (skipNextPersistRef.current) {
+      skipNextPersistRef.current = false;
+      return;
+    }
+    const ms = persistDebounceMs;
+    const t = window.setTimeout(() => {
+      const outcomes: Record<string, boolean> = {};
+      for (const [k, v] of Object.entries(mutationOutcomeByPendingId)) {
+        if (v === true || v === false) {
+          outcomes[k] = v;
+        }
+      }
+      const hasDraft =
+        liveBlocks.length > 0 || approvalBarrier !== null || busy;
+      const state: AgentConversationStateV1 = {
+        version: 1,
+        thread: structuredClone(thread) as unknown[],
+        mutationOutcomes: outcomes,
+        draft: hasDraft
+          ? {
+              liveBlocks: structuredClone(liveBlocks) as unknown[],
+              approvalBarrier,
+              approvalDecisions: { ...approvalDecisions },
+            }
+          : undefined,
+      };
+      void onPersist(state);
+    }, ms);
+    return () => window.clearTimeout(t);
+  }, [
+    thread,
+    liveBlocks,
+    mutationOutcomeByPendingId,
+    approvalBarrier,
+    approvalDecisions,
+    busy,
+    onPersist,
+    persistDebounceMs,
+  ]);
 
   useEffect(() => {
     threadRef.current = thread;

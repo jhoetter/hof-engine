@@ -1,5 +1,14 @@
 """Hof agent: OpenAI tool-calling with mutation confirmation and NDJSON streaming."""
 
+from hof.agent.conversation_state import (
+    MAX_CONVERSATION_STATE_BYTES,
+    AgentConversationDraftV1,
+    AgentConversationStateV1,
+    conversation_state_json_size,
+    enforce_max_conversation_state_bytes,
+    normalize_conversation_state_for_storage,
+    validate_conversation_state,
+)
 from hof.agent.policy import (
     AgentPolicy,
     configure_agent,
@@ -16,14 +25,21 @@ from hof.agent.stream import (
 from hof.agent.tooling import format_cli_line
 
 __all__ = [
+    "MAX_CONVERSATION_STATE_BYTES",
+    "AgentConversationDraftV1",
+    "AgentConversationStateV1",
     "AgentPolicy",
     "collect_agent_chat_from_stream",
     "configure_agent",
+    "conversation_state_json_size",
     "default_attachments_system_note",
     "default_normalize_attachments",
+    "enforce_max_conversation_state_bytes",
     "format_cli_line",
     "get_agent_policy",
     "iter_agent_chat_stream",
     "iter_agent_resume_stream",
+    "normalize_conversation_state_for_storage",
     "try_get_agent_policy",
+    "validate_conversation_state",
 ]

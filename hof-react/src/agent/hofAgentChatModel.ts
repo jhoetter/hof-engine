@@ -6,6 +6,27 @@ export type AgentAttachment = {
   content_type: string;
 };
 
+/** Reasoning vs visible reply chunks from NDJSON ``segment_start`` + deltas (llm-markdown 0.3.7+). */
+export type AssistantStreamSegment = {
+  kind: "reasoning" | "content";
+  text: string;
+};
+
+export function appendAssistantStreamSegmentChunk(
+  segments: AssistantStreamSegment[] | undefined,
+  kind: "reasoning" | "content",
+  chunk: string,
+): AssistantStreamSegment[] {
+  const segs = segments ? [...segments] : [];
+  const tail = segs[segs.length - 1];
+  if (tail && tail.kind === kind) {
+    segs[segs.length - 1] = { kind, text: tail.text + chunk };
+  } else {
+    segs.push({ kind, text: chunk });
+  }
+  return segs;
+}
+
 export type LiveBlock =
   | { kind: "phase"; id: string; round: number; phase: string }
   /** Ephemeral: shown from `phase: model` until first token or `tool_call` (models often emit no `assistant_delta` before tools). */
@@ -23,6 +44,8 @@ export type LiveBlock =
        * `mixed` if both appear in one segment (rare).
        */
       streamTextRole?: "content" | "reasoning" | "mixed";
+      /** When the server emits ``segment_start``, ordered reasoning vs content lanes (preferred over single ``text`` for display). */
+      streamSegments?: AssistantStreamSegment[];
       /**
        * Set on `assistant_done`. Drives stable Thinking vs reply presentation (persisted threads
        * without this field infer from `streamPhase` + `finishReason`).
@@ -359,6 +382,29 @@ export function applyStreamEvent(
     }
     return [...prev, { kind: "phase", id: newId(), round, phase }];
   }
+  if (t === "segment_start") {
+    const raw = ev.segment;
+    const seg = raw === "reasoning" || raw === "content" ? raw : null;
+    if (!seg) {
+      return prev;
+    }
+    const base = withoutThinkingSkeleton(prev);
+    const last = base[base.length - 1];
+    if (last?.kind !== "assistant" || !last.streaming) {
+      return prev;
+    }
+    const segs = [...(last.streamSegments ?? [])];
+    segs.push({ kind: seg, text: "" });
+    const sp = stampStreamPhase(ctx, last.streamPhase);
+    return [
+      ...base.slice(0, -1),
+      {
+        ...last,
+        streamSegments: segs,
+        ...(sp ? { streamPhase: sp } : {}),
+      },
+    ];
+  }
   if (t === "assistant_delta" || t === "reasoning_delta") {
     const chunk = typeof ev.text === "string" ? ev.text : "";
     const incoming: "content" | "reasoning" =
@@ -368,12 +414,18 @@ export function applyStreamEvent(
     if (last?.kind === "assistant" && last.streaming) {
       const sp = stampStreamPhase(ctx, last.streamPhase);
       const nextRole = mergeStreamTextRole(last.streamTextRole, incoming);
+      const nextSegs = appendAssistantStreamSegmentChunk(
+        last.streamSegments,
+        incoming,
+        chunk,
+      );
       return [
         ...base.slice(0, -1),
         {
           ...last,
           text: last.text + chunk,
           streamTextRole: nextRole,
+          streamSegments: nextSegs,
           ...(sp ? { streamPhase: sp } : {}),
         },
       ];
@@ -387,6 +439,7 @@ export function applyStreamEvent(
         text: chunk,
         streaming: true,
         streamTextRole: incoming,
+        streamSegments: appendAssistantStreamSegmentChunk(undefined, incoming, chunk),
         ...(spNew ? { streamPhase: spNew } : {}),
       },
     ];
@@ -591,7 +644,8 @@ export function isEphemeralAssistantShell(b: LiveBlock): boolean {
     return false;
   }
   const t = b.text.trim();
-  return b.finishReason === "tool_calls" && !t;
+  const segText = b.streamSegments?.some((s) => s.text.trim()) ?? false;
+  return b.finishReason === "tool_calls" && !t && !segText;
 }
 
 export function normalizeAssistantTextForDedupe(s: string): string {
@@ -602,6 +656,13 @@ export function normalizeAssistantTextForDedupe(s: string): string {
  * Rare stream / multi-round edge cases can yield two completed assistant rows with the same
  * body; the UI would show duplicate reply bubbles. Collapse consecutive duplicates.
  */
+function assistantDedupeFingerprint(b: Extract<LiveBlock, { kind: "assistant" }>): string {
+  if (b.streamSegments?.length) {
+    return b.streamSegments.map((s) => s.text).join("\n");
+  }
+  return b.text;
+}
+
 export function dedupeAdjacentDuplicateAssistants(blocks: LiveBlock[]): LiveBlock[] {
   const out: LiveBlock[] = [];
   for (const b of blocks) {
@@ -614,8 +675,8 @@ export function dedupeAdjacentDuplicateAssistants(blocks: LiveBlock[]): LiveBloc
     if (prev?.kind === "assistant") {
       const pa = prev as Extract<LiveBlock, { kind: "assistant" }>;
       if (!pa.streaming && !cur.streaming) {
-        const a = normalizeAssistantTextForDedupe(pa.text);
-        const c = normalizeAssistantTextForDedupe(cur.text);
+        const a = normalizeAssistantTextForDedupe(assistantDedupeFingerprint(pa));
+        const c = normalizeAssistantTextForDedupe(assistantDedupeFingerprint(cur));
         if (a.length > 0 && a === c) {
           continue;
         }

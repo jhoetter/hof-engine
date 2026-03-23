@@ -23,6 +23,7 @@ import {
 } from "./hofAgentChatModel";
 import type {
   ApprovalBarrier,
+  AssistantStreamSegment,
   BlockSegment,
   LiveBlock,
   MutationPendingBlock,
@@ -546,6 +547,51 @@ export function ReasoningCollapsible({
   );
 }
 
+/** Renders ``streamSegments`` from NDJSON ``segment_start`` + deltas (llm-markdown agentic contract). */
+function AssistantSegmentedBody({
+  segments,
+  streaming,
+  replyBubbleClass,
+  emptyLabel,
+}: {
+  segments: AssistantStreamSegment[];
+  streaming: boolean;
+  replyBubbleClass: string;
+  emptyLabel: string;
+}) {
+  return (
+    <div className="max-w-[min(100%,42rem)] space-y-3">
+      {segments.map((s, i) => {
+        const isLast = i === segments.length - 1;
+        const pulse = streaming && isLast;
+        if (s.kind === "reasoning") {
+          return (
+            <ReasoningCollapsible
+              key={`seg-r-${i}`}
+              text={s.text}
+              streaming={pulse}
+            />
+          );
+        }
+        return (
+          <div key={`seg-c-${i}`} className={replyBubbleClass}>
+            {s.text.trim() ? (
+              <AssistantMarkdown source={s.text} />
+            ) : pulse ? (
+              <span className="text-[11px] leading-snug text-secondary">
+                {emptyLabel}
+              </span>
+            ) : null}
+            {pulse ? (
+              <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function LiveBlockView({
   b,
   afterToolResult = false,
@@ -616,6 +662,8 @@ export function LiveBlockView({
     const lane = inferAssistantUiLane(b);
     const isSummary = b.streamPhase === "summary";
     const isModel = b.streamPhase === "model";
+    const streamSegs = b.streamSegments?.length ? b.streamSegments : null;
+    const anySegText = streamSegs?.some((s) => s.text.trim()) ?? false;
 
     if (afterToolResult || isSummary) {
       if (b.streaming) {
@@ -625,6 +673,16 @@ export function LiveBlockView({
         // rounds stream text into the same assistant block. Use Thinking shell for model-phase
         // streaming so tokens are visible like pre-tool; summary round stays a plain bubble.
         if (b.streamPhase === "summary") {
+          if (streamSegs) {
+            return (
+              <AssistantSegmentedBody
+                segments={streamSegs}
+                streaming
+                replyBubbleClass={replyBubbleClass}
+                emptyLabel="…"
+              />
+            );
+          }
           return (
             <div className={replyBubbleClass}>
               {hasStreamText ? (
@@ -636,12 +694,35 @@ export function LiveBlockView({
             </div>
           );
         }
+        if (streamSegs) {
+          return (
+            <AssistantSegmentedBody
+              segments={streamSegs}
+              streaming
+              replyBubbleClass={replyBubbleClass}
+              emptyLabel="Drafting the answer…"
+            />
+          );
+        }
         return (
           <AssistantModelStreamShell
             streamText={streamText}
             streamTextRole={b.streamTextRole}
             replyBubbleClass={replyBubbleClass}
             emptyLabel="Drafting the answer…"
+          />
+        );
+      }
+      if (streamSegs) {
+        if (!anySegText) {
+          return null;
+        }
+        return (
+          <AssistantSegmentedBody
+            segments={streamSegs}
+            streaming={false}
+            replyBubbleClass={replyBubbleClass}
+            emptyLabel=""
           />
         );
       }
@@ -657,6 +738,16 @@ export function LiveBlockView({
     }
 
     if (isModel && b.streaming) {
+      if (streamSegs) {
+        return (
+          <AssistantSegmentedBody
+            segments={streamSegs}
+            streaming
+            replyBubbleClass={replyBubbleClass}
+            emptyLabel="Tools may run before any reply text appears."
+          />
+        );
+      }
       return (
         <AssistantModelStreamShell
           streamText={b.text}
@@ -668,6 +759,23 @@ export function LiveBlockView({
     }
 
     if (isModel && !b.streaming && lane === "thinking") {
+      if (streamSegs) {
+        if (!anySegText) {
+          return (
+            <div className="max-w-[min(100%,42rem)] border-l-2 border-border pl-3 text-[11px] leading-snug text-tertiary">
+              No visible plan text before tools (normal for many models). See tool steps below.
+            </div>
+          );
+        }
+        return (
+          <AssistantSegmentedBody
+            segments={streamSegs}
+            streaming={false}
+            replyBubbleClass={replyBubbleClass}
+            emptyLabel=""
+          />
+        );
+      }
       const t = b.text.trim();
       if (!t) {
         return (
@@ -680,6 +788,16 @@ export function LiveBlockView({
     }
 
     if (isModel && !b.streaming && lane === "reply") {
+      if (streamSegs && anySegText) {
+        return (
+          <AssistantSegmentedBody
+            segments={streamSegs}
+            streaming={false}
+            replyBubbleClass={replyBubbleClass}
+            emptyLabel=""
+          />
+        );
+      }
       const text = b.text.trim();
       if (!text) {
         return null;
@@ -693,16 +811,47 @@ export function LiveBlockView({
 
     const role = assistantUiRole(b, { afterToolResult });
     if (role === "reasoning" && !b.streaming) {
+      if (streamSegs && anySegText) {
+        return (
+          <AssistantSegmentedBody
+            segments={streamSegs}
+            streaming={false}
+            replyBubbleClass={replyBubbleClass}
+            emptyLabel=""
+          />
+        );
+      }
       return <ReasoningCollapsible text={b.text} streaming={false} />;
     }
 
     if (b.streaming) {
+      if (streamSegs) {
+        return (
+          <AssistantSegmentedBody
+            segments={streamSegs}
+            streaming
+            replyBubbleClass={replyBubbleClass}
+            emptyLabel="Waiting for the model…"
+          />
+        );
+      }
       return (
         <AssistantModelStreamShell
           streamText={b.text}
           streamTextRole={b.streamTextRole}
           replyBubbleClass={replyBubbleClass}
           emptyLabel="Waiting for the model…"
+        />
+      );
+    }
+
+    if (streamSegs && anySegText) {
+      return (
+        <AssistantSegmentedBody
+          segments={streamSegs}
+          streaming={false}
+          replyBubbleClass={replyBubbleClass}
+          emptyLabel=""
         />
       );
     }

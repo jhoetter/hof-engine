@@ -298,6 +298,8 @@ def collect_agent_chat_from_stream(events_iter: Iterator[dict[str, Any]]) -> dic
                 legacy.append({"type": "thinking", "detail": f"Round {r}: executing tools…"})
             elif ph == "summary":
                 legacy.append({"type": "thinking", "detail": f"Round {r}: confirmation reply…"})
+        elif t == "segment_start":
+            continue
         elif t == "assistant_delta" or t == "reasoning_delta":
             buf += str(ev.get("text") or "")
         elif t == "assistant_done":
@@ -487,6 +489,7 @@ def _run_agent_openai_loop(
                 AgentContentDelta,
                 AgentMessageFinish,
                 AgentReasoningDelta,
+                AgentSegmentStart,
                 AgentToolCallDelta,
             )
 
@@ -507,7 +510,9 @@ def _run_agent_openai_loop(
                 max_tokens=_resolve_agent_max_completion_tokens(),
                 reasoning=reasoning,
             ):
-                if isinstance(ev, AgentContentDelta):
+                if isinstance(ev, AgentSegmentStart):
+                    yield {"type": "segment_start", "segment": ev.segment}
+                elif isinstance(ev, AgentContentDelta):
                     assistant_text += ev.text
                     n_content_delta += 1
                     yield {"type": "assistant_delta", "text": ev.text}

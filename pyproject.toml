@@ -40,9 +40,9 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "httpx>=0.27.0",
     "websockets>=14.0",
-    # Agent streaming (stream_agent_turn, ReasoningMode.fallback). Requires PyPI >=0.3.6;
+    # Agent streaming (stream_agent_turn, AgentSegmentStart, ReasoningMode.fallback). Requires PyPI >=0.3.7;
     # run `uv lock` in this repo after publishing that release (see llm-markdown docs/versioning.md).
-    "llm-markdown[openai]>=0.3.6",
+    "llm-markdown[openai]>=0.3.7",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
     "python-multipart>=0.0.9",
@@ -105,3 +105,8 @@ python_version = "3.11"
 ignore_missing_imports = true
 warn_unused_ignores = false
 no_strict_optional = true
+
+# Until llm-markdown 0.3.7 is on PyPI, `uv lock` resolves from a sibling checkout.
+# After release: delete this block and run `uv lock` so the lockfile uses the registry.
+[tool.uv.sources]
+llm-markdown = { path = "../llm-markdown", editable = true }

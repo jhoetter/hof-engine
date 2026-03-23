@@ -71,8 +71,8 @@ describe("normalizeAssistantStreamSegments", () => {
     ).toEqual([{ kind: "content", text: "done" }]);
   });
 
-  it("drops short reasoning that duplicates the following reply", () => {
-    const dup = "Hi there! How can I help you today?";
+  it("drops reasoning that is a near-duplicate of the following reply", () => {
+    const dup = "The total for Q4 is 19,200 EUR before tax.";
     const out = normalizeAssistantStreamSegments([
       { kind: "reasoning", text: dup },
       { kind: "content", text: dup },

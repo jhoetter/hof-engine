@@ -106,46 +106,9 @@ function openingWordOverlap(a: string, b: string, maxWords: number): number {
   return wordOverlapRatio(short, long);
 }
 
-const GREETING_STOPWORDS = new Set([
-  "hi",
-  "hello",
-  "hey",
-  "there",
-  "how",
-  "can",
-  "could",
-  "i",
-  "help",
-  "you",
-  "your",
-  "today",
-  "assist",
-  "do",
-  "for",
-  "with",
-]);
-
-/** True when a short clause is mostly generic chat-offer wording (draft greeting). */
-function isGreetingHeavyClause(s: string): boolean {
-  const w = tokenWords(s);
-  if (w.length === 0 || w.length > 16) {
-    return false;
-  }
-  let hits = 0;
-  for (const x of w) {
-    if (GREETING_STOPWORDS.has(x)) {
-      hits += 1;
-    }
-  }
-  if (w.length <= 3) {
-    return hits >= 1 && w.some((x) => x === "hi" || x === "hello" || x === "hey");
-  }
-  return hits >= 3;
-}
-
 /**
  * Drop leading reasoning sentences that mainly repeat the start of the visible reply
- * (e.g. model drafts "Hi! How can I help…" in thinking then says "Hi there! …" in reply).
+ * (word-overlap vs the opening of the user-visible answer — no phrase lists).
  */
 function stripReasoningPrefixOverlappingReply(reasoning: string, content: string): string {
   let r = reasoning.trim();
@@ -159,10 +122,6 @@ function stripReasoningPrefixOverlappingReply(reasoning: string, content: string
   while (parts.length > 0) {
     const first = parts[0]!;
     if (first.length >= 6 && openingWordOverlap(first, open, 14) >= overlapThreshold) {
-      parts = parts.slice(1);
-      continue;
-    }
-    if (isGreetingHeavyClause(first)) {
       parts = parts.slice(1);
       continue;
     }

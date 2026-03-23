@@ -50,6 +50,31 @@ def test_collect_agent_chat_from_stream_final() -> None:
     assert not out.get("error")
 
 
+def test_iter_agent_chat_stream_uses_anthropic_when_configured(monkeypatch) -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+        )
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("AGENT_LLM_BACKEND", "anthropic")
+
+    backends: list[str] = []
+
+    def _fake_stream_agent_turn(prov, backend, *_a, **_kw):
+        backends.append(backend)
+        yield AgentContentDelta(text="ok")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=_fake_stream_agent_turn):
+        ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
+    assert not any(x.get("type") == "error" for x in ev)
+    assert backends == ["anthropic"]
+
+
 def test_iter_agent_chat_stream_uses_fallback_reasoning_mode(monkeypatch) -> None:
     configure_agent(
         AgentPolicy(

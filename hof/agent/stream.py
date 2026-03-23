@@ -142,6 +142,21 @@ def _resolve_openai_api_key() -> str:
         return ""
 
 
+def _resolve_anthropic_api_key() -> str:
+    return os.environ.get("ANTHROPIC_API_KEY", "").strip()
+
+
+def _resolve_agent_llm_backend() -> str:
+    """``openai`` (default) or ``anthropic`` — from ``AGENT_LLM_BACKEND``."""
+    raw = os.environ.get("AGENT_LLM_BACKEND", "").strip().lower()
+    if raw in ("", "openai"):
+        return "openai"
+    if raw in ("anthropic", "claude"):
+        return "anthropic"
+    msg = f"Unknown AGENT_LLM_BACKEND: {raw!r} (use openai or anthropic)"
+    raise ValueError(msg)
+
+
 def _resolve_agent_model() -> str:
     for key in ("AGENT_MODEL", "LLM_MARKDOWN_MODEL"):
         v = os.environ.get(key, "").strip()
@@ -398,6 +413,7 @@ def _stream_confirmation_summary_for_ui(
     rounds: int,
     summary_user_message: str,
     *,
+    lm_backend: str,
     reasoning: ReasoningConfig,
 ) -> Iterator[dict[str, Any]]:
     from llm_markdown.agent_stream import AgentContentDelta, AgentMessageFinish, AgentReasoningDelta
@@ -410,7 +426,7 @@ def _stream_confirmation_summary_for_ui(
     try:
         for ev in stream_agent_turn(
             provider,
-            "openai",
+            lm_backend,
             msgs,
             model=model,
             tools=None,
@@ -472,6 +488,7 @@ def _run_agent_openai_loop(
     start_round: int,
     run_id: str,
     *,
+    lm_backend: str,
     reasoning: ReasoningConfig,
     max_rounds: int,
     max_tool_output_chars: int,
@@ -502,7 +519,7 @@ def _run_agent_openai_loop(
 
             for ev in stream_agent_turn(
                 provider,
-                "openai",
+                lm_backend,
                 oa_messages,
                 model=model,
                 tools=tools,
@@ -704,6 +721,7 @@ def _run_agent_openai_loop(
                         oa_messages,
                         rounds,
                         policy.confirmation_summary_user_message,
+                        lm_backend=lm_backend,
                         reasoning=reasoning,
                     )
                     save_agent_run(
@@ -711,6 +729,7 @@ def _run_agent_openai_loop(
                         {
                             "oa_messages": oa_messages,
                             "model": model,
+                            "llm_backend": lm_backend,
                             "rounds": rounds,
                             "open_pending_ids": pending_ids,
                         },
@@ -779,21 +798,10 @@ def _run_agent_chat_stream(
         yield {"type": "error", "detail": att_err}
         return
 
-    api_key = _resolve_openai_api_key()
-    if not api_key:
-        yield {
-            "type": "error",
-            "detail": "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)",
-        }
-        return
-
     try:
-        from llm_markdown.providers import OpenAIProvider
-    except ImportError:
-        yield {
-            "type": "error",
-            "detail": "Install llm-markdown with the openai extra (llm-markdown[openai])",
-        }
+        lm_backend = _resolve_agent_llm_backend()
+    except ValueError as exc:
+        yield {"type": "error", "detail": str(exc)}
         return
 
     model = _resolve_agent_model()
@@ -802,15 +810,53 @@ def _run_agent_chat_stream(
     except ValueError as exc:
         yield {"type": "error", "detail": str(exc)}
         return
+
+    if lm_backend == "anthropic":
+        api_key = _resolve_anthropic_api_key()
+        if not api_key:
+            yield {
+                "type": "error",
+                "detail": "Missing ANTHROPIC_API_KEY (required when AGENT_LLM_BACKEND=anthropic)",
+            }
+            return
+        try:
+            from llm_markdown.providers import AnthropicProvider
+        except ImportError:
+            yield {
+                "type": "error",
+                "detail": "Install llm-markdown with the anthropic extra (llm-markdown[anthropic])",
+            }
+            return
+        provider = AnthropicProvider(
+            api_key=api_key,
+            model=model,
+            max_tokens=_resolve_agent_max_completion_tokens(),
+        )
+    else:
+        api_key = _resolve_openai_api_key()
+        if not api_key:
+            yield {
+                "type": "error",
+                "detail": "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)",
+            }
+            return
+        try:
+            from llm_markdown.providers import OpenAIProvider
+        except ImportError:
+            yield {
+                "type": "error",
+                "detail": "Install llm-markdown with the openai extra (llm-markdown[openai])",
+            }
+            return
+        provider = OpenAIProvider(
+            api_key=api_key,
+            model=model,
+            max_tokens=_resolve_agent_max_completion_tokens(),
+        )
+
     run_id = str(uuid.uuid4())
     yield {"type": "run_start", "run_id": run_id, "model": model}
     _agent_stream_debug_append({"kind": "run_begin", "run_id": run_id, "model": model})
-
-    provider = OpenAIProvider(
-        api_key=api_key,
-        model=model,
-        max_tokens=_resolve_agent_max_completion_tokens(),
-    )
     allowlist = policy.effective_allowlist()
     tools = openai_tool_specs(allowlist)
 
@@ -827,8 +873,9 @@ def _run_agent_chat_stream(
             oa_messages.append({"role": role, "content": content})
 
     logger.info(
-        "agent_chat start run_id=%s model=%s openai_messages=%d tool_specs=%d",
+        "agent_chat start run_id=%s backend=%s model=%s messages=%d tool_specs=%d",
         run_id,
+        lm_backend,
         model,
         len(oa_messages),
         len(tools),
@@ -843,6 +890,7 @@ def _run_agent_chat_stream(
         oa_messages,
         0,
         run_id,
+        lm_backend=lm_backend,
         reasoning=reasoning,
         max_rounds=max_rounds,
         max_tool_output_chars=max_tool_output_chars,
@@ -893,23 +941,6 @@ def _run_agent_resume_stream(
         }
         return
 
-    api_key = _resolve_openai_api_key()
-    if not api_key:
-        yield {
-            "type": "error",
-            "detail": "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)",
-        }
-        return
-
-    try:
-        from llm_markdown.providers import OpenAIProvider
-    except ImportError:
-        yield {
-            "type": "error",
-            "detail": "Install llm-markdown with the openai extra (llm-markdown[openai])",
-        }
-        return
-
     oa_messages = run["oa_messages"]
     if not isinstance(oa_messages, list):
         yield {"type": "error", "detail": "Invalid saved agent state"}
@@ -921,9 +952,55 @@ def _run_agent_resume_stream(
         yield {"type": "error", "detail": str(exc)}
         return
     model = str(run.get("model") or "gpt-4o-mini").strip() or "gpt-4o-mini"
+    lm_backend = str(run.get("llm_backend") or "openai").strip().lower()
+    if lm_backend not in ("openai", "anthropic"):
+        lm_backend = "openai"
     start_round = int(run.get("rounds") or 0)
     allowlist = policy.effective_allowlist()
     tools = openai_tool_specs(allowlist)
+
+    if lm_backend == "anthropic":
+        api_key = _resolve_anthropic_api_key()
+        if not api_key:
+            yield {
+                "type": "error",
+                "detail": "Missing ANTHROPIC_API_KEY (required to resume this run)",
+            }
+            return
+        try:
+            from llm_markdown.providers import AnthropicProvider
+        except ImportError:
+            yield {
+                "type": "error",
+                "detail": "Install llm-markdown with the anthropic extra (llm-markdown[anthropic])",
+            }
+            return
+        provider = AnthropicProvider(
+            api_key=api_key,
+            model=model,
+            max_tokens=_resolve_agent_max_completion_tokens(),
+        )
+    else:
+        api_key = _resolve_openai_api_key()
+        if not api_key:
+            yield {
+                "type": "error",
+                "detail": "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)",
+            }
+            return
+        try:
+            from llm_markdown.providers import OpenAIProvider
+        except ImportError:
+            yield {
+                "type": "error",
+                "detail": "Install llm-markdown with the openai extra (llm-markdown[openai])",
+            }
+            return
+        provider = OpenAIProvider(
+            api_key=api_key,
+            model=model,
+            max_tokens=_resolve_agent_max_completion_tokens(),
+        )
 
     by_id = {r["pending_id"]: r["confirm"] for r in res_norm}
     try:
@@ -966,11 +1043,6 @@ def _run_agent_resume_stream(
         len(open_ids),
     )
 
-    provider = OpenAIProvider(
-        api_key=api_key,
-        model=model,
-        max_tokens=_resolve_agent_max_completion_tokens(),
-    )
     yield from _run_agent_openai_loop(
         provider,
         model,
@@ -980,6 +1052,7 @@ def _run_agent_resume_stream(
         oa_messages,
         start_round,
         rid,
+        lm_backend=lm_backend,
         reasoning=reasoning,
         max_rounds=max_rounds,
         max_tool_output_chars=max_tool_output_chars,

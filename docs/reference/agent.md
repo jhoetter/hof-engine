@@ -1,6 +1,6 @@
-# Agent (OpenAI tool loop)
+# Agent (tool loop)
 
-The **Hof agent** runs an OpenAI chat completion with tools bound to registered `@function` handlers. Streaming uses **llm-markdown** [`stream_agent_turn`](https://github.com/jhoetter/llm-markdown/blob/main/llm_markdown/agent_turn.py) with [`ReasoningConfig`](https://github.com/jhoetter/llm-markdown/blob/main/llm_markdown/reasoning.py) (wrapper over `OpenAIProvider.stream_chat_completion_events`) so tool deltas, optional reasoning text, and usage chunks are normalized before being mapped to NDJSON. Read tools execute immediately; **mutation** tools pause until the user confirms in the UI or via `POST /api/functions/agent_resume_mutations` (same NDJSON stream contract as `agent_chat`).
+The **Hof agent** runs a chat completion with tools bound to registered `@function` handlers (default **OpenAI**; optional **Anthropic**). Streaming uses **llm-markdown** [`stream_agent_turn`](https://github.com/jhoetter/llm-markdown/blob/main/llm_markdown/agent_turn.py) with [`ReasoningConfig`](https://github.com/jhoetter/llm-markdown/blob/main/llm_markdown/reasoning.py) so tool deltas, optional reasoning text, and usage chunks are normalized before being mapped to NDJSON. Read tools execute immediately; **mutation** tools pause until the user confirms in the UI or via `POST /api/functions/agent_resume_mutations` (same NDJSON stream contract as `agent_chat`).
 
 ## Setup
 
@@ -51,10 +51,11 @@ def agent_resume_mutations(run_id: str, resolutions: list) -> dict:
 | `agent_max_cli_line_chars` | Pseudo-CLI width for UI (default `240`) |
 | `agent_max_completion_tokens` | Max completion tokens per OpenAI request (default `16384`; overridden by `AGENT_MAX_COMPLETION_TOKENS` env) |
 | `agent_reasoning_mode` | `native` (default), `off` (no `reasoning_delta` on the wire), or `fallback` (two-phase planning + tools via llm-markdown). Overridden by `AGENT_REASONING_MODE` env when set. |
+| (env) `AGENT_LLM_BACKEND` | `openai` (default) or `anthropic`. With `anthropic`, set **`ANTHROPIC_API_KEY`** and a Claude model id in **`AGENT_MODEL`** / **`LLM_MARKDOWN_MODEL`**. Saved mutation runs include `llm_backend` so resume uses the same provider. |
 
 **Env (reasoning):** `AGENT_REASONING_OPENAI_EXTRAS` — optional JSON object merged into the OpenAI chat request when mode is `native` (e.g. model-specific reasoning parameters). Incompatible with `agent_reasoning_mode` / `AGENT_REASONING_MODE` `off`.
 
-**Dependency:** `llm-markdown[openai]` **>=0.3.8** on PyPI (`stream_agent_turn`, `AgentSegmentStart`, `ReasoningConfig`, `ReasoningMode.fallback`). Capability matrix: [llm-markdown `docs/agent-streaming.md`](https://github.com/jhoetter/llm-markdown/blob/main/docs/agent-streaming.md). The default completion budget is **16_384** tokens so common chat models accept the request; raise it in config or `AGENT_MAX_COMPLETION_TOKENS` (capped at **128_000**) when your model allows more.
+**Dependency:** `llm-markdown[openai,anthropic]` **>=0.3.14** (`stream_agent_turn`, `AgentSegmentStart`, `ReasoningConfig`, `ReasoningMode.fallback`). Capability matrix: [llm-markdown `docs/agent-streaming.md`](https://github.com/jhoetter/llm-markdown/blob/main/docs/agent-streaming.md). The default completion budget is **16_384** tokens so common chat models accept the request; raise it in config or `AGENT_MAX_COMPLETION_TOKENS` (capped at **128_000**) when your model allows more.
 
 **Observability:** At **INFO**, logger `hof.agent.stream` emits `agent_chat …` lines to the API process stdout (uvicorn terminal): run start, each model round (`finish_reason`, delta counts, assistant text preview), each `tool_call` / `tool_done`, `awaiting_confirmation`, and `final`. No `.env` toggle required. Optional **`HOF_AGENT_STREAM_DEBUG_LOG`** still appends structured NDJSON to a file (see your app’s `agent-chat-stream.md`).
 
@@ -66,7 +67,7 @@ Without streamed reasoning, the observable tool chain is: `assistant_done` (`fin
 
 `@hof-engine/react` consumes `segment_start` and `reasoning_delta` / `assistant_delta` for ordered reasoning vs reply segments.
 
-**Anthropic:** `llm-markdown` also provides `AnthropicProvider.stream_messages_events` (tools + optional extended thinking) for reuse in custom code; the stock Hof `agent_chat` stream remains OpenAI-backed.
+**Anthropic:** set `AGENT_LLM_BACKEND=anthropic` and `ANTHROPIC_API_KEY`. The same NDJSON stream and tool loop apply; `stream_agent_turn` uses the Anthropic Messages API backend.
 
 ## State
 

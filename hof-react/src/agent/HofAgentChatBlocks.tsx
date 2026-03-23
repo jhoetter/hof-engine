@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, Terminal, X } from "lucide-react";
+import { ChevronRight, Terminal } from "lucide-react";
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { FunctionResultDisplay } from "./FunctionResultDisplay";
@@ -12,6 +12,7 @@ import {
   confirmationFooterFromOutcomes,
   dropRedundantModelPhaseBeforeAssistant,
   humanizeToolName,
+  inferAssistantUiLane,
   isGenericAwaitingConfirmationSummary,
   postToolAssistantBlockIds,
   segmentLiveBlocks,
@@ -106,6 +107,11 @@ export function ToolGroupCard({
             {summaryHint ? (
               <p className="mt-0.5 line-clamp-2 text-[11px] text-secondary">
                 {summaryHint}
+              </p>
+            ) : null}
+            {call.internal_rationale ? (
+              <p className="mt-0.5 line-clamp-2 text-[10px] text-tertiary">
+                {call.internal_rationale}
               </p>
             ) : null}
           </div>
@@ -456,7 +462,9 @@ export function ReasoningCollapsible({
   text: string;
   streaming: boolean;
 }) {
-  const [open, setOpen] = useState(streaming);
+  const [open, setOpen] = useState(
+    () => streaming || text.trim().length > 0,
+  );
 
   useEffect(() => {
     if (streaming) {
@@ -480,10 +488,10 @@ export function ReasoningCollapsible({
           className="size-3 shrink-0 text-tertiary transition-transform duration-150"
           aria-hidden
         />
-        <span className="font-medium uppercase tracking-wide">Reasoning</span>
+        <span className="font-medium uppercase tracking-wide">Thinking</span>
       </summary>
       <div className="border-l border-border/70 pl-2.5 pt-1 pb-0.5 text-[11px] leading-snug text-secondary">
-        <span className="whitespace-pre-wrap break-words">{body}</span>
+        <AssistantMarkdown source={body} />
         {streaming ? (
           <span className="ml-0.5 inline-block h-3 w-px animate-pulse bg-[var(--color-accent)] align-middle" />
         ) : null}
@@ -499,6 +507,32 @@ export function LiveBlockView({
   b: LiveBlock;
   afterToolResult?: boolean;
 }) {
+  if (b.kind === "thinking_skeleton") {
+    const replyBubbleClass = CHAT_ASSISTANT_REPLY_BUBBLE_CLASS;
+    return (
+      <div
+        className="max-w-[min(100%,42rem)] space-y-1.5"
+        aria-busy="true"
+        aria-label="Assistant is thinking"
+      >
+        <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-tertiary">
+          <span
+            className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+            aria-hidden
+          />
+          Thinking
+        </div>
+        <div
+          className={`${replyBubbleClass} transition-opacity duration-200 opacity-[0.88]`}
+        >
+          <span className="text-[11px] leading-snug text-secondary">
+            Working through your request…
+          </span>
+          <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+        </div>
+      </div>
+    );
+  }
   if (b.kind === "phase") {
     if (b.phase === "summary" || b.phase === "tools") {
       return null;
@@ -506,7 +540,7 @@ export function LiveBlockView({
     if (b.phase === "model") {
       return (
         <div className="border-l-2 border-border pl-3 text-[11px] italic leading-snug text-tertiary">
-          Working…
+          Thinking…
         </div>
       );
     }
@@ -517,26 +551,128 @@ export function LiveBlockView({
     );
   }
   if (b.kind === "assistant") {
-    const role = assistantUiRole(b, { afterToolResult });
     const replyBubbleClass = CHAT_ASSISTANT_REPLY_BUBBLE_CLASS;
+    const lane = inferAssistantUiLane(b);
+    const isSummary = b.streamPhase === "summary";
+    const isModel = b.streamPhase === "model";
 
-    if (role === "reasoning") {
+    if (afterToolResult || isSummary) {
+      if (b.streaming) {
+        const streamText = b.text;
+        const hasStreamText = streamText.trim().length > 0;
+        return (
+          <div className={replyBubbleClass}>
+            {hasStreamText ? (
+              <AssistantMarkdown source={streamText} />
+            ) : (
+              <span className="text-secondary">…</span>
+            )}
+            <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+          </div>
+        );
+      }
+      const text = b.text.trim();
+      if (!text) {
+        return null;
+      }
       return (
-        <ReasoningCollapsible text={b.text} streaming={b.streaming} />
+        <div className={replyBubbleClass}>
+          <AssistantMarkdown source={b.text} />
+        </div>
       );
+    }
+
+    if (isModel && b.streaming) {
+      const streamText = b.text;
+      const hasStreamText = streamText.trim().length > 0;
+      if (b.streamTextRole === "reasoning") {
+        return (
+          <ReasoningCollapsible
+            text={streamText}
+            streaming={true}
+          />
+        );
+      }
+      return (
+        <div className="max-w-[min(100%,42rem)] space-y-1.5">
+          <div
+            className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-tertiary"
+            aria-live="polite"
+          >
+            <span
+              className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+              aria-hidden
+            />
+            Thinking
+          </div>
+          <div
+            className={`${replyBubbleClass} transition-opacity duration-200 opacity-[0.88]`}
+          >
+            {hasStreamText ? (
+              <AssistantMarkdown source={streamText} />
+            ) : (
+              <span className="text-secondary">…</span>
+            )}
+            <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+          </div>
+        </div>
+      );
+    }
+
+    if (isModel && !b.streaming && lane === "thinking") {
+      return <ReasoningCollapsible text={b.text} streaming={false} />;
+    }
+
+    if (isModel && !b.streaming && lane === "reply") {
+      const text = b.text.trim();
+      if (!text) {
+        return null;
+      }
+      return (
+        <div className={replyBubbleClass}>
+          <AssistantMarkdown source={b.text} />
+        </div>
+      );
+    }
+
+    const role = assistantUiRole(b, { afterToolResult });
+    if (role === "reasoning" && !b.streaming) {
+      return <ReasoningCollapsible text={b.text} streaming={false} />;
     }
 
     if (b.streaming) {
       const streamText = b.text;
       const hasStreamText = streamText.trim().length > 0;
+      if (b.streamTextRole === "reasoning") {
+        return (
+          <ReasoningCollapsible
+            text={streamText}
+            streaming={true}
+          />
+        );
+      }
       return (
-        <div className={replyBubbleClass}>
-          {hasStreamText ? (
-            <AssistantMarkdown source={streamText} />
-          ) : (
-            <span className="text-secondary">…</span>
-          )}
-          <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+        <div className="max-w-[min(100%,42rem)] space-y-1.5">
+          <div
+            className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-tertiary"
+            aria-live="polite"
+          >
+            <span
+              className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+              aria-hidden
+            />
+            Thinking
+          </div>
+          <div
+            className={`${replyBubbleClass} transition-opacity duration-200 opacity-[0.88]`}
+          >
+            {hasStreamText ? (
+              <AssistantMarkdown source={streamText} />
+            ) : (
+              <span className="text-secondary">…</span>
+            )}
+            <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+          </div>
         </div>
       );
     }

@@ -28,9 +28,9 @@ from hof.config import get_config
 
 logger = logging.getLogger(__name__)
 
-# High ceiling so behavior stays close to raw OpenAI (no explicit cap in the old client path).
-_AGENT_OPENAI_MAX_COMPLETION_TOKENS = 128_000
 _AGENT_SUMMARY_MAX_TOKENS = 2048
+_AGENT_COMPLETION_TOKENS_CAP = 128_000
+_AGENT_COMPLETION_TOKENS_FLOOR = 256
 
 
 def _agent_limits() -> tuple[int, int, int, int]:
@@ -72,6 +72,25 @@ def _resolve_agent_model() -> str:
     except Exception:
         pass
     return "gpt-4o-mini"
+
+
+def _resolve_agent_max_completion_tokens() -> int:
+    """OpenAI completion token budget per agent request (API may enforce a lower cap)."""
+    raw = os.environ.get("AGENT_MAX_COMPLETION_TOKENS", "").strip()
+    if raw:
+        try:
+            n = int(raw)
+        except ValueError:
+            n = 16_384
+        return max(_AGENT_COMPLETION_TOKENS_FLOOR, min(n, _AGENT_COMPLETION_TOKENS_CAP))
+    try:
+        c = get_config()
+        n = int(getattr(c, "agent_max_completion_tokens", 16_384))
+        if n > 0:
+            return max(_AGENT_COMPLETION_TOKENS_FLOOR, min(n, _AGENT_COMPLETION_TOKENS_CAP))
+    except Exception:
+        pass
+    return 16_384
 
 
 def default_normalize_attachments(raw: Any) -> tuple[list[dict[str, str]], str | None]:
@@ -349,7 +368,7 @@ def _run_agent_openai_loop(
                 model=model,
                 tools=tools,
                 tool_choice="auto",
-                max_tokens=_AGENT_OPENAI_MAX_COMPLETION_TOKENS,
+                max_tokens=_resolve_agent_max_completion_tokens(),
             ):
                 if isinstance(ev, AgentContentDelta):
                     assistant_text += ev.text
@@ -374,6 +393,15 @@ def _run_agent_openai_loop(
             if last_usage:
                 done_ev["usage"] = last_usage
             yield done_ev
+
+            logger.debug(
+                "agent model round done: round=%s finish_reason=%r tool_delta_indices=%s "
+                "assistant_text_chars=%s",
+                rounds,
+                finish_reason,
+                len(parts),
+                len(assistant_text),
+            )
 
             if finish_reason == "tool_calls":
                 if not parts:
@@ -553,7 +581,7 @@ def _run_agent_chat_stream(
     provider = OpenAIProvider(
         api_key=api_key,
         model=model,
-        max_tokens=_AGENT_OPENAI_MAX_COMPLETION_TOKENS,
+        max_tokens=_resolve_agent_max_completion_tokens(),
     )
     allowlist = policy.effective_allowlist()
     tools = openai_tool_specs(allowlist)
@@ -692,7 +720,7 @@ def _run_agent_resume_stream(
     provider = OpenAIProvider(
         api_key=api_key,
         model=model,
-        max_tokens=_AGENT_OPENAI_MAX_COMPLETION_TOKENS,
+        max_tokens=_resolve_agent_max_completion_tokens(),
     )
     yield from _run_agent_openai_loop(
         provider,

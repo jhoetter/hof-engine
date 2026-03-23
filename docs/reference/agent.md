@@ -49,10 +49,13 @@ def agent_resume_mutations(run_id: str, resolutions: list) -> dict:
 | `agent_max_tool_output_chars` | Truncate tool JSON (default `18000`) |
 | `agent_max_model_text_chars` | Legacy JSON trace truncation (default `8000`) |
 | `agent_max_cli_line_chars` | Pseudo-CLI width for UI (default `240`) |
+| `agent_max_completion_tokens` | Max completion tokens per OpenAI request (default `16384`; overridden by `AGENT_MAX_COMPLETION_TOKENS` env) |
 
-**Dependency:** `llm-markdown[openai]` **0.3.4+** with `OpenAIProvider.stream_chat_completion_events`. The lockfile may pin the Git tag `v0.3.4` until the package is published to PyPI; after publishing, depend on `llm-markdown[openai]>=0.3.4` from PyPI only. The agent requests up to **128_000** completion tokens per turn (high ceiling; the model still enforces its own cap).
+**Dependency:** `llm-markdown[openai]` **0.3.5+** with `OpenAIProvider.stream_chat_completion_events` (0.3.5 fixes `finish_reason` when the stream ends with usage-only chunks). The lockfile may pin the Git tag `v0.3.5` until the package is published to PyPI; after publishing, depend on `llm-markdown[openai]>=0.3.5` from PyPI only. The default completion budget is **16_384** tokens so common chat models accept the request; raise it in config or `AGENT_MAX_COMPLETION_TOKENS` (capped at **128_000**) when your model allows more.
 
-**Reasoning / chain-of-thought:** When the OpenAI stream exposes `reasoning_content` (or `reasoning`) on deltas, the server emits NDJSON `reasoning_delta` lines. Clients should treat them like other incremental thinking text (see your app’s `agent-chat-stream.md`).
+**Debugging:** With logging level **DEBUG** for `hof.agent.stream`, each model round logs `finish_reason`, assembled tool-call slot count, and assistant text length after `assistant_done` (wire events are unchanged).
+
+**Reasoning / chain-of-thought:** When the OpenAI stream exposes `reasoning_content` (or `reasoning`) on deltas, the server emits NDJSON `reasoning_delta` lines. `@hof-engine/react` maps those to `streamTextRole: "reasoning"` so the UI can show a **Thinking** collapsible even when `finish_reason` is `stop`. Clients should treat them like other incremental thinking text (see your app’s `agent-chat-stream.md`).
 
 **Anthropic:** `llm-markdown` also provides `AnthropicProvider.stream_messages_events` (tools + optional extended thinking) for reuse in custom code; the stock Hof `agent_chat` stream remains OpenAI-backed.
 

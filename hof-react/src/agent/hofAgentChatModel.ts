@@ -8,6 +8,8 @@ export type AgentAttachment = {
 
 export type LiveBlock =
   | { kind: "phase"; id: string; round: number; phase: string }
+  /** Ephemeral: shown from `phase: model` until first token or `tool_call` (models often emit no `assistant_delta` before tools). */
+  | { kind: "thinking_skeleton"; id: string }
   | {
       kind: "assistant";
       id: string;
@@ -16,6 +18,16 @@ export type LiveBlock =
       finishReason?: string;
       /** From NDJSON `phase` before this segment: model round vs confirmation summary round. */
       streamPhase?: "model" | "summary";
+      /**
+       * Whether streamed tokens came from NDJSON `reasoning_delta` vs `assistant_delta`.
+       * `mixed` if both appear in one segment (rare).
+       */
+      streamTextRole?: "content" | "reasoning" | "mixed";
+      /**
+       * Set on `assistant_done`. Drives stable Thinking vs reply presentation (persisted threads
+       * without this field infer from `streamPhase` + `finishReason`).
+       */
+      uiLane?: "thinking" | "reply";
       usage?: {
         prompt_tokens?: number;
         completion_tokens?: number;
@@ -218,6 +230,70 @@ type AgentApplyStreamCtx = {
   assistantStreamPhase: "model" | "summary" | null;
 };
 
+/** Final lane after a model turn completes (streaming path uses reply shell + opacity until this is set). */
+export function computeAssistantUiLane(
+  streamPhase: "model" | "summary" | undefined,
+  finishReason: string | undefined,
+): "thinking" | "reply" {
+  if (streamPhase === "summary") {
+    return "reply";
+  }
+  if (finishReason === "tool_calls") {
+    return "thinking";
+  }
+  return "reply";
+}
+
+function mergeStreamTextRole(
+  prior: "content" | "reasoning" | "mixed" | undefined,
+  incoming: "content" | "reasoning",
+): "content" | "reasoning" | "mixed" {
+  const p = prior ?? "content";
+  if (p === "mixed") {
+    return "mixed";
+  }
+  if (p === incoming) {
+    return incoming;
+  }
+  return "mixed";
+}
+
+/** Lane when finalizing a streaming assistant block (`assistant_done`). */
+function assistantDoneUiLane(
+  last: Extract<LiveBlock, { kind: "assistant" }>,
+  finishReason: string | undefined,
+  streamPhase: "model" | "summary" | undefined,
+): "thinking" | "reply" {
+  if (
+    last.streamTextRole === "reasoning" &&
+    finishReason === "stop" &&
+    streamPhase !== "summary"
+  ) {
+    return "thinking";
+  }
+  return computeAssistantUiLane(streamPhase, finishReason);
+}
+
+export function inferAssistantUiLane(
+  b: Extract<LiveBlock, { kind: "assistant" }>,
+): "thinking" | "reply" {
+  if (b.uiLane === "thinking" || b.uiLane === "reply") {
+    return b.uiLane;
+  }
+  if (
+    b.streamTextRole === "reasoning" &&
+    b.finishReason === "stop" &&
+    b.streamPhase !== "summary"
+  ) {
+    return "thinking";
+  }
+  return computeAssistantUiLane(b.streamPhase, b.finishReason);
+}
+
+function withoutThinkingSkeleton(blocks: LiveBlock[]): LiveBlock[] {
+  return blocks.filter((b) => b.kind !== "thinking_skeleton");
+}
+
 export function stampStreamPhase(
   ctx: AgentApplyStreamCtx,
   existing?: "model" | "summary",
@@ -241,30 +317,44 @@ export function applyStreamEvent(
   if (t === "phase") {
     const round = typeof ev.round === "number" ? ev.round : 0;
     const phase = typeof ev.phase === "string" ? ev.phase : "";
+    // `phase: model` often arrives long before the first `assistant_delta`. Many tool turns emit
+    // *no* content deltas (straight to `tool_calls`), so we show `thinking_skeleton` until tokens
+    // or `tool_call`. Plain `phase` rows were too easy to miss; empty `liveBlocks` forced only
+    // “Connecting…”.
+    if (phase === "model") {
+      const base = withoutThinkingSkeleton(prev);
+      return [...base, { kind: "thinking_skeleton", id: newId() }];
+    }
     return [...prev, { kind: "phase", id: newId(), round, phase }];
   }
-  if (t === "assistant_delta") {
+  if (t === "assistant_delta" || t === "reasoning_delta") {
     const chunk = typeof ev.text === "string" ? ev.text : "";
-    const last = prev[prev.length - 1];
+    const incoming: "content" | "reasoning" =
+      t === "reasoning_delta" ? "reasoning" : "content";
+    const base = withoutThinkingSkeleton(prev);
+    const last = base[base.length - 1];
     if (last?.kind === "assistant" && last.streaming) {
       const sp = stampStreamPhase(ctx, last.streamPhase);
+      const nextRole = mergeStreamTextRole(last.streamTextRole, incoming);
       return [
-        ...prev.slice(0, -1),
+        ...base.slice(0, -1),
         {
           ...last,
           text: last.text + chunk,
+          streamTextRole: nextRole,
           ...(sp ? { streamPhase: sp } : {}),
         },
       ];
     }
     const spNew = stampStreamPhase(ctx);
     return [
-      ...prev,
+      ...base,
       {
         kind: "assistant",
         id: newId(),
         text: chunk,
         streaming: true,
+        streamTextRole: incoming,
         ...(spNew ? { streamPhase: spNew } : {}),
       },
     ];
@@ -288,24 +378,56 @@ export function applyStreamEvent(
       }
     }
     if (streamingIdx >= 0) {
-      const last = prev[streamingIdx] as Extract<
+      const trimmed = withoutThinkingSkeleton(prev);
+      let si = -1;
+      for (let k = trimmed.length - 1; k >= 0; k--) {
+        const bl = trimmed[k];
+        if (bl?.kind === "assistant" && bl.streaming) {
+          si = k;
+          break;
+        }
+      }
+      if (si < 0) {
+        const spFallback = stampStreamPhase(ctx);
+        const laneFallback = computeAssistantUiLane(spFallback, fr);
+        return [
+          ...trimmed,
+          {
+            kind: "assistant",
+            id: newId(),
+            text: "",
+            streaming: false,
+            finishReason: fr,
+            usage: u,
+            uiLane: laneFallback,
+            ...(spFallback ? { streamPhase: spFallback } : {}),
+          },
+        ];
+      }
+      const last = trimmed[si] as Extract<
         LiveBlock,
         { kind: "assistant" }
       >;
       const sp = stampStreamPhase(ctx, last.streamPhase);
+      const effPhase = sp ?? last.streamPhase;
+      const lane = assistantDoneUiLane(last, fr, effPhase);
       return [
-        ...prev.slice(0, streamingIdx),
+        ...trimmed.slice(0, si),
         {
           ...last,
           streaming: false,
           finishReason: fr,
           usage: u,
+          uiLane: lane,
           ...(sp ? { streamPhase: sp } : {}),
         },
-        ...prev.slice(streamingIdx + 1),
+        ...trimmed.slice(si + 1),
       ];
     }
     const spFallback = stampStreamPhase(ctx);
+    const laneFallback = computeAssistantUiLane(spFallback, fr);
+    // Keep `thinking_skeleton` so the user still sees “Thinking” until `tool_call` when the model
+    // emits no visible text before tools.
     return [
       ...prev,
       {
@@ -315,6 +437,7 @@ export function applyStreamEvent(
         streaming: false,
         finishReason: fr,
         usage: u,
+        uiLane: laneFallback,
         ...(spFallback ? { streamPhase: spFallback } : {}),
       },
     ];
@@ -326,8 +449,9 @@ export function applyStreamEvent(
     const iraw = ev.internal_rationale;
     const internal_rationale =
       typeof iraw === "string" && iraw.trim() ? iraw.trim() : undefined;
+    const base = withoutThinkingSkeleton(prev);
     return [
-      ...prev,
+      ...base,
       {
         kind: "tool_call",
         id: newId(),
@@ -473,7 +597,8 @@ export function dedupeAdjacentDuplicateAssistants(blocks: LiveBlock[]): LiveBloc
 /** Drop noisy rows before persisting a completed run to the thread. */
 export function compactBlocksForHistory(blocks: LiveBlock[]): LiveBlock[] {
   const base = dropRedundantModelPhaseBeforeAssistant(blocks).filter(
-    (b) => !isEphemeralAssistantShell(b),
+    (b) =>
+      !isEphemeralAssistantShell(b) && b.kind !== "thinking_skeleton",
   );
   return dedupeAdjacentDuplicateAssistants(base);
 }
@@ -491,6 +616,11 @@ export function segmentLiveBlocks(blocks: LiveBlock[]): BlockSegment[] {
   let i = 0;
   while (i < blocks.length) {
     const b = blocks[i];
+    if (b.kind === "thinking_skeleton") {
+      out.push({ type: "single", block: b });
+      i += 1;
+      continue;
+    }
     if (b.kind === "assistant") {
       out.push({ type: "single", block: b });
       i += 1;
@@ -642,25 +772,7 @@ export function assistantUiRole(
   if (opts?.afterToolResult) {
     return "reply";
   }
-  if (b.streamPhase === "summary") {
-    return "reply";
-  }
-  if (b.streamPhase === "model") {
-    if (b.streaming) {
-      return "reasoning";
-    }
-    if (b.finishReason === "tool_calls") {
-      return "reasoning";
-    }
-    return "reply";
-  }
-  if (b.streaming) {
-    return "reasoning";
-  }
-  if (b.finishReason === "tool_calls" && b.text.trim()) {
-    return "reasoning";
-  }
-  return "reply";
+  return inferAssistantUiLane(b) === "thinking" ? "reasoning" : "reply";
 }
 
 export function showProposedActionsLabel(

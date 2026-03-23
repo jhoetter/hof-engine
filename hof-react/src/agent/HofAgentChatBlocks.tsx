@@ -577,50 +577,6 @@ function sanitizeReasoningText(raw: string): string {
   return s.trim();
 }
 
-/**
- * Remove lines that read like a visible chat reply (models often draft these inside thinking).
- */
-function scrubUserFacingReasoningLines(s: string): string {
-  const lines = s.split(/\n+/);
-  const kept: string[] = [];
-  for (const line of lines) {
-    const t = line.trim();
-    if (!t) {
-      continue;
-    }
-    const lower = t.toLowerCase();
-    if (
-      /^(hi|hello|hey)\b/.test(lower) &&
-      (/help|there|today|👋|assist/.test(lower) || t.length < 100)
-    ) {
-      continue;
-    }
-    if (/how can i help/.test(lower)) {
-      continue;
-    }
-    if (/feel free to ask/.test(lower)) {
-      continue;
-    }
-    if (/just let me know/.test(lower)) {
-      continue;
-    }
-    if (/\bwhether you need to (manage|see|view)/.test(lower)) {
-      continue;
-    }
-    if (
-      /\bi'?ll\b/.test(lower) &&
-      /\byour\b/.test(lower) &&
-      !/\bthe user\b/.test(lower) &&
-      /(expense|budget|receipt|record|data|spreadsheet)/.test(lower) &&
-      t.length < 160
-    ) {
-      continue;
-    }
-    kept.push(line);
-  }
-  return kept.join("\n").trim();
-}
-
 export function ReasoningCollapsible({
   text,
   streaming,
@@ -638,7 +594,7 @@ export function ReasoningCollapsible({
     }
   }, [streaming]);
 
-  const clean = scrubUserFacingReasoningLines(sanitizeReasoningText(text));
+  const clean = sanitizeReasoningText(text);
 
   if (!clean && !streaming) {
     return null;

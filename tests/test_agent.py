@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from hof.agent.policy import AgentPolicy, configure_agent, get_agent_policy
 from hof.agent.stream import (
     collect_agent_chat_from_stream,
     default_normalize_attachments,
     iter_agent_chat_stream,
 )
+from llm_markdown.agent_stream import AgentContentDelta, AgentMessageFinish
 
 
 def test_default_normalize_attachments_accepts_keys() -> None:
@@ -45,6 +48,75 @@ def test_collect_agent_chat_from_stream_final() -> None:
     assert out["tool_rounds_used"] == 1
     assert out["model"] == "m1"
     assert not out.get("error")
+
+
+def test_iter_agent_chat_stream_uses_fallback_reasoning_mode(monkeypatch) -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+        )
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("AGENT_REASONING_MODE", "fallback")
+
+    def _fake_stream_agent_turn(*_a, reasoning, **_kw):
+        assert reasoning.mode.value == "fallback"
+        yield AgentContentDelta(text="ok")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=_fake_stream_agent_turn):
+        ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
+    assert not any(x.get("type") == "error" for x in ev)
+    assert any(x.get("type") == "run_start" for x in ev)
+
+
+def test_iter_agent_chat_stream_rejects_fallback_with_openai_extras(monkeypatch) -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+        )
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("AGENT_REASONING_MODE", "fallback")
+    monkeypatch.setenv("AGENT_REASONING_OPENAI_EXTRAS", '{"reasoning_effort":"low"}')
+    ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
+    assert ev and ev[0].get("type") == "error"
+    assert "AGENT_REASONING_OPENAI_EXTRAS" in str(ev[0].get("detail", ""))
+
+
+def test_iter_agent_chat_stream_rejects_bad_reasoning_extras_json(monkeypatch) -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+        )
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("AGENT_REASONING_OPENAI_EXTRAS", "not-json")
+    ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
+    assert ev and ev[0].get("type") == "error"
+    assert "AGENT_REASONING_OPENAI_EXTRAS" in str(ev[0].get("detail", ""))
+
+
+def test_iter_agent_chat_stream_rejects_off_with_openai_extras(monkeypatch) -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+        )
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("AGENT_REASONING_MODE", "off")
+    monkeypatch.setenv("AGENT_REASONING_OPENAI_EXTRAS", '{"reasoning_effort":"low"}')
+    ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
+    assert ev and ev[0].get("type") == "error"
+    assert "off" in str(ev[0].get("detail", "")).lower()
 
 
 def test_iter_agent_chat_stream_requires_api_key(monkeypatch) -> None:

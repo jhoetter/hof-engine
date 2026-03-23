@@ -780,7 +780,7 @@ requires-dist = [
     { name = "celery", extras = ["redis"], specifier = ">=5.4.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "llm-markdown", extras = ["openai"], git = "https://github.com/jhoetter/llm-markdown.git?rev=v0.3.5" },
+    { name = "llm-markdown", extras = ["openai"], directory = "../llm-markdown" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5.0" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.27.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0" },
@@ -1078,8 +1078,8 @@ wheels = [
 
 [[package]]
 name = "llm-markdown"
-version = "0.3.4"
-source = { git = "https://github.com/jhoetter/llm-markdown.git?rev=v0.3.5#0bf8f7334dadc7451dc9e168cdb616bc79e49c24" }
+version = "0.3.6"
+source = { directory = "../llm-markdown" }
 dependencies = [
     { name = "pydantic" },
     { name = "requests" },
@@ -1089,6 +1089,31 @@ dependencies = [
 openai = [
     { name = "openai" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "anthropic", marker = "extra == 'all'" },
+    { name = "anthropic", marker = "extra == 'anthropic'" },
+    { name = "anthropic", marker = "extra == 'test'" },
+    { name = "google-genai", marker = "extra == 'all'" },
+    { name = "google-genai", marker = "extra == 'gemini'" },
+    { name = "google-genai", marker = "extra == 'test'" },
+    { name = "langfuse", marker = "extra == 'all'" },
+    { name = "langfuse", marker = "extra == 'langfuse'" },
+    { name = "openai", marker = "extra == 'all'" },
+    { name = "openai", marker = "extra == 'openai'" },
+    { name = "openai", marker = "extra == 'openrouter'" },
+    { name = "openai", marker = "extra == 'test'" },
+    { name = "pydantic" },
+    { name = "pytest", marker = "extra == 'all'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "pytest-asyncio", marker = "extra == 'all'" },
+    { name = "pytest-asyncio", marker = "extra == 'test'" },
+    { name = "python-dotenv", marker = "extra == 'all'" },
+    { name = "python-dotenv", marker = "extra == 'test'" },
+    { name = "requests" },
+]
+provides-extras = ["all", "anthropic", "gemini", "langfuse", "openai", "openrouter", "test"]
 
 [[package]]
 name = "mako"
@@ -1384,7 +1409,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "2.24.0"
+version = "2.29.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1396,9 +1421,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/55/13/17e87641b89b74552ed408a92b231283786523edddc95f3545809fab673c/openai-2.24.0.tar.gz", hash = "sha256:1e5769f540dbd01cb33bc4716a23e67b9d695161a734aff9c5f925e2bf99a673", size = 658717, upload-time = "2026-02-24T20:02:07.958Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b4/15/203d537e58986b5673e7f232453a2a2f110f22757b15921cbdeea392e520/openai-2.29.0.tar.gz", hash = "sha256:32d09eb2f661b38d3edd7d7e1a2943d1633f572596febe64c0cd370c86d52bec", size = 671128, upload-time = "2026-03-17T17:53:49.599Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/30/844dc675ee6902579b8eef01ed23917cc9319a1c9c0c14ec6e39340c96d0/openai-2.24.0-py3-none-any.whl", hash = "sha256:fed30480d7d6c884303287bde864980a4b137b60553ffbcf9ab4a233b7a73d94", size = 1120122, upload-time = "2026-02-24T20:02:05.669Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/b1/35b6f9c8cf9318e3dbb7146cc82dab4cf61182a8d5406fc9b50864362895/openai-2.29.0-py3-none-any.whl", hash = "sha256:b7c5de513c3286d17c5e29b92c4c98ceaf0d775244ac8159aeb1bddf840eb42a", size = 1141533, upload-time = "2026-03-17T17:53:47.348Z" },
 ]
 
 [[package]]

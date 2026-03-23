@@ -40,11 +40,10 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "httpx>=0.27.0",
     "websockets>=14.0",
-    # Pin to tag until stable on PyPI; then switch to: llm-markdown[openai]>=0.3.5
-    "llm-markdown[openai] @ git+https://github.com/jhoetter/llm-markdown.git@v0.3.5",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
     "python-multipart>=0.0.9",
+    "llm-markdown[openai]",
 ]
 
 [project.optional-dependencies]
@@ -104,3 +103,8 @@ python_version = "3.11"
 ignore_missing_imports = true
 warn_unused_ignores = false
 no_strict_optional = true
+
+# Local dev: sibling checkout. Without it, pin e.g.
+# llm-markdown[openai] @ git+https://github.com/jhoetter/llm-markdown.git@v0.3.6
+[tool.uv.sources]
+llm-markdown = { path = "../llm-markdown" }

@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 from hof.agent.policy import AgentPolicy, get_agent_policy
@@ -25,8 +27,92 @@ from hof.agent.tooling import (
     parsed_tool_result_for_stream,
 )
 from hof.config import get_config
+from llm_markdown.providers import ReasoningConfig, ReasoningMode, stream_agent_turn
 
 logger = logging.getLogger(__name__)
+
+
+def _log_preview(text: str, max_len: int = 140) -> str:
+    """Single-line snippet for server logs (not full message bodies)."""
+    if not text or not text.strip():
+        return "—"
+    one = " ".join(text.split())
+    if len(one) <= max_len:
+        return one
+    return f"{one[: max_len - 1]}…"
+
+
+_STREAM_DEBUG_UNSET = object()
+_stream_debug_path: Any = _STREAM_DEBUG_UNSET
+_stream_debug_open_warned = False
+_stream_debug_confirmed = False
+
+
+def _resolve_agent_stream_debug_path() -> str | None:
+    """Path for NDJSON agent stream diagnostics, or None if disabled.
+
+    Re-reads project ``.env`` once if the var is missing from ``os.environ`` (uvicorn
+    ``--reload`` / subprocess edge cases where only ``HOF_PROJECT_ROOT`` was forwarded).
+    ``HOF_AGENT_STREAM_DEBUG_LOG=1`` (or ``true``) uses ``/tmp/hof-agent-stream.ndjson``.
+    """
+    raw = os.environ.get("HOF_AGENT_STREAM_DEBUG_LOG", "").strip()
+    if not raw:
+        try:
+            from dotenv import load_dotenv
+
+            env_root = os.environ.get("HOF_PROJECT_ROOT", "").strip()
+            if env_root:
+                load_dotenv(Path(env_root) / ".env", override=False)
+            else:
+                from hof.config import find_project_root
+
+                root = find_project_root()
+                if root is not None:
+                    load_dotenv(root / ".env", override=False)
+            raw = os.environ.get("HOF_AGENT_STREAM_DEBUG_LOG", "").strip()
+        except Exception:
+            raw = os.environ.get("HOF_AGENT_STREAM_DEBUG_LOG", "").strip()
+    if not raw:
+        return None
+    if raw.lower() in ("1", "true", "yes", "on"):
+        return str(Path("/tmp") / "hof-agent-stream.ndjson")
+    return raw
+
+
+def _agent_stream_debug_append(record: dict[str, Any]) -> None:
+    """Append one NDJSON line when ``HOF_AGENT_STREAM_DEBUG_LOG`` is set.
+
+    No message bodies or full tool JSON—only lengths and metadata.
+    """
+    global _stream_debug_path, _stream_debug_open_warned, _stream_debug_confirmed
+
+    if _stream_debug_path is _STREAM_DEBUG_UNSET:
+        _stream_debug_path = _resolve_agent_stream_debug_path()
+    path = _stream_debug_path
+    if not path:
+        return
+    try:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        line = {"ts_ms": int(time.time() * 1000), **record}
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, default=str) + "\n")
+        if not _stream_debug_confirmed:
+            _stream_debug_confirmed = True
+            # warning level so it is visible even when root log level is WARNING
+            logger.warning(
+                "HOF_AGENT_STREAM_DEBUG_LOG active — appending agent stream diagnostics to %s",
+                path,
+            )
+    except OSError as exc:
+        if not _stream_debug_open_warned:
+            _stream_debug_open_warned = True
+            logger.warning(
+                "HOF_AGENT_STREAM_DEBUG_LOG set but cannot write %s: %s",
+                path,
+                exc,
+            )
+
 
 _AGENT_SUMMARY_MAX_TOKENS = 2048
 _AGENT_COMPLETION_TOKENS_CAP = 128_000
@@ -72,6 +158,42 @@ def _resolve_agent_model() -> str:
     except Exception:
         pass
     return "gpt-4o-mini"
+
+
+def _resolve_agent_reasoning_config() -> ReasoningConfig:
+    """Map config/env to llm-markdown :class:`ReasoningConfig` for ``stream_agent_turn``."""
+    mode_src = os.environ.get("AGENT_REASONING_MODE", "").strip().lower()
+    if not mode_src:
+        try:
+            mode_src = (get_config().agent_reasoning_mode or "native").strip().lower()
+        except Exception:
+            mode_src = "native"
+    extras: dict[str, Any] | None = None
+    raw_extras = os.environ.get("AGENT_REASONING_OPENAI_EXTRAS", "").strip()
+    if raw_extras:
+        try:
+            parsed = json.loads(raw_extras)
+        except json.JSONDecodeError as exc:
+            msg = f"AGENT_REASONING_OPENAI_EXTRAS must be valid JSON object: {exc}"
+            raise ValueError(msg) from exc
+        if not isinstance(parsed, dict):
+            msg = "AGENT_REASONING_OPENAI_EXTRAS must be a JSON object"
+            raise ValueError(msg)
+        extras = parsed
+    if mode_src in ("off", "false", "0", "no"):
+        if extras:
+            msg = "AGENT_REASONING_OPENAI_EXTRAS is not allowed when AGENT_REASONING_MODE is off"
+            raise ValueError(msg)
+        return ReasoningConfig.off()
+    if mode_src in ("fallback",):
+        if extras:
+            msg = "AGENT_REASONING_OPENAI_EXTRAS is not allowed when AGENT_REASONING_MODE is fallback"
+            raise ValueError(msg)
+        return ReasoningConfig(mode=ReasoningMode.FALLBACK)
+    if mode_src not in ("native", "", "on", "true", "1", "yes"):
+        msg = f"Unknown agent reasoning mode: {mode_src!r} (use native, off, or fallback)"
+        raise ValueError(msg)
+    return ReasoningConfig.native(openai_extras=extras)
 
 
 def _resolve_agent_max_completion_tokens() -> int:
@@ -273,8 +395,10 @@ def _stream_confirmation_summary_for_ui(
     oa_messages: list[dict[str, Any]],
     rounds: int,
     summary_user_message: str,
+    *,
+    reasoning: ReasoningConfig,
 ) -> Iterator[dict[str, Any]]:
-    from llm_markdown.agent_stream import AgentContentDelta, AgentMessageFinish
+    from llm_markdown.agent_stream import AgentContentDelta, AgentMessageFinish, AgentReasoningDelta
 
     msgs = list(oa_messages) + [{"role": "user", "content": summary_user_message}]
     yield {"type": "phase", "round": rounds, "phase": "summary"}
@@ -282,14 +406,21 @@ def _stream_confirmation_summary_for_ui(
     finish_reason: str | None = None
     last_usage: dict[str, Any] | None = None
     try:
-        for ev in provider.stream_chat_completion_events(
+        for ev in stream_agent_turn(
+            provider,
+            "openai",
             msgs,
             model=model,
+            tools=None,
+            tool_choice=None,
             max_tokens=_AGENT_SUMMARY_MAX_TOKENS,
+            reasoning=reasoning,
         ):
             if isinstance(ev, AgentContentDelta):
                 assistant_text += ev.text
                 yield {"type": "assistant_delta", "text": ev.text}
+            elif isinstance(ev, AgentReasoningDelta):
+                yield {"type": "reasoning_delta", "text": ev.text}
             elif isinstance(ev, AgentMessageFinish):
                 finish_reason = ev.finish_reason
                 last_usage = ev.usage
@@ -339,6 +470,7 @@ def _run_agent_openai_loop(
     start_round: int,
     run_id: str,
     *,
+    reasoning: ReasoningConfig,
     max_rounds: int,
     max_tool_output_chars: int,
     max_cli_line_chars: int,
@@ -362,18 +494,25 @@ def _run_agent_openai_loop(
             assistant_text = ""
             finish_reason: str | None = None
             last_usage: dict[str, Any] | None = None
+            n_content_delta = 0
+            n_reasoning_delta = 0
 
-            for ev in provider.stream_chat_completion_events(
+            for ev in stream_agent_turn(
+                provider,
+                "openai",
                 oa_messages,
                 model=model,
                 tools=tools,
                 tool_choice="auto",
                 max_tokens=_resolve_agent_max_completion_tokens(),
+                reasoning=reasoning,
             ):
                 if isinstance(ev, AgentContentDelta):
                     assistant_text += ev.text
+                    n_content_delta += 1
                     yield {"type": "assistant_delta", "text": ev.text}
                 elif isinstance(ev, AgentReasoningDelta):
+                    n_reasoning_delta += 1
                     yield {"type": "reasoning_delta", "text": ev.text}
                 elif isinstance(ev, AgentToolCallDelta):
                     idx = int(ev.index)
@@ -393,14 +532,32 @@ def _run_agent_openai_loop(
             if last_usage:
                 done_ev["usage"] = last_usage
             yield done_ev
+            _agent_stream_debug_append(
+                {
+                    "kind": "model_round",
+                    "run_id": run_id,
+                    "model": model,
+                    "round": rounds,
+                    "finish_reason": finish_reason,
+                    "content_deltas": n_content_delta,
+                    "reasoning_deltas": n_reasoning_delta,
+                    "assistant_text_chars": len(assistant_text),
+                    "tool_slots": len(parts),
+                },
+            )
 
-            logger.debug(
-                "agent model round done: round=%s finish_reason=%r tool_delta_indices=%s "
-                "assistant_text_chars=%s",
+            logger.info(
+                "agent_chat model_round run_id=%s round=%d model=%s finish=%s "
+                "content_deltas=%d reasoning_deltas=%d assistant_chars=%d tool_slots=%d preview=%s",
+                run_id,
                 rounds,
+                model,
                 finish_reason,
-                len(parts),
+                n_content_delta,
+                n_reasoning_delta,
                 len(assistant_text),
+                len(parts),
+                _log_preview(assistant_text),
             )
 
             if finish_reason == "tool_calls":
@@ -450,6 +607,23 @@ def _run_agent_openai_loop(
                     if note:
                         tc_ev["internal_rationale"] = note
                     yield tc_ev
+                    logger.info(
+                        "agent_chat tool_call run_id=%s round=%d name=%s args_chars=%d mutation=%s",
+                        run_id,
+                        rounds,
+                        name,
+                        len(args),
+                        "yes" if name in mutation_allowlist else "no",
+                    )
+                    _agent_stream_debug_append(
+                        {
+                            "kind": "tool_call",
+                            "run_id": run_id,
+                            "round": rounds,
+                            "name": name,
+                            "arguments_chars": len(args),
+                        },
+                    )
                     if name in mutation_allowlist:
                         pid = str(uuid.uuid4())
                         save_pending(
@@ -486,12 +660,24 @@ def _run_agent_openai_loop(
                             {"role": "tool", "tool_call_id": tid, "content": placeholder},
                         )
                         pending_ids.append(pid)
+                        logger.info(
+                            "agent_chat tool_pending_confirmation run_id=%s name=%s pending_id=%s",
+                            run_id,
+                            name,
+                            pid,
+                        )
                     else:
                         out_json, summary = execute_tool(
                             name,
                             args,
                             allowlist,
                             max_tool_output_chars=max_tool_output_chars,
+                        )
+                        logger.info(
+                            "agent_chat tool_done run_id=%s name=%s summary=%s",
+                            run_id,
+                            name,
+                            _log_preview(summary, 200),
                         )
                         tr_out: dict[str, Any] = {
                             "type": "tool_result",
@@ -513,6 +699,7 @@ def _run_agent_openai_loop(
                         oa_messages,
                         rounds,
                         policy.confirmation_summary_user_message,
+                        reasoning=reasoning,
                     )
                     save_agent_run(
                         run_id,
@@ -528,17 +715,47 @@ def _run_agent_openai_loop(
                         "run_id": run_id,
                         "pending_ids": pending_ids,
                     }
+                    logger.info(
+                        "agent_chat awaiting_confirmation run_id=%s pending_ids=%d",
+                        run_id,
+                        len(pending_ids),
+                    )
                     return
                 continue
 
             text = assistant_text.strip()
             delete_agent_run(run_id)
             yield {"type": "final", "reply": text, "tool_rounds_used": rounds, "model": model}
+            logger.info(
+                "agent_chat final run_id=%s model=%s rounds_used=%d reply_chars=%d preview=%s",
+                run_id,
+                model,
+                rounds,
+                len(text),
+                _log_preview(text, 180),
+            )
+            _agent_stream_debug_append(
+                {
+                    "kind": "final",
+                    "run_id": run_id,
+                    "model": model,
+                    "tool_rounds_used": rounds,
+                    "reply_chars": len(text),
+                },
+            )
             return
 
         yield {"type": "error", "detail": f"Stopped after {max_rounds} model turns"}
     except Exception as exc:
         logger.exception("agent_openai_loop failed")
+        _agent_stream_debug_append(
+            {
+                "kind": "stream_error",
+                "run_id": run_id,
+                "exc_type": type(exc).__name__,
+                "detail": str(exc)[:400],
+            },
+        )
         yield {"type": "error", "detail": str(exc)}
 
 
@@ -575,8 +792,14 @@ def _run_agent_chat_stream(
         return
 
     model = _resolve_agent_model()
+    try:
+        reasoning = _resolve_agent_reasoning_config()
+    except ValueError as exc:
+        yield {"type": "error", "detail": str(exc)}
+        return
     run_id = str(uuid.uuid4())
     yield {"type": "run_start", "run_id": run_id, "model": model}
+    _agent_stream_debug_append({"kind": "run_begin", "run_id": run_id, "model": model})
 
     provider = OpenAIProvider(
         api_key=api_key,
@@ -598,6 +821,14 @@ def _run_agent_chat_stream(
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
             oa_messages.append({"role": role, "content": content})
 
+    logger.info(
+        "agent_chat start run_id=%s model=%s openai_messages=%d tool_specs=%d",
+        run_id,
+        model,
+        len(oa_messages),
+        len(tools),
+    )
+
     yield from _run_agent_openai_loop(
         provider,
         model,
@@ -607,6 +838,7 @@ def _run_agent_chat_stream(
         oa_messages,
         0,
         run_id,
+        reasoning=reasoning,
         max_rounds=max_rounds,
         max_tool_output_chars=max_tool_output_chars,
         max_cli_line_chars=max_cli_line_chars,
@@ -678,6 +910,11 @@ def _run_agent_resume_stream(
         yield {"type": "error", "detail": "Invalid saved agent state"}
         return
 
+    try:
+        reasoning = _resolve_agent_reasoning_config()
+    except ValueError as exc:
+        yield {"type": "error", "detail": str(exc)}
+        return
     model = str(run.get("model") or "gpt-4o-mini").strip() or "gpt-4o-mini"
     start_round = int(run.get("rounds") or 0)
     allowlist = policy.effective_allowlist()
@@ -716,6 +953,13 @@ def _run_agent_resume_stream(
 
     delete_agent_run(rid)
     yield {"type": "resume_start", "run_id": rid, "model": model}
+    logger.info(
+        "agent_chat resume_start run_id=%s model=%s start_round=%d mutations_resolved=%d",
+        rid,
+        model,
+        start_round,
+        len(open_ids),
+    )
 
     provider = OpenAIProvider(
         api_key=api_key,
@@ -731,6 +975,7 @@ def _run_agent_resume_stream(
         oa_messages,
         start_round,
         rid,
+        reasoning=reasoning,
         max_rounds=max_rounds,
         max_tool_output_chars=max_tool_output_chars,
         max_cli_line_chars=max_cli_line_chars,

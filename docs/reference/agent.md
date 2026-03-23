@@ -1,6 +1,6 @@
 # Agent (OpenAI tool loop)
 
-The **Hof agent** runs an OpenAI chat completion with tools bound to registered `@function` handlers. Streaming uses **llm-markdown** (`OpenAIProvider.stream_chat_completion_events`) so tool deltas, optional reasoning text, and usage chunks are normalized before being mapped to NDJSON. Read tools execute immediately; **mutation** tools pause until the user confirms in the UI or via `POST /api/functions/agent_resume_mutations` (same NDJSON stream contract as `agent_chat`).
+The **Hof agent** runs an OpenAI chat completion with tools bound to registered `@function` handlers. Streaming uses **llm-markdown** [`stream_agent_turn`](https://github.com/jhoetter/llm-markdown/blob/main/llm_markdown/agent_turn.py) with [`ReasoningConfig`](https://github.com/jhoetter/llm-markdown/blob/main/llm_markdown/reasoning.py) (wrapper over `OpenAIProvider.stream_chat_completion_events`) so tool deltas, optional reasoning text, and usage chunks are normalized before being mapped to NDJSON. Read tools execute immediately; **mutation** tools pause until the user confirms in the UI or via `POST /api/functions/agent_resume_mutations` (same NDJSON stream contract as `agent_chat`).
 
 ## Setup
 
@@ -50,12 +50,19 @@ def agent_resume_mutations(run_id: str, resolutions: list) -> dict:
 | `agent_max_model_text_chars` | Legacy JSON trace truncation (default `8000`) |
 | `agent_max_cli_line_chars` | Pseudo-CLI width for UI (default `240`) |
 | `agent_max_completion_tokens` | Max completion tokens per OpenAI request (default `16384`; overridden by `AGENT_MAX_COMPLETION_TOKENS` env) |
+| `agent_reasoning_mode` | `native` (default), `off` (no `reasoning_delta` on the wire), or `fallback` (two-phase planning + tools via llm-markdown). Overridden by `AGENT_REASONING_MODE` env when set. |
 
-**Dependency:** `llm-markdown[openai]` **0.3.5+** with `OpenAIProvider.stream_chat_completion_events` (0.3.5 fixes `finish_reason` when the stream ends with usage-only chunks). The lockfile may pin the Git tag `v0.3.5` until the package is published to PyPI; after publishing, depend on `llm-markdown[openai]>=0.3.5` from PyPI only. The default completion budget is **16_384** tokens so common chat models accept the request; raise it in config or `AGENT_MAX_COMPLETION_TOKENS` (capped at **128_000**) when your model allows more.
+**Env (reasoning):** `AGENT_REASONING_OPENAI_EXTRAS` — optional JSON object merged into the OpenAI chat request when mode is `native` (e.g. model-specific reasoning parameters). Incompatible with `agent_reasoning_mode` / `AGENT_REASONING_MODE` `off`.
 
-**Debugging:** With logging level **DEBUG** for `hof.agent.stream`, each model round logs `finish_reason`, assembled tool-call slot count, and assistant text length after `assistant_done` (wire events are unchanged).
+**Dependency:** `llm-markdown[openai]` **0.3.6+** exposes `stream_agent_turn` and `ReasoningConfig`. Capability matrix: [llm-markdown `docs/agent-streaming.md`](https://github.com/jhoetter/llm-markdown/blob/main/docs/agent-streaming.md). Pin the Git tag `v0.3.6` (or path override in `uv`) until PyPI publishes that version. The default completion budget is **16_384** tokens so common chat models accept the request; raise it in config or `AGENT_MAX_COMPLETION_TOKENS` (capped at **128_000**) when your model allows more.
 
-**Reasoning / chain-of-thought:** When the OpenAI stream exposes `reasoning_content` (or `reasoning`) on deltas, the server emits NDJSON `reasoning_delta` lines. `@hof-engine/react` maps those to `streamTextRole: "reasoning"` so the UI can show a **Thinking** collapsible even when `finish_reason` is `stop`. Clients should treat them like other incremental thinking text (see your app’s `agent-chat-stream.md`).
+**Observability:** At **INFO**, logger `hof.agent.stream` emits `agent_chat …` lines to the API process stdout (uvicorn terminal): run start, each model round (`finish_reason`, delta counts, assistant text preview), each `tool_call` / `tool_done`, `awaiting_confirmation`, and `final`. No `.env` toggle required. Optional **`HOF_AGENT_STREAM_DEBUG_LOG`** still appends structured NDJSON to a file (see your app’s `agent-chat-stream.md`).
+
+**Reasoning / “thinking” text:** Hof does not invent reasoning text in **native** mode. **`agent_reasoning_mode=native`** (default) forwards provider-native `AgentReasoningDelta` events; **`off`** strips them even if the model emits them. **`fallback`** uses llm-markdown’s provider-agnostic planning stream (synthetic `AgentReasoningDelta` from the planning phase) plus a tool turn. **`reasoning_delta` still only appears from the model in native mode when the OpenAI stream carries `reasoning_content` / `reasoning` on deltas** — e.g. **`gpt-4o` typically does not**, so `reasoning_deltas=0` in logs is normal unless you use **`fallback`**. Use a **reasoning-capable** model plus optional `AGENT_REASONING_OPENAI_EXTRAS` when your API supports it; see **llm-markdown** [docs/agent-streaming.md](https://github.com/jhoetter/llm-markdown/blob/main/docs/agent-streaming.md).
+
+Without streamed reasoning, the observable tool chain is: `assistant_done` (`finish_reason: tool_calls`) → `tool_call` → `tool_result` → `assistant_delta` / `final`.
+
+`@hof-engine/react` maps `reasoning_delta` to `streamTextRole: "reasoning"` when the stream includes those events.
 
 **Anthropic:** `llm-markdown` also provides `AnthropicProvider.stream_messages_events` (tools + optional extended thinking) for reuse in custom code; the stock Hof `agent_chat` stream remains OpenAI-backed.
 

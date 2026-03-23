@@ -512,9 +512,26 @@ function AssistantModelStreamShell({
   );
 }
 
+function looksLikeJsonOrToolCallLine(t: string): boolean {
+  const s = t.trim();
+  if (!s) {
+    return false;
+  }
+  if (/^\s*\{\s*"name"\s*:\s*"/.test(s)) {
+    return true;
+  }
+  if (/^\s*"[^"]+"\s*:\s*/.test(s)) {
+    return true;
+  }
+  if (/^\s*[\[{]/.test(s) && /[\]}]\s*,?\s*$/.test(s)) {
+    return true;
+  }
+  return false;
+}
+
 /**
- * Strip HTML tags, markdown tables, bullet/numbered lists, headings, and code fences
- * from reasoning text — the thinking pane should only show plain analytical notes.
+ * Strip HTML tags, markdown tables, bullet/numbered lists, headings, code fences,
+ * and JSON-like lines (hallucinated tool payloads) — the thinking pane is plain analytical notes only.
  */
 function sanitizeReasoningText(raw: string): string {
   let s = raw;
@@ -532,6 +549,11 @@ function sanitizeReasoningText(raw: string): string {
   s = s.replace(/^(\s*[-*+]|\s*\d+[.)]) /gm, "");
   // Strip bold/italic markers
   s = s.replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1");
+  const jsonStripped = s
+    .split("\n")
+    .filter((line) => !looksLikeJsonOrToolCallLine(line))
+    .join("\n");
+  s = jsonStripped;
   // Collapse blank lines
   s = s.replace(/\n{3,}/g, "\n\n");
   return s.trim();

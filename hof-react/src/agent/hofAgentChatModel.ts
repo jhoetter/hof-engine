@@ -199,6 +199,9 @@ export function mergeAdjacentReasoningSegments(
   return out;
 }
 
+/** Do not drop reasoning that still has substantive text after overlap trimming (avoids “thinking vanished”). */
+const MIN_SUBSTANTIVE_REASONING_CHARS = 40;
+
 /** Drop trailing empty ``content`` shells and hide reasoning that duplicates the following reply. */
 export function normalizeAssistantStreamSegments(
   segments: AssistantStreamSegment[],
@@ -225,7 +228,10 @@ export function normalizeAssistantStreamSegments(
         i++;
         continue;
       }
-      if (isNearDuplicateSegText(trimmed, next.text)) {
+      if (
+        isNearDuplicateSegText(trimmed, next.text) &&
+        trimmed.trim().length <= MIN_SUBSTANTIVE_REASONING_CHARS
+      ) {
         out.push(next);
         i++;
         continue;

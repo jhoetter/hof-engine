@@ -11,6 +11,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from llm_markdown.providers import ReasoningConfig, ReasoningMode, stream_agent_turn
+
 from hof.agent.policy import AgentPolicy, get_agent_policy
 from hof.agent.state import (
     delete_agent_run,
@@ -27,7 +29,6 @@ from hof.agent.tooling import (
     parsed_tool_result_for_stream,
 )
 from hof.config import get_config
-from llm_markdown.providers import ReasoningConfig, ReasoningMode, stream_agent_turn
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +176,36 @@ def _resolve_agent_model() -> str:
     return "gpt-4o-mini"
 
 
-def _resolve_agent_reasoning_config() -> ReasoningConfig:
+def _resolve_anthropic_thinking_kw() -> dict[str, Any] | None:
+    """``thinking=...`` for Anthropic Messages API (native mode only).
+
+    ``AGENT_ANTHROPIC_THINKING``:
+
+    - unset / empty → ``{"type": "adaptive"}`` (Sonnet/Opus 4.6)
+    - ``adaptive`` → same
+    - ``off`` / ``false`` / ``0`` / ``no`` → omit thinking (no ``AgentReasoningDelta`` from API)
+    - otherwise parsed as JSON object (e.g. extended thinking with ``budget_tokens``)
+    """
+    raw = os.environ.get("AGENT_ANTHROPIC_THINKING", "").strip()
+    if not raw:
+        return {"type": "adaptive"}
+    low = raw.lower()
+    if low in ("off", "false", "0", "no"):
+        return None
+    if low == "adaptive":
+        return {"type": "adaptive"}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        msg = f"AGENT_ANTHROPIC_THINKING must be adaptive, off, or valid JSON object: {exc}"
+        raise ValueError(msg) from exc
+    if not isinstance(parsed, dict):
+        msg = "AGENT_ANTHROPIC_THINKING JSON must be an object"
+        raise ValueError(msg)
+    return parsed
+
+
+def _resolve_agent_reasoning_config(backend: str | None = None) -> ReasoningConfig:
     """Map config/env to llm-markdown :class:`ReasoningConfig` for ``stream_agent_turn``."""
     mode_src = os.environ.get("AGENT_REASONING_MODE", "").strip().lower()
     if not mode_src:
@@ -195,6 +225,8 @@ def _resolve_agent_reasoning_config() -> ReasoningConfig:
             msg = "AGENT_REASONING_OPENAI_EXTRAS must be a JSON object"
             raise ValueError(msg)
         extras = parsed
+    backend_norm = (backend or "").strip().lower()
+
     if mode_src in ("off", "false", "0", "no"):
         if extras:
             msg = "AGENT_REASONING_OPENAI_EXTRAS is not allowed when AGENT_REASONING_MODE is off"
@@ -202,12 +234,25 @@ def _resolve_agent_reasoning_config() -> ReasoningConfig:
         return ReasoningConfig.off()
     if mode_src in ("fallback",):
         if extras:
-            msg = "AGENT_REASONING_OPENAI_EXTRAS is not allowed when AGENT_REASONING_MODE is fallback"
+            msg = (
+                "AGENT_REASONING_OPENAI_EXTRAS is not allowed when AGENT_REASONING_MODE is fallback"
+            )
             raise ValueError(msg)
+        if backend_norm == "anthropic":
+            logger.warning(
+                "FALLBACK reasoning is not recommended for Anthropic; "
+                "using native mode with provider thinking instead (see AGENT_ANTHROPIC_THINKING)"
+            )
+            return ReasoningConfig.native(anthropic_thinking=_resolve_anthropic_thinking_kw())
         return ReasoningConfig(mode=ReasoningMode.FALLBACK)
     if mode_src not in ("native", "", "on", "true", "1", "yes"):
         msg = f"Unknown agent reasoning mode: {mode_src!r} (use native, off, or fallback)"
         raise ValueError(msg)
+    if backend_norm == "anthropic":
+        if extras:
+            msg = "AGENT_REASONING_OPENAI_EXTRAS is not used when AGENT_LLM_BACKEND=anthropic"
+            raise ValueError(msg)
+        return ReasoningConfig.native(anthropic_thinking=_resolve_anthropic_thinking_kw())
     return ReasoningConfig.native(openai_extras=extras)
 
 
@@ -806,7 +851,7 @@ def _run_agent_chat_stream(
 
     model = _resolve_agent_model()
     try:
-        reasoning = _resolve_agent_reasoning_config()
+        reasoning = _resolve_agent_reasoning_config(lm_backend)
     except ValueError as exc:
         yield {"type": "error", "detail": str(exc)}
         return
@@ -946,15 +991,15 @@ def _run_agent_resume_stream(
         yield {"type": "error", "detail": "Invalid saved agent state"}
         return
 
-    try:
-        reasoning = _resolve_agent_reasoning_config()
-    except ValueError as exc:
-        yield {"type": "error", "detail": str(exc)}
-        return
     model = str(run.get("model") or "gpt-4o-mini").strip() or "gpt-4o-mini"
     lm_backend = str(run.get("llm_backend") or "openai").strip().lower()
     if lm_backend not in ("openai", "anthropic"):
         lm_backend = "openai"
+    try:
+        reasoning = _resolve_agent_reasoning_config(lm_backend)
+    except ValueError as exc:
+        yield {"type": "error", "detail": str(exc)}
+        return
     start_round = int(run.get("rounds") or 0)
     allowlist = policy.effective_allowlist()
     tools = openai_tool_specs(allowlist)

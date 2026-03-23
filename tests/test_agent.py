@@ -75,6 +75,78 @@ def test_iter_agent_chat_stream_uses_anthropic_when_configured(monkeypatch) -> N
     assert backends == ["anthropic"]
 
 
+def test_iter_agent_chat_stream_anthropic_fallback_becomes_native_adaptive(monkeypatch) -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+        )
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("AGENT_LLM_BACKEND", "anthropic")
+    monkeypatch.setenv("AGENT_REASONING_MODE", "fallback")
+    monkeypatch.delenv("AGENT_ANTHROPIC_THINKING", raising=False)
+
+    seen: list = []
+
+    def _fake_stream_agent_turn(prov, backend, *_a, reasoning, **_kw):
+        seen.append(reasoning)
+        assert backend == "anthropic"
+        assert reasoning.mode.value == "native"
+        assert reasoning.anthropic_thinking == {"type": "adaptive"}
+        yield AgentContentDelta(text="ok")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=_fake_stream_agent_turn):
+        ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
+    assert not any(x.get("type") == "error" for x in ev)
+    assert len(seen) == 1
+
+
+def test_iter_agent_chat_stream_anthropic_native_respects_thinking_off(monkeypatch) -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+        )
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("AGENT_LLM_BACKEND", "anthropic")
+    monkeypatch.setenv("AGENT_REASONING_MODE", "native")
+    monkeypatch.setenv("AGENT_ANTHROPIC_THINKING", "off")
+
+    def _fake_stream_agent_turn(prov, backend, *_a, reasoning, **_kw):
+        assert reasoning.anthropic_thinking is None
+        yield AgentContentDelta(text="ok")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=_fake_stream_agent_turn):
+        ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
+    assert not any(x.get("type") == "error" for x in ev)
+
+
+def test_iter_agent_chat_stream_rejects_openai_extras_with_anthropic(monkeypatch) -> None:
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+        )
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("AGENT_LLM_BACKEND", "anthropic")
+    monkeypatch.setenv("AGENT_REASONING_MODE", "native")
+    monkeypatch.setenv("AGENT_REASONING_OPENAI_EXTRAS", '{"reasoning_effort":"low"}')
+    ev = list(iter_agent_chat_stream([{"role": "user", "content": "hello"}], None))
+    assert ev and ev[0].get("type") == "error"
+    assert "anthropic" in str(ev[0].get("detail", "")).lower()
+
+
 def test_iter_agent_chat_stream_uses_fallback_reasoning_mode(monkeypatch) -> None:
     configure_agent(
         AgentPolicy(

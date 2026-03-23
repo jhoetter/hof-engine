@@ -28,6 +28,10 @@ from hof.config import get_config
 
 logger = logging.getLogger(__name__)
 
+# High ceiling so behavior stays close to raw OpenAI (no explicit cap in the old client path).
+_AGENT_OPENAI_MAX_COMPLETION_TOKENS = 128_000
+_AGENT_SUMMARY_MAX_TOKENS = 2048
+
 
 def _agent_limits() -> tuple[int, int, int, int]:
     try:
@@ -153,7 +157,7 @@ def collect_agent_chat_from_stream(events_iter: Iterator[dict[str, Any]]) -> dic
                 legacy.append({"type": "thinking", "detail": f"Round {r}: executing tools…"})
             elif ph == "summary":
                 legacy.append({"type": "thinking", "detail": f"Round {r}: confirmation reply…"})
-        elif t == "assistant_delta":
+        elif t == "assistant_delta" or t == "reasoning_delta":
             buf += str(ev.get("text") or "")
         elif t == "assistant_done":
             raw = buf.strip()
@@ -245,23 +249,31 @@ def collect_agent_chat_from_stream(events_iter: Iterator[dict[str, Any]]) -> dic
 
 
 def _stream_confirmation_summary_for_ui(
-    client: Any,
+    provider: Any,
     model: str,
     oa_messages: list[dict[str, Any]],
     rounds: int,
     summary_user_message: str,
 ) -> Iterator[dict[str, Any]]:
+    from llm_markdown.agent_stream import AgentContentDelta, AgentMessageFinish
+
     msgs = list(oa_messages) + [{"role": "user", "content": summary_user_message}]
     yield {"type": "phase", "round": rounds, "phase": "summary"}
-    create_kwargs: dict[str, Any] = {"model": model, "messages": msgs, "stream": True}
+    assistant_text = ""
+    finish_reason: str | None = None
+    last_usage: dict[str, Any] | None = None
     try:
-        try:
-            stream = client.chat.completions.create(
-                **create_kwargs,
-                stream_options={"include_usage": True},
-            )
-        except TypeError:
-            stream = client.chat.completions.create(**create_kwargs)
+        for ev in provider.stream_chat_completion_events(
+            msgs,
+            model=model,
+            max_tokens=_AGENT_SUMMARY_MAX_TOKENS,
+        ):
+            if isinstance(ev, AgentContentDelta):
+                assistant_text += ev.text
+                yield {"type": "assistant_delta", "text": ev.text}
+            elif isinstance(ev, AgentMessageFinish):
+                finish_reason = ev.finish_reason
+                last_usage = ev.usage
     except Exception as exc:
         logger.warning("confirmation summary model call failed: %s", exc)
         fb = (
@@ -272,23 +284,6 @@ def _stream_confirmation_summary_for_ui(
         yield {"type": "assistant_done", "finish_reason": "stop"}
         return
 
-    assistant_text = ""
-    finish_reason: str | None = None
-    last_usage: dict[str, Any] | None = None
-    for chunk in stream:
-        if not chunk.choices:
-            continue
-        ch0 = chunk.choices[0]
-        delta = ch0.delta
-        c = getattr(delta, "content", None) or None
-        if c:
-            assistant_text += c
-            yield {"type": "assistant_delta", "text": c}
-        if ch0.finish_reason:
-            finish_reason = ch0.finish_reason
-        u = getattr(chunk, "usage", None)
-        if u is not None:
-            last_usage = _usage_to_dict(u)
     if not assistant_text.strip():
         fb = (
             "I've prepared the actions above. Please use Approve or Reject for each item below; "
@@ -316,7 +311,7 @@ def _replace_tool_message_content(
 
 
 def _run_agent_openai_loop(
-    client: Any,
+    provider: Any,
     model: str,
     policy: AgentPolicy,
     allowlist: frozenset[str],
@@ -337,56 +332,43 @@ def _run_agent_openai_loop(
             rounds += 1
             yield {"type": "phase", "round": rounds, "phase": "model"}
 
-            create_kwargs: dict[str, Any] = {
-                "model": model,
-                "messages": oa_messages,
-                "tools": tools,
-                "tool_choice": "auto",
-                "stream": True,
-            }
-            try:
-                stream = client.chat.completions.create(
-                    **create_kwargs,
-                    stream_options={"include_usage": True},
-                )
-            except TypeError:
-                stream = client.chat.completions.create(**create_kwargs)
+            from llm_markdown.agent_stream import (
+                AgentContentDelta,
+                AgentMessageFinish,
+                AgentReasoningDelta,
+                AgentToolCallDelta,
+            )
 
             parts: dict[int, dict[str, str]] = {}
             assistant_text = ""
             finish_reason: str | None = None
             last_usage: dict[str, Any] | None = None
 
-            for chunk in stream:
-                if not chunk.choices:
-                    continue
-                ch0 = chunk.choices[0]
-                delta = ch0.delta
-                c = getattr(delta, "content", None) or None
-                if c:
-                    assistant_text += c
-                    yield {"type": "assistant_delta", "text": c}
-                tcd = getattr(delta, "tool_calls", None)
-                if tcd:
-                    for tc in tcd:
-                        idx = int(tc.index)
-                        if idx not in parts:
-                            parts[idx] = {"id": "", "name": "", "arguments": ""}
-                        if getattr(tc, "id", None):
-                            parts[idx]["id"] = tc.id
-                        fn = getattr(tc, "function", None)
-                        if fn is not None:
-                            nm = getattr(fn, "name", None) or ""
-                            if nm:
-                                parts[idx]["name"] += nm
-                            arg = getattr(fn, "arguments", None) or ""
-                            if arg:
-                                parts[idx]["arguments"] += arg
-                if ch0.finish_reason:
-                    finish_reason = ch0.finish_reason
-                u = getattr(chunk, "usage", None)
-                if u is not None:
-                    last_usage = _usage_to_dict(u)
+            for ev in provider.stream_chat_completion_events(
+                oa_messages,
+                model=model,
+                tools=tools,
+                tool_choice="auto",
+                max_tokens=_AGENT_OPENAI_MAX_COMPLETION_TOKENS,
+            ):
+                if isinstance(ev, AgentContentDelta):
+                    assistant_text += ev.text
+                    yield {"type": "assistant_delta", "text": ev.text}
+                elif isinstance(ev, AgentReasoningDelta):
+                    yield {"type": "reasoning_delta", "text": ev.text}
+                elif isinstance(ev, AgentToolCallDelta):
+                    idx = int(ev.index)
+                    if idx not in parts:
+                        parts[idx] = {"id": "", "name": "", "arguments": ""}
+                    if ev.tool_call_id:
+                        parts[idx]["id"] = ev.tool_call_id
+                    if ev.name:
+                        parts[idx]["name"] += ev.name
+                    if ev.arguments:
+                        parts[idx]["arguments"] += ev.arguments
+                elif isinstance(ev, AgentMessageFinish):
+                    finish_reason = ev.finish_reason
+                    last_usage = ev.usage
 
             done_ev: dict[str, Any] = {"type": "assistant_done", "finish_reason": finish_reason}
             if last_usage:
@@ -498,7 +480,7 @@ def _run_agent_openai_loop(
                         )
                 if pending_ids:
                     yield from _stream_confirmation_summary_for_ui(
-                        client,
+                        provider,
                         model,
                         oa_messages,
                         rounds,
@@ -556,16 +538,23 @@ def _run_agent_chat_stream(
         return
 
     try:
-        from openai import OpenAI
+        from llm_markdown.providers import OpenAIProvider
     except ImportError:
-        yield {"type": "error", "detail": "Install the openai Python package"}
+        yield {
+            "type": "error",
+            "detail": "Install llm-markdown with the openai extra (llm-markdown[openai])",
+        }
         return
 
     model = _resolve_agent_model()
     run_id = str(uuid.uuid4())
     yield {"type": "run_start", "run_id": run_id, "model": model}
 
-    client = OpenAI(api_key=api_key)
+    provider = OpenAIProvider(
+        api_key=api_key,
+        model=model,
+        max_tokens=_AGENT_OPENAI_MAX_COMPLETION_TOKENS,
+    )
     allowlist = policy.effective_allowlist()
     tools = openai_tool_specs(allowlist)
 
@@ -582,7 +571,7 @@ def _run_agent_chat_stream(
             oa_messages.append({"role": role, "content": content})
 
     yield from _run_agent_openai_loop(
-        client,
+        provider,
         model,
         policy,
         allowlist,
@@ -648,9 +637,12 @@ def _run_agent_resume_stream(
         return
 
     try:
-        from openai import OpenAI
+        from llm_markdown.providers import OpenAIProvider
     except ImportError:
-        yield {"type": "error", "detail": "Install the openai Python package"}
+        yield {
+            "type": "error",
+            "detail": "Install llm-markdown with the openai extra (llm-markdown[openai])",
+        }
         return
 
     oa_messages = run["oa_messages"]
@@ -697,9 +689,13 @@ def _run_agent_resume_stream(
     delete_agent_run(rid)
     yield {"type": "resume_start", "run_id": rid, "model": model}
 
-    client = OpenAI(api_key=api_key)
+    provider = OpenAIProvider(
+        api_key=api_key,
+        model=model,
+        max_tokens=_AGENT_OPENAI_MAX_COMPLETION_TOKENS,
+    )
     yield from _run_agent_openai_loop(
-        client,
+        provider,
         model,
         policy,
         allowlist,

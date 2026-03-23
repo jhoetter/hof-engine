@@ -780,7 +780,7 @@ requires-dist = [
     { name = "celery", extras = ["redis"], specifier = ">=5.4.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "llm-markdown", extras = ["openai"], specifier = ">=0.3.0" },
+    { name = "llm-markdown", extras = ["openai"], git = "https://github.com/jhoetter/llm-markdown.git?rev=v0.3.2" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5.0" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.27.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0" },
@@ -1078,15 +1078,11 @@ wheels = [
 
 [[package]]
 name = "llm-markdown"
-version = "0.3.1"
-source = { registry = "https://pypi.org/simple" }
+version = "0.3.2"
+source = { git = "https://github.com/jhoetter/llm-markdown.git?rev=v0.3.2#e094629bc8cdf205a91db3ae4925af2cc561a560" }
 dependencies = [
     { name = "pydantic" },
     { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/83/da/805f37979c0baa79c92922bd79b7a506ba78cbe7f2a07dfb17544ab3db59/llm_markdown-0.3.1.tar.gz", hash = "sha256:aaaa26043620359e2d206964785a10d94805e8de634ce42e771a8dd8d551f41c", size = 22396, upload-time = "2026-02-26T23:26:11.868Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/00/c0/b386a77ae43124f031c388034dd04ba1c106a0b5ceeb1050e8517dbc57c6/llm_markdown-0.3.1-py3-none-any.whl", hash = "sha256:c03e8d190d8e039cbe1b0d1a43db4c443d5a81980adada676c41bbe26fbaa813", size = 24473, upload-time = "2026-02-26T23:26:10.614Z" },
 ]
 
 [package.optional-dependencies]

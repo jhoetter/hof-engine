@@ -179,6 +179,26 @@ function stripReasoningPrefixOverlappingReply(reasoning: string, content: string
   return parts.join(" ").trim();
 }
 
+/**
+ * Collapse consecutive ``reasoning`` segments (duplicate ``segment_start`` from the
+ * wire, or Phase A + Phase B) into one — avoids multiple THINKING headers / empty shells.
+ */
+export function mergeAdjacentReasoningSegments(
+  segments: AssistantStreamSegment[],
+): AssistantStreamSegment[] {
+  const out: AssistantStreamSegment[] = [];
+  for (const s of segments) {
+    const tail = out[out.length - 1];
+    if (s.kind === "reasoning" && tail?.kind === "reasoning") {
+      const merged = `${tail.text}\n\n${s.text}`.trim();
+      out[out.length - 1] = { kind: "reasoning", text: merged };
+    } else {
+      out.push({ ...s });
+    }
+  }
+  return out;
+}
+
 /** Drop trailing empty ``content`` shells and hide reasoning that duplicates the following reply. */
 export function normalizeAssistantStreamSegments(
   segments: AssistantStreamSegment[],
@@ -215,7 +235,10 @@ export function normalizeAssistantStreamSegments(
     }
     out.push(cur);
   }
-  return out;
+  const merged = mergeAdjacentReasoningSegments(out);
+  return merged.filter(
+    (s) => s.kind !== "reasoning" || s.text.trim().length > 0,
+  );
 }
 
 export type LiveBlock =
@@ -690,7 +713,8 @@ export function applyStreamEvent(
       let streamSegmentsOut: AssistantStreamSegment[] | undefined;
       if (last.streamSegments?.length) {
         const n = normalizeAssistantStreamSegments(last.streamSegments);
-        streamSegmentsOut = n.length > 0 ? n : undefined;
+        // Never wipe segments on a bad normalize edge case (user saw thinking, then it vanished).
+        streamSegmentsOut = n.length > 0 ? n : last.streamSegments;
       } else {
         streamSegmentsOut = last.streamSegments;
       }

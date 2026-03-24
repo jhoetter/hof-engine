@@ -787,11 +787,18 @@ export function compactBlocksForHistory(blocks: LiveBlock[]): LiveBlock[] {
   );
   const deduped = dedupeAdjacentDuplicateAssistants(base);
   return deduped.map((b) => {
-    if (b.kind !== "assistant" || !b.pendingStreamFinalize) {
+    if (b.kind !== "assistant") {
       return b;
     }
-    const { pendingStreamFinalize: _p, ...rest } = b;
-    return rest as LiveBlock;
+    let out = b as Extract<LiveBlock, { kind: "assistant" }>;
+    if (out.pendingStreamFinalize) {
+      const { pendingStreamFinalize: _p, ...rest } = out;
+      out = rest as Extract<LiveBlock, { kind: "assistant" }>;
+    }
+    if (out.streaming) {
+      out = { ...out, streaming: false };
+    }
+    return out;
   });
 }
 

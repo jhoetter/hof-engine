@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyStreamEvent,
+  compactBlocksForHistory,
   confirmationFooterFromOutcomes,
 } from "./hofAgentChatModel";
 import type { LiveBlock } from "./hofAgentChatModel";
@@ -89,6 +90,24 @@ describe("applyStreamEvent streaming caret / structured steps", () => {
     expect(
       confirmationFooterFromOutcomes(["a", "b"], { a: true, b: false }),
     ).toContain("approved");
+  });
+
+  it("compactBlocksForHistory clears streaming flags on flushed assistant rows", () => {
+    const blocks: LiveBlock[] = [
+      {
+        kind: "assistant",
+        id: "a1",
+        text: "Hello.",
+        streaming: true,
+        streamPhase: "summary",
+      },
+    ];
+    const out = compactBlocksForHistory(blocks);
+    const asst = out.find((b) => b.kind === "assistant");
+    expect(asst?.kind).toBe("assistant");
+    if (asst?.kind === "assistant") {
+      expect(asst.streaming).toBe(false);
+    }
   });
 
   it("final clears pendingStreamFinalize if assistant_done never arrived", () => {

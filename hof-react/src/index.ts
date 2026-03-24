@@ -11,7 +11,11 @@ export {
   type HofAgentChatProviderProps,
 } from "./agent/hofAgentChatContext";
 export { HofAgentMessages, type HofAgentMessagesProps } from "./agent/HofAgentMessages";
-export { HofAgentComposer, type HofAgentComposerProps } from "./agent/HofAgentComposer";
+export {
+  HofAgentComposer,
+  type HofAgentComposerProps,
+  type HofAgentComposerVoiceTranscription,
+} from "./agent/HofAgentComposer";
 export {
   HofAgentConversationSelect,
   type HofAgentConversationOption,

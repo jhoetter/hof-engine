@@ -2,6 +2,7 @@
 
 import {
   Loader2,
+  Mic,
   Paperclip,
   Plus,
   Search,
@@ -31,17 +32,47 @@ import {
 } from "./prepareSkillFieldForMarkdown";
 import { humanizeToolName } from "./hofAgentChatModel";
 import { useHofAgentChat } from "./hofAgentChatContext";
+import {
+  useAgentVoiceTranscription,
+  type AgentVoiceTranscriptionState,
+} from "./useAgentVoiceTranscription";
+
+const DEFAULT_TRANSCRIBE_PROMPT =
+  "Transcribe exactly what is said verbatim. Do not translate.";
+
+function readViteEnvString(key: string): string | undefined {
+  try {
+    const env = (import.meta as unknown as { env?: Record<string, string> }).env;
+    const v = env?.[key];
+    return typeof v === "string" && v.trim() ? v.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export type HofAgentComposerVoiceTranscription = {
+  /** When `false`, hides the microphone control. Default: on. */
+  enabled?: boolean;
+  /** POST target for the SDP offer (default `/api/transcribe/session`). */
+  sessionPath?: string;
+  /** BCP-47 language for the transcription model (default `de`). */
+  language?: string;
+  /** Passed to the Realtime session `transcription.prompt`. */
+  transcriptionPrompt?: string;
+};
 
 export type HofAgentComposerProps = {
   /** Wraps attachment chips, errors, and the composer shell. */
   className?: string;
-  /** Bottom row: square + menu and Send (`justify-between`). */
+  /** Bottom row: + menu left; mic + Send/Stop right (`justify-between`). */
   controlsRowClassName?: string;
   /** Bordered shell around the two-row composer (`flex flex-col`). */
   inputShellClassName?: string;
   disclaimerClassName?: string;
   /** Max height of the message field before it scrolls (px). */
   textareaMaxHeightPx?: number;
+  /** Streaming speech-to-text (OpenAI Realtime); optional Vite: `VITE_AGENT_TRANSCRIBE_*`. */
+  voiceTranscription?: HofAgentComposerVoiceTranscription;
 };
 
 /** Square ghost icon control (plus / attach menu trigger). */
@@ -73,6 +104,52 @@ const SKILLS_DIALOG_PANEL_CLASS =
   "relative z-[1] flex h-[min(calc(100vh-1.5rem),52rem)] w-[min(100vw-1.5rem,56rem)] max-w-full flex-col overflow-hidden rounded-lg border border-border bg-background font-sans text-foreground shadow-lg";
 
 const REQUIRES_APPROVAL_LABEL = "Requires approval";
+
+type VoiceBannerVariant = "setup" | "connecting" | "live";
+
+function voiceBannerContent(
+  state: AgentVoiceTranscriptionState,
+): { title: string; body: string; variant: VoiceBannerVariant } | null {
+  switch (state) {
+    case "preparing_mic":
+      return {
+        title: "Allow the microphone",
+        body: "If your browser shows a prompt, choose Allow. Audio is only used to fill this message.",
+        variant: "setup",
+      };
+    case "linking_session":
+      return {
+        title: "Almost ready",
+        body: "Connecting to live transcription. This often takes a few seconds.",
+        variant: "connecting",
+      };
+    case "listening":
+      return {
+        title: "Listening",
+        body: "Speak at a normal volume. Text appears after a short pause. Tap the mic again when you're done.",
+        variant: "live",
+      };
+    case "finalizing":
+      return {
+        title: "Finishing transcription",
+        body: "Your microphone is off. We are sending the last audio so nothing is cut off.",
+        variant: "connecting",
+      };
+    default:
+      return null;
+  }
+}
+
+function voiceBannerShellClass(variant: VoiceBannerVariant): string {
+  switch (variant) {
+    case "setup":
+      return "border-border bg-surface";
+    case "connecting":
+      return "border-[var(--color-accent)]/35 bg-[var(--color-accent)]/10";
+    case "live":
+      return "border-[var(--color-destructive)]/28 bg-[var(--color-destructive)]/8";
+  }
+}
 
 function SkillSection({ label, source }: { label: string; source: string }) {
   const prepared = prepareSkillMarkdownField(source);
@@ -254,6 +331,7 @@ export function HofAgentComposer({
   inputShellClassName = "flex flex-col gap-2 rounded-md border border-border bg-background p-2",
   disclaimerClassName = "mt-2.5 mb-3 text-center text-[11px] leading-snug text-tertiary",
   textareaMaxHeightPx = 200,
+  voiceTranscription: voiceTranscriptionProp,
 }: HofAgentComposerProps) {
   const {
     input,
@@ -270,6 +348,46 @@ export function HofAgentComposer({
     onPickFiles,
     conversationEmpty,
   } = useHofAgentChat();
+
+  const voiceCfg = voiceTranscriptionProp ?? {};
+  const voiceFeatureEnabled = voiceCfg.enabled !== false;
+  const transcribeSessionPath =
+    voiceCfg.sessionPath ??
+    readViteEnvString("VITE_AGENT_TRANSCRIBE_SESSION_PATH") ??
+    "/api/transcribe/session";
+  const transcribeLanguage =
+    voiceCfg.language ??
+    readViteEnvString("VITE_AGENT_TRANSCRIBE_LANGUAGE") ??
+    "de";
+  const transcribePrompt =
+    voiceCfg.transcriptionPrompt ?? DEFAULT_TRANSCRIBE_PROMPT;
+
+  const {
+    state: voiceState,
+    interim: voiceInterim,
+    error: voiceError,
+    clearError: clearVoiceError,
+    start: startVoice,
+    stop: stopVoice,
+  } = useAgentVoiceTranscription({
+    sessionPath: transcribeSessionPath,
+    language: transcribeLanguage,
+    transcriptionPrompt: transcribePrompt,
+  });
+
+  const voiceSessionActive =
+    voiceState === "preparing_mic" ||
+    voiceState === "linking_session" ||
+    voiceState === "listening" ||
+    voiceState === "finalizing";
+  const voiceIsLive = voiceState === "listening";
+  const voiceConnecting =
+    voiceState === "preparing_mic" ||
+    voiceState === "linking_session" ||
+    voiceState === "finalizing";
+  const voiceBanner = voiceFeatureEnabled ? voiceBannerContent(voiceState) : null;
+  const showVoiceButton =
+    voiceFeatureEnabled && voiceState !== "unsupported";
 
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const attachMenuRef = useRef<HTMLDivElement>(null);
@@ -295,7 +413,7 @@ export function HofAgentComposer({
 
   useLayoutEffect(() => {
     syncTextareaHeight();
-  }, [input, syncTextareaHeight]);
+  }, [input, voiceInterim, syncTextareaHeight]);
 
   useEffect(() => {
     if (!attachMenuOpen) {
@@ -407,13 +525,70 @@ export function HofAgentComposer({
 
   const disabled = busy || uploadBusy || Boolean(approvalBarrier);
 
+  const onVoiceToggle = () => {
+    clearVoiceError();
+    if (voiceState === "finalizing") {
+      return;
+    }
+    if (voiceSessionActive) {
+      stopVoice({
+        flushPartial: (t) => {
+          setInput((p) => p + t);
+        },
+      });
+      return;
+    }
+    startVoice((text) => {
+      setInput((p) => p + text);
+    });
+  };
+
   const composerBody = (
     <>
+      {voiceSessionActive && voiceBanner ? (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className={`flex gap-2.5 rounded-lg border px-2.5 py-2 ${voiceBannerShellClass(
+            voiceBanner.variant,
+          )}`}
+        >
+          <div
+            className="flex w-7 shrink-0 justify-center"
+            aria-hidden
+          >
+            {voiceIsLive ? (
+              <span className="relative mt-0.5 flex size-3 shrink-0">
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-[var(--color-destructive)] opacity-50" />
+                <span className="relative inline-flex size-3 rounded-full bg-[var(--color-destructive)]" />
+              </span>
+            ) : (
+              <Loader2
+                className={`mt-0.5 size-4 shrink-0 animate-spin ${
+                  voiceBanner.variant === "connecting"
+                    ? "text-[var(--color-accent)]"
+                    : "text-secondary"
+                }`}
+              />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-semibold leading-snug tracking-tight text-foreground">
+              {voiceBanner.title}
+            </p>
+            <p className="mt-1 text-[12px] leading-relaxed text-secondary">
+              {voiceBanner.body}
+            </p>
+          </div>
+        </div>
+      ) : null}
       <textarea
         ref={textareaRef}
-        value={input}
+        value={voiceSessionActive ? input + voiceInterim : input}
         rows={1}
         onChange={(e) => setInput(e.target.value)}
+        readOnly={voiceSessionActive}
         onKeyDown={(e) => {
           if (e.key === "Enter" && e.repeat) {
             return;
@@ -424,11 +599,24 @@ export function HofAgentComposer({
             send();
           }
         }}
-        placeholder="How can I help you?"
+        placeholder={
+          voiceState === "finalizing"
+            ? "Wrapping up the last words…"
+            : voiceIsLive
+              ? "Transcript appears here while you speak…"
+              : voiceConnecting
+                ? "Preparing voice input…"
+                : "How can I help you?"
+        }
         disabled={disabled}
-        className="min-h-9 min-w-0 w-full resize-none overflow-y-auto rounded-md border-0 bg-transparent px-1 py-0.5 text-sm leading-snug text-foreground shadow-none placeholder:text-secondary outline-none ring-0 transition-[height] focus:outline-none focus:ring-0 disabled:opacity-60"
+        className="min-h-9 min-w-0 w-full resize-none overflow-y-auto rounded-md border-0 bg-transparent px-1 py-0.5 text-sm leading-snug text-foreground shadow-none placeholder:text-secondary outline-none ring-0 transition-[height] focus:outline-none focus:ring-0 disabled:opacity-60 read-only:opacity-100"
         style={{ maxHeight: textareaMaxHeightPx } satisfies CSSProperties}
       />
+      {voiceFeatureEnabled && voiceError ? (
+        <p className="px-1 text-[12px] text-[var(--color-destructive)]">
+          {voiceError}
+        </p>
+      ) : null}
       <div className={controlsRowClassName}>
         <div ref={attachMenuRef} className="relative shrink-0">
           <button
@@ -483,22 +671,58 @@ export function HofAgentComposer({
             </div>
           ) : null}
         </div>
-        {busy && !approvalBarrier ? (
-          <button type="button" onClick={stop} className={sendBtnClass}>
-            Stop
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={send}
-            disabled={
-              disabled || (!input.trim() && attachmentQueue.length === 0)
-            }
-            className={sendBtnClass}
-          >
-            {uploadBusy ? "Uploading…" : "Send"}
-          </button>
-        )}
+        <div className="flex shrink-0 items-center gap-1">
+          {showVoiceButton ? (
+            <button
+              type="button"
+              disabled={disabled || voiceState === "finalizing"}
+              className={`${squareIconBtnClass} relative ${
+                voiceIsLive
+                  ? "ring-2 ring-[var(--color-destructive)]/50 bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]"
+                  : ""
+              } ${voiceConnecting ? "text-[var(--color-accent)]" : ""}`}
+              aria-label={
+                voiceState === "finalizing"
+                  ? "Finishing transcription"
+                  : voiceSessionActive
+                    ? "Stop voice input"
+                    : "Start voice input"
+              }
+              aria-pressed={
+                voiceSessionActive && voiceState !== "finalizing"
+              }
+              onClick={onVoiceToggle}
+            >
+              {voiceConnecting ? (
+                <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+              ) : (
+                <Mic className="size-4 shrink-0" strokeWidth={2} aria-hidden />
+              )}
+              {voiceIsLive ? (
+                <span
+                  className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-[var(--color-destructive)] ring-2 ring-background"
+                  aria-hidden
+                />
+              ) : null}
+            </button>
+          ) : null}
+          {busy && !approvalBarrier ? (
+            <button type="button" onClick={stop} className={sendBtnClass}>
+              Stop
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={send}
+              disabled={
+                disabled || (!input.trim() && attachmentQueue.length === 0)
+              }
+              className={sendBtnClass}
+            >
+              {uploadBusy ? "Uploading…" : "Send"}
+            </button>
+          )}
+        </div>
       </div>
     </>
   );
@@ -542,7 +766,13 @@ export function HofAgentComposer({
           {uploadErr}
         </p>
       ) : null}
-      <div className={inputShellClassName}>{composerBody}</div>
+      <div
+        className={`${inputShellClassName}${
+          voiceSessionActive ? " ring-2 ring-inset ring-[var(--color-accent)]/40" : ""
+        }`}
+      >
+        {composerBody}
+      </div>
       <dialog
         ref={skillsDialogRef}
         className={SKILLS_DIALOG_SHELL_CLASS}

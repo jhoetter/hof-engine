@@ -2,10 +2,8 @@
 
 import {
   Braces,
-  Check,
   CheckCircle2,
   ChevronRight,
-  X,
   XCircle,
 } from "lucide-react";
 import {
@@ -162,7 +160,16 @@ function ToolResultStatusStrip({ result }: { result: ToolResultBlock }) {
   );
 }
 
-/** Check / cross in the tool card header: pick when waiting; shows outcome when done. */
+/** Tool card header: same circle glyphs for “pick” and final status ({@link CheckCircle2} / {@link XCircle}). */
+const MUTATION_APPROVE_ICON_CLASS =
+  "size-4 shrink-0 text-[var(--color-success)]";
+const MUTATION_REJECT_ICON_CLASS =
+  "size-4 shrink-0 text-[var(--color-destructive)]";
+
+/** Ghost hit target around the status glyph (no square border — matches static outcome row). */
+const MUTATION_CHOICE_BTN_BASE =
+  "inline-flex shrink-0 items-center justify-center rounded-full p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--color-accent)_45%,transparent)] focus-visible:ring-offset-1 focus-visible:ring-offset-background";
+
 function ToolMutationCorner({
   showApproval,
   approvalItemsForMutation,
@@ -187,12 +194,12 @@ function ToolMutationCorner({
   if (mutationOutcome === true) {
     return (
       <div
-        className="flex shrink-0 items-start pt-0.5"
+        className="flex shrink-0 items-center"
         title="Approved"
         aria-label="Approved"
       >
         <CheckCircle2
-          className="size-[1.35rem] text-[var(--color-success)]"
+          className={MUTATION_APPROVE_ICON_CLASS}
           strokeWidth={2}
           aria-hidden
         />
@@ -202,12 +209,12 @@ function ToolMutationCorner({
   if (mutationOutcome === false) {
     return (
       <div
-        className="flex shrink-0 items-start pt-0.5"
+        className="flex shrink-0 items-center"
         title="Rejected"
         aria-label="Rejected"
       >
         <XCircle
-          className="size-[1.35rem] text-[var(--color-destructive)]"
+          className={MUTATION_REJECT_ICON_CLASS}
           strokeWidth={2}
           aria-hidden
         />
@@ -219,7 +226,7 @@ function ToolMutationCorner({
   }
   return (
     <div
-      className="flex shrink-0 flex-col items-end gap-1.5 pt-0.5"
+      className="flex shrink-0 flex-col items-end gap-1"
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -228,16 +235,18 @@ function ToolMutationCorner({
       {approvalItemsForMutation.map((it) => {
         const d = approvalDecisions[it.pendingId];
         return (
-          <div key={it.pendingId} className="flex items-center gap-1">
+          <div key={it.pendingId} className="flex items-center gap-2">
             <button
               type="button"
               disabled={busy}
               title="Approve"
               aria-label={`Approve ${it.name}`}
-              className={`rounded-md border p-1.5 transition-colors ${
+              className={`${MUTATION_CHOICE_BTN_BASE} ${
                 d === true
-                  ? "border-[var(--color-success)] bg-[color:color-mix(in_srgb,var(--color-success)_12%,transparent)] text-foreground"
-                  : "border-border bg-background text-secondary hover:bg-hover hover:text-foreground"
+                  ? "cursor-pointer"
+                  : d === false
+                    ? "opacity-35 hover:bg-[var(--color-success-bg)] hover:opacity-70"
+                    : "hover:bg-[var(--color-success-bg)]"
               }`}
               onClick={() =>
                 setApprovalDecisions((prev) => ({
@@ -246,17 +255,23 @@ function ToolMutationCorner({
                 }))
               }
             >
-              <Check className="size-4" strokeWidth={2.5} aria-hidden />
+              <CheckCircle2
+                className={MUTATION_APPROVE_ICON_CLASS}
+                strokeWidth={2}
+                aria-hidden
+              />
             </button>
             <button
               type="button"
               disabled={busy}
               title="Reject"
               aria-label={`Reject ${it.name}`}
-              className={`rounded-md border p-1.5 transition-colors ${
+              className={`${MUTATION_CHOICE_BTN_BASE} ${
                 d === false
-                  ? "border-[var(--color-destructive)] bg-[color:color-mix(in_srgb,var(--color-destructive)_12%,transparent)] text-foreground"
-                  : "border-border bg-background text-secondary hover:bg-hover hover:text-foreground"
+                  ? "cursor-pointer"
+                  : d === true
+                    ? "opacity-35 hover:bg-[var(--color-destructive-bg)] hover:opacity-70"
+                    : "hover:bg-[var(--color-destructive-bg)]"
               }`}
               onClick={() =>
                 setApprovalDecisions((prev) => ({
@@ -265,7 +280,11 @@ function ToolMutationCorner({
                 }))
               }
             >
-              <X className="size-4" strokeWidth={2.5} aria-hidden />
+              <XCircle
+                className={MUTATION_REJECT_ICON_CLASS}
+                strokeWidth={2}
+                aria-hidden
+              />
             </button>
           </div>
         );
@@ -334,11 +353,6 @@ export function ToolGroupCard({
     showMutationCmdDup;
 
   const [detailsOpen, setDetailsOpen] = useState(false);
-  useEffect(() => {
-    if (showApproval) {
-      setDetailsOpen(true);
-    }
-  }, [showApproval]);
 
   return (
     <div
@@ -350,26 +364,13 @@ export function ToolGroupCard({
         onToggle={(e) => setDetailsOpen(e.currentTarget.open)}
         className="group w-full rounded-lg border border-border bg-surface/40 [&_summary::-webkit-details-marker]:hidden"
       >
-        <summary className="flex cursor-pointer list-none items-start gap-2 px-3 py-2.5 text-[12px] leading-snug transition-colors hover:bg-hover/50">
+        <summary className="flex cursor-pointer list-none items-center gap-2.5 px-3 py-2.5 text-[12px] leading-snug transition-colors hover:bg-hover/50">
           <ChevronRight
-            className={`mt-0.5 size-3.5 shrink-0 text-tertiary transition-transform ${detailsOpen ? "rotate-90" : ""}`}
+            className={`size-4 shrink-0 text-tertiary transition-transform ${detailsOpen ? "rotate-90" : ""}`}
             aria-hidden
           />
           <div className="min-w-0 flex-1">
             <span className="font-medium text-foreground">{title}</span>
-            {mutation ? (
-              <span
-                className={`ml-2 text-[10px] font-medium uppercase tracking-wide ${
-                  mutationOutcome === true
-                    ? "text-[var(--color-success)]"
-                    : mutationOutcome === false
-                      ? "text-[var(--color-destructive)]"
-                      : "text-[var(--color-accent)]"
-                }`}
-              >
-                Confirmation
-              </span>
-            ) : null}
           </div>
           {mutation ? (
             <ToolMutationCorner
@@ -708,6 +709,7 @@ export function RunBlocksList({
             key={b.id}
             b={b}
             afterToolResult={postToolAssistantIds.has(b.id)}
+            busy={busy}
           />
         );
       })}
@@ -1144,9 +1146,15 @@ function AssistantSegmentedBody({
 export function LiveBlockView({
   b,
   afterToolResult = false,
+  busy = false,
 }: {
   b: LiveBlock;
   afterToolResult?: boolean;
+  /**
+   * When false, assistant rows never show the streaming caret — fixes stale `streaming: true`
+   * on persisted thread blocks after the HTTP stream has already ended.
+   */
+  busy?: boolean;
 }) {
   if (b.kind === "thinking_skeleton") {
     return null;
@@ -1174,7 +1182,10 @@ export function LiveBlockView({
     const isModel = b.streamPhase === "model";
     const streamSegs = b.streamSegments?.length ? b.streamSegments : null;
     const anySegText = streamSegs?.some((s) => s.text.trim()) ?? false;
-    const streamActive = b.streaming && b.pendingStreamFinalize !== true;
+    const wireStreaming =
+      b.streaming && b.pendingStreamFinalize !== true;
+    /** Require an in-flight agent request so hydrated/persisted `streaming: true` does not stick a caret. */
+    const streamActive = busy && wireStreaming;
     /** Summary often stays `streaming` on the wire until `assistant_done`; hide the caret once any text exists. */
     const streamCaretActive =
       streamActive &&
@@ -1296,7 +1307,7 @@ export function LiveBlockView({
       );
     }
 
-    if (isModel && !b.streaming && lane === "thinking") {
+    if (isModel && !streamActive && lane === "thinking") {
       if (streamSegs) {
         if (!anySegText) {
           return (
@@ -1333,7 +1344,7 @@ export function LiveBlockView({
       return <ReasoningStreamPeek text={b.text} streaming={false} />;
     }
 
-    if (isModel && !b.streaming && lane === "reply") {
+    if (isModel && !streamActive && lane === "reply") {
       if (streamSegs && anySegText) {
         return (
           <AssistantSegmentedBody
@@ -1358,7 +1369,7 @@ export function LiveBlockView({
     }
 
     const role = assistantUiRole(b, { afterToolResult });
-    if (role === "reasoning" && !b.streaming) {
+    if (role === "reasoning" && !streamActive) {
       if (streamSegs && anySegText) {
         return (
           <AssistantSegmentedBody

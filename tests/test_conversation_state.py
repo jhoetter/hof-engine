@@ -34,9 +34,7 @@ def test_validate_accepts_camel_case_alias() -> None:
 
 def test_validate_rejects_bad_version() -> None:
     with pytest.raises(ValueError, match="unsupported conversation state version"):
-        validate_conversation_state(
-            {"version": 2, "thread": [], "mutationOutcomes": {}}
-        )
+        validate_conversation_state({"version": 2, "thread": [], "mutationOutcomes": {}})
 
 
 def test_enforce_max_bytes() -> None:

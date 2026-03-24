@@ -62,9 +62,7 @@ def _make_call_command(function_name: str) -> click.Command:
     return call_fn
 
 
-def _call_function(
-    function_name: str, input_json: str | None, output_format: str = "auto"
-) -> None:
+def _call_function(function_name: str, input_json: str | None, output_format: str = "auto") -> None:
     from hof.cli.api_client import get_client
 
     kwargs = json.loads(input_json) if input_json else {}
@@ -141,7 +139,6 @@ def describe_function(function_name: str) -> None:
         format_function_describe_from_static_meta,
         format_function_describe_text,
     )
-
     from hof.cli.api_client import get_client
 
     client = get_client()

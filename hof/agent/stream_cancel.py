@@ -11,16 +11,17 @@ import contextvars
 import threading
 from typing import Any
 
-_stream_cancel_event: contextvars.ContextVar[threading.Event | None] = (
-    contextvars.ContextVar(
-        "hof_stream_cancel_event",
-        default=None,
-    )
+_stream_cancel_event: contextvars.ContextVar[threading.Event | None] = contextvars.ContextVar(
+    "hof_stream_cancel_event",
+    default=None,
 )
 
 
 def attach_stream_cancel_event(event: threading.Event) -> contextvars.Token[Any]:
-    """Bind ``event`` for the current context; return token for :func:`reset_stream_cancel_event`."""
+    """Bind ``event`` for the current context.
+
+    Returns a token for :func:`reset_stream_cancel_event`.
+    """
     return _stream_cancel_event.set(event)
 
 

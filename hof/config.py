@@ -88,7 +88,8 @@ class Config:
         agent_max_cli_line_chars: int = 240,
         # OpenAI completion cap per request; many chat models max at 16_384 (override via env).
         agent_max_completion_tokens: int = 16_384,
-        # Agent streamed reasoning: native (default), off (no reasoning_delta), fallback (llm-markdown two-phase).
+        # Agent streamed reasoning: native (default), off (no reasoning_delta),
+        # or fallback (llm-markdown two-phase).
         agent_reasoning_mode: str = "native",
         # Langfuse
         langfuse_public_key: str = "",

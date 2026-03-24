@@ -53,7 +53,7 @@ async def call_function_stream(
     body: dict[str, Any] | None = Body(default=None),
     user: str = Depends(_optional_auth),
 ) -> StreamingResponse:
-    """Stream NDJSON events from a registered ``stream`` generator (same auth/input as POST /{name})."""
+    """Stream NDJSON from a registered ``stream`` generator (same auth/body as POST /{name})."""
     meta = registry.get_function(function_name)
     if meta is None:
         raise HTTPException(404, f"Function '{function_name}' not found")
@@ -75,10 +75,7 @@ async def call_function_stream(
                 line = json.dumps(ev, default=str, ensure_ascii=False) + "\n"
                 yield line.encode("utf-8")
         except Exception as exc:
-            err_line = (
-                json.dumps({"type": "error", "detail": str(exc)}, ensure_ascii=False)
-                + "\n"
-            )
+            err_line = json.dumps({"type": "error", "detail": str(exc)}, ensure_ascii=False) + "\n"
             yield err_line.encode("utf-8")
 
     return StreamingResponse(

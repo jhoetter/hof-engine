@@ -11,6 +11,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from llm_markdown.providers import ReasoningConfig, ReasoningMode, stream_agent_turn
+
 from hof.agent.policy import AgentPolicy, get_agent_policy
 from hof.agent.state import (
     delete_agent_run,
@@ -29,7 +31,6 @@ from hof.agent.tooling import (
     tool_result_status_for_ui,
 )
 from hof.config import get_config
-from llm_markdown.providers import ReasoningConfig, ReasoningMode, stream_agent_turn
 
 logger = logging.getLogger(__name__)
 
@@ -250,8 +251,7 @@ def _resolve_agent_reasoning_config(backend: str | None = None) -> ReasoningConf
     if mode_src in ("fallback",):
         if extras:
             msg = (
-                "AGENT_REASONING_OPENAI_EXTRAS is not allowed when "
-                "AGENT_REASONING_MODE is fallback"
+                "AGENT_REASONING_OPENAI_EXTRAS is not allowed when AGENT_REASONING_MODE is fallback"
             )
             raise ValueError(msg)
         if backend_norm == "anthropic":
@@ -259,22 +259,16 @@ def _resolve_agent_reasoning_config(backend: str | None = None) -> ReasoningConf
                 "FALLBACK reasoning is not recommended for Anthropic; "
                 "using native mode with provider thinking instead (see AGENT_ANTHROPIC_THINKING)"
             )
-            return ReasoningConfig.native(
-                anthropic_thinking=_resolve_anthropic_thinking_kw()
-            )
+            return ReasoningConfig.native(anthropic_thinking=_resolve_anthropic_thinking_kw())
         return ReasoningConfig(mode=ReasoningMode.FALLBACK)
     if mode_src not in ("native", "", "on", "true", "1", "yes"):
-        msg = (
-            f"Unknown agent reasoning mode: {mode_src!r} (use native, off, or fallback)"
-        )
+        msg = f"Unknown agent reasoning mode: {mode_src!r} (use native, off, or fallback)"
         raise ValueError(msg)
     if backend_norm == "anthropic":
         if extras:
             msg = "AGENT_REASONING_OPENAI_EXTRAS is not used when AGENT_LLM_BACKEND=anthropic"
             raise ValueError(msg)
-        return ReasoningConfig.native(
-            anthropic_thinking=_resolve_anthropic_thinking_kw()
-        )
+        return ReasoningConfig.native(anthropic_thinking=_resolve_anthropic_thinking_kw())
     # OpenAI (default backend): "native" in config means "show thinking for every turn".
     # Chat Completions on gpt-4o-class models usually emit no reasoning_delta; llm-markdown
     # FALLBACK always streams a planning/thinking lane. Opt into true Chat Completions native
@@ -301,9 +295,7 @@ def _resolve_agent_max_completion_tokens() -> int:
         c = get_config()
         n = int(getattr(c, "agent_max_completion_tokens", 16_384))
         if n > 0:
-            return max(
-                _AGENT_COMPLETION_TOKENS_FLOOR, min(n, _AGENT_COMPLETION_TOKENS_CAP)
-            )
+            return max(_AGENT_COMPLETION_TOKENS_FLOOR, min(n, _AGENT_COMPLETION_TOKENS_CAP))
     except Exception:
         pass
     return 16_384
@@ -418,17 +410,11 @@ def collect_agent_chat_from_stream(
             r = int(ev.get("round") or 0)
             ph = str(ev.get("phase") or "")
             if ph == "model":
-                legacy.append(
-                    {"type": "thinking", "detail": f"Round {r}: calling model…"}
-                )
+                legacy.append({"type": "thinking", "detail": f"Round {r}: calling model…"})
             elif ph == "tools":
-                legacy.append(
-                    {"type": "thinking", "detail": f"Round {r}: executing tools…"}
-                )
+                legacy.append({"type": "thinking", "detail": f"Round {r}: executing tools…"})
             elif ph == "summary":
-                legacy.append(
-                    {"type": "thinking", "detail": f"Round {r}: confirmation reply…"}
-                )
+                legacy.append({"type": "thinking", "detail": f"Round {r}: confirmation reply…"})
         elif t == "segment_start":
             continue
         elif t == "assistant_delta" or t == "reasoning_delta":
@@ -497,9 +483,7 @@ def collect_agent_chat_from_stream(
                 },
             )
         elif t == "resume_start":
-            legacy.append(
-                {"type": "thinking", "detail": "Continuing after confirmation…"}
-            )
+            legacy.append({"type": "thinking", "detail": "Continuing after confirmation…"})
         elif t == "final":
             reply = str(ev.get("reply") or "").strip()
             rounds = int(ev.get("tool_rounds_used") or rounds)
@@ -753,9 +737,7 @@ def _run_agent_openai_loop(
                     name = tc["name"]
                     args = tc["arguments"] or "{}"
                     tid = tc["id"] or f"call_{idx}"
-                    cli = format_cli_line(
-                        name, args, max_cli_line_chars=max_cli_line_chars
-                    )
+                    cli = format_cli_line(name, args, max_cli_line_chars=max_cli_line_chars)
                     tc_ev: dict[str, Any] = {
                         "type": "tool_call",
                         "name": name,
@@ -950,9 +932,7 @@ def _run_agent_chat_stream(
     policy: AgentPolicy,
 ) -> Iterator[dict[str, Any]]:
     """Yield NDJSON-shaped dicts."""
-    max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = (
-        _agent_limits()
-    )
+    max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = _agent_limits()
 
     norm_fn = policy.normalize_attachments or default_normalize_attachments
     att_norm, att_err = norm_fn(attachments)
@@ -1233,9 +1213,7 @@ def iter_agent_chat_stream(
     yield from _run_agent_chat_stream(messages, attachments, policy=policy)
 
 
-def iter_agent_resume_stream(
-    run_id: str, resolutions: list
-) -> Iterator[dict[str, Any]]:
+def iter_agent_resume_stream(run_id: str, resolutions: list) -> Iterator[dict[str, Any]]:
     """Stream continued agent trace after mutation confirmation."""
     policy = get_agent_policy()
     yield from _run_agent_resume_stream(run_id, resolutions, policy=policy)

@@ -91,7 +91,7 @@ def compose_agent_tool_description(function_name: str, meta: FunctionMetadata) -
 
 
 def format_function_describe_from_static_meta(data: dict[str, Any]) -> str:
-    """Format ``function_schema`` / ``to_dict()`` JSON when no in-process policy/registry merge applies."""
+    """Format static ``function_schema`` / ``to_dict()`` JSON (no policy/registry merge)."""
     name = str(data.get("name") or "")
     lines: list[str] = [f"Function: {name}", ""]
     parts: list[str] = []
@@ -133,7 +133,7 @@ def format_function_describe_from_static_meta(data: dict[str, Any]) -> str:
 
 
 def format_function_describe_text(function_name: str, meta: FunctionMetadata) -> str:
-    """Human-readable multi-line help for ``hof fn describe`` (same facts as the agent, plus parameters)."""
+    """Multi-line help for ``hof fn describe`` (agent parity, including parameters)."""
     lines: list[str] = [
         f"Function: {function_name}",
         "",

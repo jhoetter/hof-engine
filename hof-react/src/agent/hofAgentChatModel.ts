@@ -1116,7 +1116,7 @@ export function confirmationFooterFromOutcomes(
     }
   }
   if (unknown > 0) {
-    return "Waiting for Approve or Reject on each pending action above.";
+    return null;
   }
   if (rejected === 0 || approved === 0) {
     return null;

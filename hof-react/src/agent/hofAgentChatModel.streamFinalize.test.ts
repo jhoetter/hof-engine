@@ -107,6 +107,7 @@ describe("applyStreamEvent streaming caret / structured steps", () => {
   });
 
   it("confirmationFooterFromOutcomes is silent once all choices are known", () => {
+    expect(confirmationFooterFromOutcomes(["a"], {})).toBeNull();
     expect(
       confirmationFooterFromOutcomes(["a"], { a: true }),
     ).toBeNull();

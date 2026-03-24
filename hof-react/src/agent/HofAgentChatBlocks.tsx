@@ -1589,14 +1589,7 @@ export function LiveBlockView({
     if (isModel && !streamActive && lane === "thinking") {
       if (streamSegs) {
         if (!anySegText) {
-          return (
-            <div
-              className={`${AGENT_CHAT_COLUMN_CLASS} border-l-2 border-border pl-3 text-[11px] leading-snug text-tertiary`}
-            >
-              No visible plan text before tools (normal for many models). See
-              tool steps below.
-            </div>
-          );
+          return null;
         }
         return (
           <AssistantSegmentedBody
@@ -1613,14 +1606,7 @@ export function LiveBlockView({
       }
       const t = b.text.trim();
       if (!t) {
-        return (
-          <div
-            className={`${AGENT_CHAT_COLUMN_CLASS} border-l-2 border-border pl-3 text-[11px] leading-snug text-tertiary`}
-          >
-            No visible plan text before tools (normal for many models). See tool
-            steps below.
-          </div>
-        );
+        return null;
       }
       return (
         <ReasoningStreamPeek

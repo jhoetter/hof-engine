@@ -28,6 +28,8 @@ export type HofAgentConversationPanelProps = {
   activeId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
+  /** When true, omit the top “new” row (host renders it elsewhere, e.g. shell header). */
+  hideNewButton?: boolean;
   className?: string;
   newConversationLabel?: string;
   onTogglePin?: (id: string, nextPinned: boolean) => void;
@@ -49,6 +51,7 @@ export function HofAgentConversationPanel({
   activeId,
   onSelect,
   onNew,
+  hideNewButton = false,
   className = "",
   newConversationLabel = "New conversation",
   onTogglePin,
@@ -96,17 +99,21 @@ export function HofAgentConversationPanel({
     <div
       className={`flex h-full min-h-0 flex-col bg-background ${className}`.trim()}
     >
-      <div className="shrink-0 px-2.5 pt-2.5 pb-1">
-        <button
-          type="button"
-          className="w-full rounded-md border-0 bg-transparent px-2 py-2 text-left text-sm font-medium text-secondary transition-colors hover:bg-hover hover:text-foreground"
-          onClick={onNew}
-        >
-          {newConversationLabel}
-        </button>
-      </div>
+      {!hideNewButton ? (
+        <div className="shrink-0 px-2.5 pt-2.5 pb-1">
+          <button
+            type="button"
+            className="w-full rounded-md border-0 bg-transparent px-2 py-2 text-left text-sm font-medium text-secondary transition-colors hover:bg-hover hover:text-foreground"
+            onClick={onNew}
+          >
+            {newConversationLabel}
+          </button>
+        </div>
+      ) : null}
       <ul
-        className="min-h-0 flex-1 list-none space-y-0.5 overflow-y-auto overscroll-contain p-2"
+        className={`min-h-0 flex-1 list-none space-y-0.5 overflow-y-auto overscroll-contain p-2${
+          hideNewButton ? " pt-2.5" : ""
+        }`}
         aria-label="Conversations"
         onScroll={onListScroll}
       >

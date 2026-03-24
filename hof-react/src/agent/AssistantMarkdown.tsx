@@ -1,7 +1,7 @@
 "use client";
 
 import type { Components } from "react-markdown";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -9,6 +9,8 @@ import { CodeFence } from "./markdown/CodeFence";
 import { InlineCodeWithCopy } from "./markdown/InlineCodeWithCopy";
 import { HLJS_SCOPED_CSS } from "./markdown/hljsTokens";
 import { MarkdownSortableTable } from "./markdown/MarkdownSortableTable";
+import { prepareAssistantMarkdownSource } from "./markdown/prepareAssistantMarkdownSource";
+import { rehypeFencedCodeClass } from "./markdown/rehypeFencedCodeClass";
 
 /**
  * Streaming can yield ragged GFM tables or half-open fences; sortable table
@@ -76,7 +78,13 @@ const mdComponents: Components = {
     );
   },
   code: ({ className, children, node, ...props }) => {
-    const isBlock = Boolean(className && /language-[\w-]+/.test(className));
+    const cls = typeof className === "string" ? className : "";
+    // Fenced blocks may omit `language-*`; hljs may be absent (unknown lang, nohighlight).
+    // `hof-md-fenced` is added by rehypeFencedCodeClass on every `<pre><code>` tree.
+    const isBlock =
+      /\blanguage-[\w-]+\b/.test(cls) ||
+      /\bhljs\b/.test(cls) ||
+      /\bhof-md-fenced\b/.test(cls);
     if (isBlock) {
       return (
         <code className={className} {...props}>
@@ -138,11 +146,18 @@ export type AssistantMarkdownProps = {
 
 /**
  * Renders assistant Markdown with GFM, syntax highlighting (lowlight / hljs),
- * sortable pipe tables when structurally valid, and copy on code blocks.
+ * spurious pipe-only text neutralized so it does not become tables, sortable
+ * pipe tables when structurally valid, expand-on-hover for tables, and copy on
+ * code blocks.
  */
 const HLJS_STYLE_ID = "hof-agent-md-hljs-styles";
 
 export function AssistantMarkdown({ source }: AssistantMarkdownProps) {
+  const prepared = useMemo(
+    () => prepareAssistantMarkdownSource(source),
+    [source],
+  );
+
   useEffect(() => {
     if (typeof document === "undefined") {
       return;
@@ -160,10 +175,10 @@ export function AssistantMarkdown({ source }: AssistantMarkdownProps) {
     <div className="hof-agent-md min-w-0 break-words [&_*]:max-w-full">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
+        rehypePlugins={[rehypeHighlight, rehypeFencedCodeClass]}
         components={mdComponents}
       >
-        {source}
+        {prepared}
       </ReactMarkdown>
     </div>
   );

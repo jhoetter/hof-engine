@@ -35,16 +35,6 @@ from hof.config import get_config
 logger = logging.getLogger(__name__)
 
 
-def _log_preview(text: str, max_len: int = 140) -> str:
-    """Single-line snippet for server logs (not full message bodies)."""
-    if not text or not text.strip():
-        return "—"
-    one = " ".join(text.split())
-    if len(one) <= max_len:
-        return one
-    return f"{one[: max_len - 1]}…"
-
-
 def _collapse_agent_round_trace(parts: list[str], *, max_parts: int = 200) -> str:
     """Compact trace: Sr/Sc=segment_start, r=reasoning_delta, cN/tN=repeated assistant/tool deltas, f=finish."""
     seq = parts[:max_parts]
@@ -730,43 +720,6 @@ def _run_agent_openai_loop(
                 },
             )
 
-            logger.info(
-                "agent_chat model_round run_id=%s round=%d model=%s finish=%s "
-                "content_deltas=%d reasoning_deltas=%d reasoning_chars=%d "
-                "seg_start_reasoning=%d seg_start_content=%d assistant_chars=%d tool_slots=%d preview=%s",
-                run_id,
-                rounds,
-                model,
-                finish_reason,
-                n_content_delta,
-                n_reasoning_delta,
-                reasoning_chars,
-                n_segment_start_reasoning,
-                n_segment_start_content,
-                len(assistant_text),
-                len(parts),
-                _log_preview(assistant_text),
-            )
-            logger.debug(
-                "agent_chat model_round_trace run_id=%s round=%d trace=%s "
-                "(Sr/Sc=segment_start reasoning|content, r=reasoning_delta, cN=assistant_delta×N, t=tool, f=finish)",
-                run_id,
-                rounds,
-                trace_collapsed,
-            )
-            if (
-                n_segment_start_reasoning > 0
-                and n_reasoning_delta == 0
-                and reasoning_chars == 0
-            ):
-                logger.info(
-                    "agent_chat model_round_note run_id=%s round=%d "
-                    "note=segment_reasoning_opened_but_no_native_thinking_chunks "
-                    "(UI may show an empty reasoning lane; provider sent no thinking deltas this round)",
-                    run_id,
-                    rounds,
-                )
-
             if finish_reason == "tool_calls":
                 if not parts:
                     yield {
@@ -814,7 +767,7 @@ def _run_agent_openai_loop(
                     if note:
                         tc_ev["internal_rationale"] = note
                     yield tc_ev
-                    logger.info(
+                    logger.debug(
                         "agent_chat tool_call run_id=%s round=%d name=%s args_chars=%d mutation=%s",
                         run_id,
                         rounds,
@@ -877,7 +830,7 @@ def _run_agent_openai_loop(
                             },
                         )
                         pending_ids.append(pid)
-                        logger.info(
+                        logger.debug(
                             "agent_chat tool_pending_confirmation run_id=%s name=%s pending_id=%s",
                             run_id,
                             name,
@@ -890,11 +843,11 @@ def _run_agent_openai_loop(
                             allowlist,
                             max_tool_output_chars=max_tool_output_chars,
                         )
-                        logger.info(
-                            "agent_chat tool_done run_id=%s name=%s summary=%s",
+                        logger.debug(
+                            "agent_chat tool_done run_id=%s name=%s summary_chars=%d",
                             run_id,
                             name,
-                            _log_preview(summary, 200),
+                            len(summary or ""),
                         )
                         ok, status_code = tool_result_status_for_ui(out_json)
                         tr_out: dict[str, Any] = {
@@ -941,7 +894,7 @@ def _run_agent_openai_loop(
                         "run_id": run_id,
                         "pending_ids": pending_ids,
                     }
-                    logger.info(
+                    logger.debug(
                         "agent_chat awaiting_confirmation run_id=%s pending_ids=%d",
                         run_id,
                         len(pending_ids),
@@ -957,14 +910,6 @@ def _run_agent_openai_loop(
                 "tool_rounds_used": rounds,
                 "model": model,
             }
-            logger.info(
-                "agent_chat final run_id=%s model=%s rounds_used=%d reply_chars=%d preview=%s",
-                run_id,
-                model,
-                rounds,
-                len(text),
-                _log_preview(text, 180),
-            )
             _agent_stream_debug_append(
                 {
                     "kind": "final",
@@ -1073,7 +1018,7 @@ def _run_agent_chat_stream(
     oa_messages: list[dict[str, Any]] = [{"role": "system", "content": system_content}]
     _append_client_messages(oa_messages, messages, att_norm)
 
-    logger.info(
+    logger.debug(
         "agent_chat start run_id=%s backend=%s model=%s messages=%d tool_specs=%d",
         run_id,
         lm_backend,
@@ -1244,7 +1189,7 @@ def _run_agent_resume_stream(
 
     delete_agent_run(rid)
     yield {"type": "resume_start", "run_id": rid, "model": model}
-    logger.info(
+    logger.debug(
         "agent_chat resume_start run_id=%s model=%s start_round=%d mutations_resolved=%d",
         rid,
         model,

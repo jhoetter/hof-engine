@@ -18,7 +18,6 @@ import {
   type SetStateAction,
 } from "react";
 import { createPortal } from "react-dom";
-import { hofAgentConsoleDebug } from "./agentDebugConsole";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { FunctionResultDisplay } from "./FunctionResultDisplay";
 import {
@@ -1390,9 +1389,6 @@ function AssistantSegmentedBody({
   );
 }
 
-/** Dedupe D console lines when React re-renders the same assistant snapshot. */
-const _hofAgentDbgDSnapById = new Map<string, string>();
-
 export function LiveBlockView({
   b,
   afterToolResult = false,
@@ -1441,52 +1437,6 @@ export function LiveBlockView({
       streamActive &&
       !(isSummary && (anySegText || b.text.trim().length > 0));
     const persistedReasoningMs = b.reasoning_elapsed_ms;
-
-    // #region agent log
-    const dbgDData = {
-      id: b.id,
-      afterToolResult,
-      busy,
-      streamPhase: b.streamPhase,
-      lane,
-      streamTextRole: b.streamTextRole,
-      finishReason: b.finishReason,
-      streamSegsLen: streamSegs?.length ?? 0,
-      anySegText,
-      textLen: b.text.trim().length,
-      reasoning_elapsed_ms: b.reasoning_elapsed_ms,
-    };
-    const dbgDSnap = JSON.stringify(dbgDData);
-    if (_hofAgentDbgDSnapById.get(b.id) !== dbgDSnap) {
-      _hofAgentDbgDSnapById.set(b.id, dbgDSnap);
-      hofAgentConsoleDebug(
-        "D",
-        "HofAgentChatBlocks.tsx:LiveBlockView:assistant",
-        "assistant block render snapshot",
-        dbgDData,
-      );
-    }
-    if (typeof window !== "undefined" && typeof fetch !== "undefined") {
-      fetch(
-        "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Debug-Session-Id": "860625",
-          },
-          body: JSON.stringify({
-            sessionId: "860625",
-            hypothesisId: "D",
-            location: "HofAgentChatBlocks.tsx:LiveBlockView:assistant",
-            message: "assistant block render snapshot",
-            data: dbgDData,
-            timestamp: Date.now(),
-          }),
-        },
-      ).catch(() => {});
-    }
-    // #endregion
 
     if (afterToolResult || isSummary) {
       if (streamActive) {
@@ -1561,43 +1511,6 @@ export function LiveBlockView({
       }
       if (streamSegs) {
         if (!anySegText) {
-          // #region agent log
-          const dbgCData = {
-            id: b.id,
-            afterToolResult,
-            segCount: streamSegs.length,
-            segKinds: streamSegs.map((s) => s.kind),
-            segTextLens: streamSegs.map((s) => s.text.trim().length),
-          };
-          hofAgentConsoleDebug(
-            "C",
-            "HofAgentChatBlocks.tsx:LiveBlockView:afterToolOrSummary",
-            "return null — streamSegs present but anySegText false",
-            dbgCData,
-          );
-          if (typeof window !== "undefined" && typeof fetch !== "undefined") {
-            fetch(
-              "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "X-Debug-Session-Id": "860625",
-                },
-                body: JSON.stringify({
-                  sessionId: "860625",
-                  hypothesisId: "C",
-                  location:
-                    "HofAgentChatBlocks.tsx:LiveBlockView:afterToolOrSummary",
-                  message:
-                    "return null — streamSegs present but anySegText false",
-                  data: dbgCData,
-                  timestamp: Date.now(),
-                }),
-              },
-            ).catch(() => {});
-          }
-          // #endregion
           return null;
         }
         return (

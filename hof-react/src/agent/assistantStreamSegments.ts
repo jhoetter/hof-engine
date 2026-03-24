@@ -1,5 +1,3 @@
-import { hofAgentConsoleDebug } from "./agentDebugConsole";
-
 /** Reasoning vs visible reply chunks from NDJSON ``segment_start`` + deltas (llm-markdown 0.3.8+). */
 export type AssistantStreamSegment = {
   kind: "reasoning" | "content";
@@ -112,46 +110,10 @@ export function normalizeAssistantStreamSegments(
       return true;
     }
     // Keep empty reasoning before non-empty content: some streams only fill the content
-    // channel on finalize, but the UI still showed a thinking phase (debug H-E).
+    // channel while the UI still shows a distinct thinking phase.
     return arr
       .slice(i + 1)
       .some((t) => t.kind === "content" && t.text.trim().length > 0);
   });
-  // #region agent log
-  if (segments.length !== out.length) {
-    const data = {
-      inLen: segments.length,
-      outLen: out.length,
-      inKinds: segments.map((s) => s.kind),
-      outKinds: out.map((s) => s.kind),
-    };
-    hofAgentConsoleDebug(
-      "E",
-      "assistantStreamSegments.ts:normalizeAssistantStreamSegments",
-      "segment count changed after normalize",
-      data,
-    );
-    if (typeof fetch !== "undefined") {
-      fetch(
-        "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Debug-Session-Id": "860625",
-          },
-          body: JSON.stringify({
-            sessionId: "860625",
-            hypothesisId: "E",
-            location: "assistantStreamSegments.ts:normalizeAssistantStreamSegments",
-            message: "segment count changed after normalize",
-            data,
-            timestamp: Date.now(),
-          }),
-        },
-      ).catch(() => {});
-    }
-  }
-  // #endregion
   return out;
 }

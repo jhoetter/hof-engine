@@ -81,6 +81,8 @@ export type HofAgentChatContextValue = {
   fileInputRef: RefObject<HTMLInputElement | null>;
   onPickFiles: (files: FileList | null) => Promise<void>;
   send: () => void;
+  /** Abort the in-flight ``agent_chat`` or ``agent_resume_mutations`` stream. */
+  stop: () => void;
   conversationEmpty: boolean;
 };
 
@@ -716,6 +718,10 @@ export function HofAgentChatProvider({
     void runAgent(nextThread);
   }, [approvalBarrier, attachmentQueue, busy, input, runAgent, uploadBusy]);
 
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
+
   const conversationEmpty = thread.length === 0 && liveBlocks.length === 0;
 
   const value = useMemo<HofAgentChatContextValue>(
@@ -737,6 +743,7 @@ export function HofAgentChatProvider({
       fileInputRef,
       onPickFiles,
       send,
+      stop,
       conversationEmpty,
     }),
     [
@@ -753,9 +760,16 @@ export function HofAgentChatProvider({
       mutationOutcomeByPendingId,
       onPickFiles,
       send,
+      stop,
       conversationEmpty,
     ],
   );
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   return (
     <HofAgentChatContext.Provider value={value}>

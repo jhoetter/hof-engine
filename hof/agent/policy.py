@@ -49,7 +49,7 @@ DEFAULT_CONFIRMATION_SUMMARY_USER_MESSAGE = (
     "Reply with 1–3 short sentences in the same language as the user's chat messages "
     "(role user only), "
     "not the language of any attached document or filename. "
-    "Use future or conditional wording only (e.g. \"will\", \"after you approve\", \"proposed\"). "
+    'Use future or conditional wording only (e.g. "will", "after you approve", "proposed"). '
     "Never use past tense as if the mutation already succeeded (do not say you already registered, "
     "created, updated, saved, or completed the action).\n"
     "Briefly remind them what will happen after they approve or reject in that panel. "

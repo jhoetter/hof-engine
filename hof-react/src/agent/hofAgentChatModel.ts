@@ -672,6 +672,9 @@ export function applyStreamEvent(
   if (t === "final") {
     return clearAssistantPendingStreamFinalize(prev);
   }
+  if (t === "cancelled") {
+    return clearAssistantPendingStreamFinalize(prev);
+  }
   if (t === "resume_start" || t === "run_start") {
     return prev;
   }

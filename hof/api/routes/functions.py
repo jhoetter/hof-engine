@@ -75,7 +75,10 @@ async def call_function_stream(
                 line = json.dumps(ev, default=str, ensure_ascii=False) + "\n"
                 yield line.encode("utf-8")
         except Exception as exc:
-            err_line = json.dumps({"type": "error", "detail": str(exc)}, ensure_ascii=False) + "\n"
+            err_line = (
+                json.dumps({"type": "error", "detail": str(exc)}, ensure_ascii=False)
+                + "\n"
+            )
             yield err_line.encode("utf-8")
 
     return StreamingResponse(

@@ -22,7 +22,11 @@ def test_validate_minimal_round_trip() -> None:
 
 
 def test_validate_accepts_camel_case_alias() -> None:
-    raw = {"version": 1, "thread": [{"kind": "user", "id": "1", "content": "hi"}], "mutationOutcomes": {"p1": True}}
+    raw = {
+        "version": 1,
+        "thread": [{"kind": "user", "id": "1", "content": "hi"}],
+        "mutationOutcomes": {"p1": True},
+    }
     model = validate_conversation_state(raw)
     assert model.thread == raw["thread"]
     assert model.mutation_outcomes == {"p1": True}
@@ -30,7 +34,9 @@ def test_validate_accepts_camel_case_alias() -> None:
 
 def test_validate_rejects_bad_version() -> None:
     with pytest.raises(ValueError, match="unsupported conversation state version"):
-        validate_conversation_state({"version": 2, "thread": [], "mutationOutcomes": {}})
+        validate_conversation_state(
+            {"version": 2, "thread": [], "mutationOutcomes": {}}
+        )
 
 
 def test_enforce_max_bytes() -> None:

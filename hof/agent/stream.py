@@ -259,16 +259,22 @@ def _resolve_agent_reasoning_config(backend: str | None = None) -> ReasoningConf
                 "FALLBACK reasoning is not recommended for Anthropic; "
                 "using native mode with provider thinking instead (see AGENT_ANTHROPIC_THINKING)"
             )
-            return ReasoningConfig.native(anthropic_thinking=_resolve_anthropic_thinking_kw())
+            return ReasoningConfig.native(
+                anthropic_thinking=_resolve_anthropic_thinking_kw()
+            )
         return ReasoningConfig(mode=ReasoningMode.FALLBACK)
     if mode_src not in ("native", "", "on", "true", "1", "yes"):
-        msg = f"Unknown agent reasoning mode: {mode_src!r} (use native, off, or fallback)"
+        msg = (
+            f"Unknown agent reasoning mode: {mode_src!r} (use native, off, or fallback)"
+        )
         raise ValueError(msg)
     if backend_norm == "anthropic":
         if extras:
             msg = "AGENT_REASONING_OPENAI_EXTRAS is not used when AGENT_LLM_BACKEND=anthropic"
             raise ValueError(msg)
-        return ReasoningConfig.native(anthropic_thinking=_resolve_anthropic_thinking_kw())
+        return ReasoningConfig.native(
+            anthropic_thinking=_resolve_anthropic_thinking_kw()
+        )
     # OpenAI (default backend): "native" in config means "show thinking for every turn".
     # Chat Completions on gpt-4o-class models usually emit no reasoning_delta; llm-markdown
     # FALLBACK always streams a planning/thinking lane. Opt into true Chat Completions native
@@ -295,7 +301,9 @@ def _resolve_agent_max_completion_tokens() -> int:
         c = get_config()
         n = int(getattr(c, "agent_max_completion_tokens", 16_384))
         if n > 0:
-            return max(_AGENT_COMPLETION_TOKENS_FLOOR, min(n, _AGENT_COMPLETION_TOKENS_CAP))
+            return max(
+                _AGENT_COMPLETION_TOKENS_FLOOR, min(n, _AGENT_COMPLETION_TOKENS_CAP)
+            )
     except Exception:
         pass
     return 16_384
@@ -390,7 +398,9 @@ def _usage_to_dict(u: Any) -> dict[str, Any] | None:
     return out or None
 
 
-def collect_agent_chat_from_stream(events_iter: Iterator[dict[str, Any]]) -> dict[str, Any]:
+def collect_agent_chat_from_stream(
+    events_iter: Iterator[dict[str, Any]],
+) -> dict[str, Any]:
     """Fold stream events into the legacy JSON shape for non-streaming ``agent_chat`` callers."""
     max_model_text_chars = _agent_limits()[2]
 
@@ -408,11 +418,17 @@ def collect_agent_chat_from_stream(events_iter: Iterator[dict[str, Any]]) -> dic
             r = int(ev.get("round") or 0)
             ph = str(ev.get("phase") or "")
             if ph == "model":
-                legacy.append({"type": "thinking", "detail": f"Round {r}: calling model…"})
+                legacy.append(
+                    {"type": "thinking", "detail": f"Round {r}: calling model…"}
+                )
             elif ph == "tools":
-                legacy.append({"type": "thinking", "detail": f"Round {r}: executing tools…"})
+                legacy.append(
+                    {"type": "thinking", "detail": f"Round {r}: executing tools…"}
+                )
             elif ph == "summary":
-                legacy.append({"type": "thinking", "detail": f"Round {r}: confirmation reply…"})
+                legacy.append(
+                    {"type": "thinking", "detail": f"Round {r}: confirmation reply…"}
+                )
         elif t == "segment_start":
             continue
         elif t == "assistant_delta" or t == "reasoning_delta":
@@ -481,7 +497,9 @@ def collect_agent_chat_from_stream(events_iter: Iterator[dict[str, Any]]) -> dic
                 },
             )
         elif t == "resume_start":
-            legacy.append({"type": "thinking", "detail": "Continuing after confirmation…"})
+            legacy.append(
+                {"type": "thinking", "detail": "Continuing after confirmation…"}
+            )
         elif t == "final":
             reply = str(ev.get("reply") or "").strip()
             rounds = int(ev.get("tool_rounds_used") or rounds)
@@ -522,7 +540,11 @@ def _stream_confirmation_summary_for_ui(
     lm_backend: str,
     reasoning: ReasoningConfig,
 ) -> Iterator[dict[str, Any]]:
-    from llm_markdown.agent_stream import AgentContentDelta, AgentMessageFinish, AgentReasoningDelta
+    from llm_markdown.agent_stream import (
+        AgentContentDelta,
+        AgentMessageFinish,
+        AgentReasoningDelta,
+    )
 
     msgs = list(oa_messages) + [{"role": "user", "content": summary_user_message}]
     yield {"type": "phase", "round": rounds, "phase": "summary"}
@@ -566,7 +588,10 @@ def _stream_confirmation_summary_for_ui(
         )
         yield {"type": "assistant_delta", "text": fb}
         finish_reason = finish_reason or "stop"
-    done_ev: dict[str, Any] = {"type": "assistant_done", "finish_reason": finish_reason or "stop"}
+    done_ev: dict[str, Any] = {
+        "type": "assistant_done",
+        "finish_reason": finish_reason or "stop",
+    }
     if last_usage:
         done_ev["usage"] = last_usage
     yield done_ev
@@ -658,7 +683,10 @@ def _run_agent_openai_loop(
                     finish_reason = ev.finish_reason
                     last_usage = ev.usage
 
-            done_ev: dict[str, Any] = {"type": "assistant_done", "finish_reason": finish_reason}
+            done_ev: dict[str, Any] = {
+                "type": "assistant_done",
+                "finish_reason": finish_reason,
+            }
             if last_usage:
                 done_ev["usage"] = last_usage
             yield done_ev
@@ -725,7 +753,9 @@ def _run_agent_openai_loop(
                     name = tc["name"]
                     args = tc["arguments"] or "{}"
                     tid = tc["id"] or f"call_{idx}"
-                    cli = format_cli_line(name, args, max_cli_line_chars=max_cli_line_chars)
+                    cli = format_cli_line(
+                        name, args, max_cli_line_chars=max_cli_line_chars
+                    )
                     tc_ev: dict[str, Any] = {
                         "type": "tool_call",
                         "name": name,
@@ -766,7 +796,11 @@ def _run_agent_openai_loop(
                             },
                         )
                         placeholder = json.dumps(
-                            {"pending_confirmation": True, "pending_id": pid, "function": name},
+                            {
+                                "pending_confirmation": True,
+                                "pending_id": pid,
+                                "function": name,
+                            },
                         )
                         yield {
                             "type": "mutation_pending",
@@ -789,7 +823,11 @@ def _run_agent_openai_loop(
                             "tool_call_id": tid,
                         }
                         oa_messages.append(
-                            {"role": "tool", "tool_call_id": tid, "content": placeholder},
+                            {
+                                "role": "tool",
+                                "tool_call_id": tid,
+                                "content": placeholder,
+                            },
                         )
                         pending_ids.append(pid)
                         logger.info(
@@ -866,7 +904,12 @@ def _run_agent_openai_loop(
 
             text = assistant_text.strip()
             delete_agent_run(run_id)
-            yield {"type": "final", "reply": text, "tool_rounds_used": rounds, "model": model}
+            yield {
+                "type": "final",
+                "reply": text,
+                "tool_rounds_used": rounds,
+                "model": model,
+            }
             logger.info(
                 "agent_chat final run_id=%s model=%s rounds_used=%d reply_chars=%d preview=%s",
                 run_id,
@@ -907,7 +950,9 @@ def _run_agent_chat_stream(
     policy: AgentPolicy,
 ) -> Iterator[dict[str, Any]]:
     """Yield NDJSON-shaped dicts."""
-    max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = _agent_limits()
+    max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = (
+        _agent_limits()
+    )
 
     norm_fn = policy.normalize_attachments or default_normalize_attachments
     att_norm, att_err = norm_fn(attachments)
@@ -1025,7 +1070,10 @@ def _run_agent_resume_stream(
 
     run = load_agent_run(rid)
     if not run:
-        yield {"type": "error", "detail": "Unknown or expired run_id; start a new chat."}
+        yield {
+            "type": "error",
+            "detail": "Unknown or expired run_id; start a new chat.",
+        }
         return
 
     open_ids = [str(x) for x in (run.get("open_pending_ids") or []) if str(x).strip()]
@@ -1119,7 +1167,10 @@ def _run_agent_resume_stream(
             confirm = by_id[pid]
             p = load_pending(pid)
             if not p or str(p.get("run_id") or "") != rid:
-                yield {"type": "error", "detail": f"Invalid or expired pending_id: {pid}"}
+                yield {
+                    "type": "error",
+                    "detail": f"Invalid or expired pending_id: {pid}",
+                }
                 return
             tid = str(p["tool_call_id"])
             fname = str(p["function_name"])
@@ -1182,7 +1233,9 @@ def iter_agent_chat_stream(
     yield from _run_agent_chat_stream(messages, attachments, policy=policy)
 
 
-def iter_agent_resume_stream(run_id: str, resolutions: list) -> Iterator[dict[str, Any]]:
+def iter_agent_resume_stream(
+    run_id: str, resolutions: list
+) -> Iterator[dict[str, Any]]:
     """Stream continued agent trace after mutation confirmation."""
     policy = get_agent_policy()
     yield from _run_agent_resume_stream(run_id, resolutions, policy=policy)

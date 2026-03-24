@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Paperclip, Plus, X } from "lucide-react";
+import { Loader2, Paperclip, Plus, Sparkles, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -9,6 +9,13 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import { AssistantMarkdown } from "./AssistantMarkdown";
+import { fetchAgentTools, type AgentToolsResponse } from "./fetchAgentTools";
+import {
+  isGuidanceRedundantInDescription,
+  prepareSkillMarkdownField,
+} from "./prepareSkillFieldForMarkdown";
+import { humanizeToolName } from "./hofAgentChatModel";
 import { useHofAgentChat } from "./hofAgentChatContext";
 
 export type HofAgentComposerProps = {
@@ -32,6 +39,56 @@ const sendBtnClass =
 
 const MENU_ITEM_CLASS =
   "flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-hover";
+
+/**
+ * Do not put `flex` / `block` on `<dialog>`: Tailwind would override UA `display:none` when closed,
+ * leaving the shell visible (empty, mispositioned, Close ineffective until `[open]` matches).
+ */
+const SKILLS_DIALOG_SHELL_CLASS =
+  "m-0 max-h-none w-auto max-w-none border-0 bg-transparent p-0 shadow-none backdrop:bg-black/40";
+
+const SKILLS_DIALOG_PANEL_CLASS =
+  "fixed left-1/2 top-1/2 z-[200] flex w-[min(100vw-1.5rem,56rem)] max-h-[min(100vh-1.5rem,52rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-background font-sans text-foreground shadow-lg";
+
+function SkillSection({ label, source }: { label: string; source: string }) {
+  const prepared = prepareSkillMarkdownField(source);
+  if (!prepared) {
+    return null;
+  }
+  return (
+    <div>
+      <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-tertiary">
+        {label}
+      </h4>
+      <div className="text-[13px] leading-relaxed text-secondary [&_.hof-agent-md]:text-[13px] [&_.hof-agent-md]:leading-relaxed">
+        <AssistantMarkdown source={prepared} />
+      </div>
+    </div>
+  );
+}
+
+function toolParameterSummary(parameters: unknown): string {
+  if (!parameters || typeof parameters !== "object") {
+    return "";
+  }
+  const p = parameters as {
+    properties?: Record<string, unknown>;
+    required?: unknown;
+  };
+  const keys = Object.keys(p.properties ?? {});
+  if (keys.length === 0) {
+    return "No parameters.";
+  }
+  const reqRaw = p.required;
+  const required = new Set(
+    Array.isArray(reqRaw)
+      ? reqRaw.filter((x): x is string => typeof x === "string")
+      : [],
+  );
+  return keys
+    .map((k) => `${k}${required.has(k) ? " (required)" : " (optional)"}`)
+    .join(", ");
+}
 
 export function HofAgentComposer({
   className = "w-full",
@@ -59,6 +116,10 @@ export function HofAgentComposer({
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const attachMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const skillsDialogRef = useRef<HTMLDialogElement>(null);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsErr, setSkillsErr] = useState<string | null>(null);
+  const [skillsData, setSkillsData] = useState<AgentToolsResponse | null>(null);
 
   const syncTextareaHeight = useCallback(() => {
     const el = textareaRef.current;
@@ -103,6 +164,44 @@ export function HofAgentComposer({
     fileInputRef.current?.click();
     setAttachMenuOpen(false);
   };
+
+  const openSkillsDialog = () => {
+    setAttachMenuOpen(false);
+    setSkillsErr(null);
+    setSkillsData(null);
+    setSkillsLoading(true);
+    skillsDialogRef.current?.showModal();
+    void fetchAgentTools()
+      .then((d) => {
+        setSkillsData(d);
+      })
+      .catch((e: unknown) => {
+        setSkillsErr(e instanceof Error ? e.message : "Request failed");
+      })
+      .finally(() => {
+        setSkillsLoading(false);
+      });
+  };
+
+  const closeSkillsDialog = useCallback(() => {
+    skillsDialogRef.current?.close();
+  }, []);
+
+  useEffect(() => {
+    const el = skillsDialogRef.current;
+    if (!el) {
+      return;
+    }
+    const onDialogClose = () => {
+      setSkillsLoading(false);
+      setSkillsErr(null);
+      setSkillsData(null);
+    };
+    el.addEventListener("close", onDialogClose);
+    return () => {
+      el.removeEventListener("close", onDialogClose);
+    };
+  }, []);
 
   const disabled = busy || uploadBusy || Boolean(approvalBarrier);
 
@@ -149,7 +248,7 @@ export function HofAgentComposer({
             <div
               className="absolute bottom-full left-0 z-50 mb-1 min-w-[13rem] rounded-lg border border-border bg-background py-1 font-sans shadow-lg"
               role="menu"
-              aria-label="Attach"
+              aria-label="Composer actions"
             >
               <button
                 type="button"
@@ -164,6 +263,20 @@ export function HofAgentComposer({
                   aria-hidden
                 />
                 <span>Attach PDF</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={MENU_ITEM_CLASS}
+                disabled={disabled}
+                onClick={openSkillsDialog}
+              >
+                <Sparkles
+                  className="size-4 shrink-0 text-secondary"
+                  strokeWidth={2}
+                  aria-hidden
+                />
+                <span>Show skills</span>
               </button>
             </div>
           ) : null}
@@ -228,6 +341,123 @@ export function HofAgentComposer({
         </p>
       ) : null}
       <div className={inputShellClassName}>{composerBody}</div>
+      <dialog
+        ref={skillsDialogRef}
+        className={SKILLS_DIALOG_SHELL_CLASS}
+        onCancel={(e) => {
+          e.preventDefault();
+          closeSkillsDialog();
+        }}
+      >
+        <div
+          className={SKILLS_DIALOG_PANEL_CLASS}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3">
+            <span className="text-base font-medium text-foreground">Agent skills</span>
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-xs text-secondary hover:bg-hover hover:text-foreground"
+              onClick={closeSkillsDialog}
+            >
+              Close
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4 text-sm">
+          {skillsLoading ? (
+            <div className="flex items-center gap-2 text-secondary">
+              <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+              <span>Loading…</span>
+            </div>
+          ) : null}
+          {!skillsLoading && skillsErr ? (
+            <p className="text-[13px] text-[var(--color-destructive)]">{skillsErr}</p>
+          ) : null}
+          {!skillsLoading && !skillsErr && skillsData && !skillsData.configured ? (
+            <p className="text-secondary">
+              Agent is not configured on this server.
+            </p>
+          ) : null}
+          {!skillsLoading &&
+          !skillsErr &&
+          skillsData &&
+          skillsData.configured &&
+          skillsData.tools.length === 0 ? (
+            <p className="text-secondary">No tools in the agent allowlist.</p>
+          ) : null}
+          {!skillsLoading && !skillsErr && skillsData && skillsData.tools.length > 0 ? (
+            <ul className="flex flex-col gap-4">
+              {skillsData.tools.map((t) => {
+                const descPrepared = prepareSkillMarkdownField(t.description);
+                const whenPrepared = prepareSkillMarkdownField(t.when_to_use);
+                const whenNotPrepared = prepareSkillMarkdownField(t.when_not_to_use);
+                const whenSource = isGuidanceRedundantInDescription(
+                  descPrepared,
+                  whenPrepared,
+                )
+                  ? ""
+                  : t.when_to_use;
+                const whenNotSource = isGuidanceRedundantInDescription(
+                  descPrepared,
+                  whenNotPrepared,
+                )
+                  ? ""
+                  : t.when_not_to_use;
+                return (
+                <li
+                  key={t.name}
+                  className="rounded-lg border border-border bg-surface/60 px-4 py-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2 gap-y-1">
+                    <span className="text-[15px] font-semibold text-foreground">
+                      {humanizeToolName(t.name)}
+                    </span>
+                    <span className="font-mono text-[11px] text-tertiary">{t.name}</span>
+                    {t.mutation ? (
+                      <span className="rounded bg-hover px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-secondary">
+                        Mutation
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 space-y-4 border-t border-border/70 pt-3">
+                    <SkillSection label="Summary" source={t.tool_summary} />
+                    <SkillSection label="Description" source={t.description} />
+                    <SkillSection label="When to use" source={whenSource} />
+                    <SkillSection label="When not to use" source={whenNotSource} />
+                    {t.related_tools.length > 0 ? (
+                      <div>
+                        <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-tertiary">
+                          Typical next steps
+                        </h4>
+                        <div className="flex flex-wrap gap-1.5">
+                          {t.related_tools.map((r) => (
+                            <span
+                              key={r}
+                              className="rounded-md border border-border bg-background px-2 py-0.5 font-mono text-[11px] text-foreground"
+                            >
+                              {r}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    <div>
+                      <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-tertiary">
+                        Parameters
+                      </h4>
+                      <p className="text-[12px] leading-relaxed text-secondary">
+                        {toolParameterSummary(t.parameters)}
+                      </p>
+                    </div>
+                  </div>
+                </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          </div>
+        </div>
+      </dialog>
       {!conversationEmpty ? (
         <p className={disclaimerClassName}>
           AI can make mistakes. Please review the output carefully.

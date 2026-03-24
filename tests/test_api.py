@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from hof.agent.policy import AgentPolicy
 from hof.api.auth import verify_auth
 from hof.core.registry import registry
 from hof.flows.flow import Flow
@@ -23,6 +24,7 @@ def _make_test_app() -> FastAPI:
     app = FastAPI()
 
     from hof.api.routes.admin import router as admin_router
+    from hof.api.routes.agent import router as agent_router
     from hof.api.routes.flows import router as flows_router
     from hof.api.routes.functions import router as functions_router
     from hof.api.routes.tables import router as tables_router
@@ -31,6 +33,7 @@ def _make_test_app() -> FastAPI:
     app.include_router(functions_router, prefix="/api/functions", tags=["functions"])
     app.include_router(flows_router, prefix="/api/flows", tags=["flows"])
     app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
+    app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
 
     @app.get("/api/health")
     async def health():
@@ -226,6 +229,58 @@ class TestFlowsRoutes:
         assert response.status_code == 200
         data = response.json()
         assert "error" in data
+
+
+# ---------------------------------------------------------------------------
+# Agent routes
+# ---------------------------------------------------------------------------
+
+
+class TestAgentRoutes:
+    def test_agent_tools_not_configured(self, client):
+        with patch("hof.api.routes.agent.try_get_agent_policy", return_value=None):
+            response = client.get("/api/agent/tools")
+        assert response.status_code == 200
+        data = response.json()
+        assert data == {"configured": False, "tools": []}
+
+    def test_agent_tools_configured(self, client):
+        @function
+        def agent_read_tool(x: int) -> dict:
+            """Read-side tool."""
+            return {}
+
+        @function
+        def agent_mut_tool() -> dict:
+            """Mutation tool."""
+            return {}
+
+        policy = AgentPolicy(
+            allowlist_read=frozenset({"agent_read_tool"}),
+            allowlist_mutation=frozenset({"agent_mut_tool"}),
+            system_prompt_intro="test ",
+        )
+        with patch("hof.api.routes.agent.try_get_agent_policy", return_value=policy):
+            response = client.get("/api/agent/tools")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["configured"] is True
+        tools = data["tools"]
+        names = {t["name"] for t in tools}
+        assert names == {"agent_mut_tool", "agent_read_tool"}
+        by_name = {t["name"]: t for t in tools}
+        assert by_name["agent_read_tool"]["mutation"] is False
+        assert by_name["agent_mut_tool"]["mutation"] is True
+        read = by_name["agent_read_tool"]
+        assert read["description"] == "Read-side tool."
+        assert "tool_summary" in read
+        assert "when_to_use" in read
+        assert "when_not_to_use" in read
+        assert "related_tools" in read
+        assert read["related_tools"] == []
+        assert read["parameters"]["type"] == "object"
+        props = read["parameters"].get("properties") or {}
+        assert "x" in props
 
 
 # ---------------------------------------------------------------------------

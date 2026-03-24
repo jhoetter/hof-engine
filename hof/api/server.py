@@ -76,6 +76,7 @@ def create_app() -> FastAPI:
 
     from hof.api.auth import setup_auth
     from hof.api.routes.admin import router as admin_router
+    from hof.api.routes.agent import router as agent_router
     from hof.api.routes.flows import router as flows_router
     from hof.api.routes.functions import router as functions_router
     from hof.api.routes.sse import router as sse_router
@@ -89,6 +90,7 @@ def create_app() -> FastAPI:
     app.include_router(functions_router, prefix="/api/functions", tags=["functions"])
     app.include_router(flows_router, prefix="/api/flows", tags=["flows"])
     app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
+    app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
     app.include_router(sse_router, tags=["sse"])
     app.include_router(ws_router, tags=["realtime"])
     app.include_router(docs_router, prefix="/api/docs", tags=["docs"])

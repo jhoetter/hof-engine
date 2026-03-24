@@ -8,6 +8,7 @@ from hof.agent.tooling import (
     compose_agent_tool_description,
     format_tool_result_for_model,
     openai_tool_specs,
+    structured_agent_tool_for_ui,
     tool_result_status_for_ui,
 )
 from hof.core.registry import registry
@@ -99,6 +100,36 @@ class TestComposeAgentToolDescription:
         assert meta is not None
         text = compose_agent_tool_description("long_doc_fn", meta)
         assert len(text) <= AGENT_TOOL_DESCRIPTION_MAX_CHARS
+
+
+class TestStructuredAgentToolForUi:
+    def test_separate_fields_match_policy_merge(self):
+        @function
+        def ui_list_fn() -> dict:
+            """List rows."""
+            return {}
+
+        pol = AgentPolicy(
+            allowlist_read=frozenset({"ui_list_fn"}),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="x",
+            tool_when_to_use={"ui_list_fn": "Use before updates."},
+            tool_related_tools={"ui_list_fn": ["ledger_get", "ledger_update"]},
+        )
+        meta = registry.get_function("ui_list_fn")
+        assert meta is not None
+        row = structured_agent_tool_for_ui(
+            "ui_list_fn",
+            meta,
+            pol,
+            mutation=False,
+            parameters={"type": "object", "properties": {}},
+        )
+        assert row["name"] == "ui_list_fn"
+        assert row["mutation"] is False
+        assert row["description"] == "List rows."
+        assert row["when_to_use"] == "Use before updates."
+        assert row["related_tools"] == ["ledger_get", "ledger_update"]
 
 
 def test_format_tool_result_for_model_marks_complete() -> None:

@@ -21,3 +21,8 @@
 .hof-agent *::after {
   box-sizing: border-box;
 }
+
+/* Tailwind `flex`/`block` on `<dialog>` overrides closed `display:none`; keep closed dialogs hidden. */
+.hof-agent dialog:not([open]) {
+  display: none !important;
+}

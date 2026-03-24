@@ -9,6 +9,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from hof.agent.policy import AgentPolicy
 from hof.core.registry import registry
 from hof.db.schemas import build_function_input_schema
 from hof.functions import FunctionMetadata
@@ -88,6 +89,34 @@ def compose_agent_tool_description(function_name: str, meta: FunctionMetadata) -
     if len(text) > AGENT_TOOL_DESCRIPTION_MAX_CHARS:
         text = text[: AGENT_TOOL_DESCRIPTION_MAX_CHARS - 1] + "…"
     return text
+
+
+def structured_agent_tool_for_ui(
+    function_name: str,
+    meta: FunctionMetadata,
+    policy: AgentPolicy | None,
+    *,
+    mutation: bool,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    """Structured fields for agent skills UI (policy merge matches composed tool description)."""
+    when = (meta.when_to_use or "").strip()
+    if not when and policy is not None:
+        when = (policy.tool_when_to_use.get(function_name) or "").strip()
+    when_not = (meta.when_not_to_use or "").strip()
+    related = list(meta.related_tools) if meta.related_tools else []
+    if not related and policy is not None:
+        related = list(policy.tool_related_tools.get(function_name, []))
+    return {
+        "name": function_name,
+        "mutation": mutation,
+        "tool_summary": (meta.tool_summary or "").strip(),
+        "description": (meta.description or "").strip(),
+        "when_to_use": when,
+        "when_not_to_use": when_not,
+        "related_tools": related,
+        "parameters": parameters,
+    }
 
 
 def format_function_describe_from_static_meta(data: dict[str, Any]) -> str:

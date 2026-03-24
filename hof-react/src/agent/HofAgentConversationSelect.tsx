@@ -5,9 +5,13 @@ import { Loader2, Trash2 } from "lucide-react";
 export type HofAgentConversationOption = {
   id: string;
   title: string | null;
+  updated_at?: string | null;
+  /** Pinned conversations sort first within a time bucket. */
+  pinned?: boolean;
 };
 
-export type HofAgentConversationSelectProps = {
+/** Shared by {@link HofAgentConversationSelect} and {@link HofAgentConversationPanel} — host owns data + persistence. */
+export type HofAgentConversationPickerCoreProps = {
   conversations: HofAgentConversationOption[];
   activeId: string | null;
   onSelect: (id: string) => void;
@@ -15,6 +19,9 @@ export type HofAgentConversationSelectProps = {
   /** When set, shows a delete control for the active conversation (host calls persistence). */
   onDelete?: () => void;
   deleteBusy?: boolean;
+};
+
+export type HofAgentConversationSelectProps = HofAgentConversationPickerCoreProps & {
   /** Wider label + `text-sm` (full page) vs compact floating panel. */
   variant?: "default" | "compact";
   className?: string;
@@ -60,7 +67,7 @@ export function HofAgentConversationSelect({
             <option value="">New…</option>
             {conversations.map((c) => (
               <option key={c.id} value={c.id}>
-                {(c.title?.trim() || "Untitled").slice(0, 120)}
+                {(c.title?.trim() || "Untitled").slice(0, 56)}
               </option>
             ))}
           </select>
@@ -75,7 +82,7 @@ export function HofAgentConversationSelect({
           <option value="">New…</option>
           {conversations.map((c) => (
             <option key={c.id} value={c.id}>
-              {(c.title?.trim() || "Untitled").slice(0, 80)}
+              {(c.title?.trim() || "Untitled").slice(0, 56)}
             </option>
           ))}
         </select>

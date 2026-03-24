@@ -302,7 +302,6 @@ export function ToolGroupCard({
   approvalDecisions,
   setApprovalDecisions,
   busy,
-  showBusyFooter,
   anchorId,
   mutationOutcome,
 }: {
@@ -320,7 +319,6 @@ export function ToolGroupCard({
     SetStateAction<Record<string, boolean | null>>
   >;
   busy: boolean;
-  showBusyFooter: boolean;
   anchorId?: string;
   /** `true` approved, `false` rejected, `undefined` unknown / still pending */
   mutationOutcome?: boolean;
@@ -428,19 +426,6 @@ export function ToolGroupCard({
           ) : null}
         </div>
       </details>
-      {mutation &&
-      showApproval &&
-      approvalItemsForMutation.length > 0 &&
-      busy &&
-      showBusyFooter ? (
-        <p className="flex items-center gap-2 text-[11px] text-secondary">
-          <span
-            className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
-            aria-hidden
-          />
-          Continuing…
-        </p>
-      ) : null}
     </div>
   );
 }
@@ -450,7 +435,6 @@ export function InlineApprovalControls({
   approvalDecisions,
   setApprovalDecisions,
   busy,
-  showBusyFooter = true,
   omitItemMeta = false,
   embedCompact = false,
 }: {
@@ -460,7 +444,6 @@ export function InlineApprovalControls({
     SetStateAction<Record<string, boolean | null>>
   >;
   busy: boolean;
-  showBusyFooter?: boolean;
   omitItemMeta?: boolean;
   embedCompact?: boolean;
 }) {
@@ -538,17 +521,6 @@ export function InlineApprovalControls({
           </div>
         );
       })}
-      {busy && showBusyFooter ? (
-        <p
-          className={`flex items-center gap-2 text-[11px] text-secondary ${embedCompact ? "pt-1" : ""}`}
-        >
-          <span
-            className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
-            aria-hidden
-          />
-          Continuing…
-        </p>
-      ) : null}
     </div>
   );
 }
@@ -591,7 +563,6 @@ export function RunBlocksList({
       : null;
 
   let firstPendingToolKey: string | null = null;
-  let lastPendingToolKey: string | null = null;
   if (activeBarrierForRun) {
     for (const seg of segments) {
       if (seg.type !== "tool_group" || !seg.mutation) {
@@ -605,7 +576,6 @@ export function RunBlocksList({
         if (firstPendingToolKey === null) {
           firstPendingToolKey = seg.key;
         }
-        lastPendingToolKey = seg.key;
       }
     }
   }
@@ -632,7 +602,6 @@ export function RunBlocksList({
             showApproval && seg.key === firstPendingToolKey
               ? "hof-agent-pending-confirmation"
               : undefined;
-          const showBusyFooter = showApproval && seg.key === lastPendingToolKey;
           const mutationOutcome =
             pid !== "" ? mutationOutcomeByPendingId[pid] : undefined;
           const proposedLabel = showProposedActionsLabel(
@@ -657,7 +626,6 @@ export function RunBlocksList({
                 approvalDecisions={approvalDecisions}
                 setApprovalDecisions={setApprovalDecisions}
                 busy={busy}
-                showBusyFooter={showBusyFooter}
                 anchorId={anchorId}
                 mutationOutcome={mutationOutcome}
               />
@@ -676,17 +644,7 @@ export function RunBlocksList({
             mutationOutcomeByPendingId,
           );
           if (activeBarrier) {
-            return (
-              <div
-                key={b.id}
-                className="text-[11px] leading-snug text-tertiary"
-              >
-                <p>
-                  The assistant continues after you have chosen Approve or
-                  Reject for each pending action above.
-                </p>
-              </div>
-            );
+            return null;
           }
           if (!footerDone) {
             return null;

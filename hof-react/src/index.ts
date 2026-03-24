@@ -19,8 +19,14 @@ export {
 export {
   HofAgentConversationSelect,
   type HofAgentConversationOption,
+  type HofAgentConversationPickerCoreProps,
   type HofAgentConversationSelectProps,
 } from "./agent/HofAgentConversationSelect";
+export {
+  HofAgentConversationPanel,
+  type HofAgentConversationPanelProps,
+  type HofAgentConversationSection,
+} from "./agent/HofAgentConversationPanel";
 export type {
   AgentConversationDraftV1,
   AgentConversationStateV1,

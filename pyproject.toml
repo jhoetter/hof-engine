@@ -42,7 +42,7 @@ dependencies = [
     "websockets>=14.0",
     # Agent streaming (stream_agent_turn, AgentSegmentStart, ReasoningMode.fallback). Pin matches below;
     # run `uv lock` after each llm-markdown release (see llm-markdown docs/versioning.md).
-    "llm-markdown[openai,anthropic]>=0.3.17",
+    "llm-markdown[openai,anthropic]>=0.3.18",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
     "python-multipart>=0.0.9",

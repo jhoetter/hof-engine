@@ -55,6 +55,13 @@ export type HofAgentChatProps = {
   initialPersisted?: AgentConversationStateV1 | null;
   onPersist?: (state: AgentConversationStateV1) => void | Promise<void>;
   persistDebounceMs?: number;
+  /**
+   * Merged into the ``agent_chat`` POST body after ``messages`` / ``attachments``.
+   * Use for e.g. ``conversation_id`` + auth token so the server can run side effects per turn.
+   */
+  prepareAgentChatRequest?: () => Promise<Record<string, unknown>>;
+  /** Merged into the ``agent_resume_mutations`` POST body after ``run_id`` / ``resolutions``. */
+  prepareAgentResumeRequest?: () => Promise<Record<string, unknown>>;
 };
 
 export type HofAgentChatProviderProps = Omit<HofAgentChatProps, "className"> & {
@@ -106,6 +113,8 @@ export function HofAgentChatProvider({
   initialPersisted = null,
   onPersist,
   persistDebounceMs = 1200,
+  prepareAgentChatRequest,
+  prepareAgentResumeRequest,
   children,
 }: HofAgentChatProviderProps) {
   const [thread, setThread] = useState<ThreadItem[]>([]);
@@ -327,6 +336,10 @@ export function HofAgentChatProvider({
             content_type: a.content_type,
           }));
         }
+        if (prepareAgentChatRequest) {
+          const extra = await prepareAgentChatRequest();
+          Object.assign(body, extra);
+        }
         await streamHofFunction("agent_chat", body, {
           signal: abortRef.current.signal,
           onEvent: (ev) => {
@@ -478,7 +491,7 @@ export function HofAgentChatProvider({
         }
       }
     },
-    [flushLiveToThread, threadToApiMessages],
+    [flushLiveToThread, prepareAgentChatRequest, threadToApiMessages],
   );
 
   const runResume = useCallback(async () => {
@@ -510,10 +523,12 @@ export function HofAgentChatProvider({
     }));
     const rid = approvalBarrier.runId;
     try {
-      await streamHofFunction(
-        "agent_resume_mutations",
-        { run_id: rid, resolutions },
-        {
+      const resumeBody: Record<string, unknown> = { run_id: rid, resolutions };
+      if (prepareAgentResumeRequest) {
+        const extra = await prepareAgentResumeRequest();
+        Object.assign(resumeBody, extra);
+      }
+      await streamHofFunction("agent_resume_mutations", resumeBody, {
           signal: abortRef.current.signal,
           onEvent: (ev) => {
             if (myId !== reqIdRef.current) {
@@ -582,7 +597,12 @@ export function HofAgentChatProvider({
         setBusy(false);
       }
     }
-  }, [approvalBarrier, approvalDecisions, flushLiveToThread]);
+  }, [
+    approvalBarrier,
+    approvalDecisions,
+    flushLiveToThread,
+    prepareAgentResumeRequest,
+  ]);
 
   runResumeRef.current = runResume;
 

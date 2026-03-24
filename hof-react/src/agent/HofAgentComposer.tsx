@@ -1,6 +1,14 @@
 "use client";
 
-import { Loader2, Paperclip, Plus, Search, Sparkles, X } from "lucide-react";
+import {
+  Loader2,
+  Paperclip,
+  Plus,
+  Search,
+  Sparkles,
+  Terminal,
+  X,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -19,6 +27,7 @@ import {
 import {
   isGuidanceRedundantInDescription,
   prepareSkillMarkdownField,
+  stripGuidanceParagraphsForStructuredSections,
 } from "./prepareSkillFieldForMarkdown";
 import { humanizeToolName } from "./hofAgentChatModel";
 import { useHofAgentChat } from "./hofAgentChatContext";
@@ -50,11 +59,18 @@ const MENU_ITEM_CLASS =
  * leaving the shell visible (empty, mispositioned, Close ineffective until `[open]` matches).
  */
 const SKILLS_DIALOG_SHELL_CLASS =
-  "m-0 max-h-none w-auto max-w-none border-0 bg-transparent p-0 shadow-none backdrop:bg-black/40";
+  "m-0 max-h-none w-full max-w-none border-0 bg-transparent p-0 shadow-none backdrop:bg-black/40";
+
+/**
+ * Full-viewport hit layer inside the modal top layer (backdrop does not receive DOM clicks).
+ * Center the panel; mousedown on the scrim itself (not the panel) closes the dialog.
+ */
+const SKILLS_DIALOG_SCRIM_CLASS =
+  "fixed inset-0 z-0 box-border flex items-center justify-center bg-transparent p-3";
 
 /** Fixed height so nested `flex-1 min-h-0 overflow-y-auto` regions can scroll (max-h alone is not enough). */
 const SKILLS_DIALOG_PANEL_CLASS =
-  "fixed left-1/2 top-1/2 z-[200] flex h-[min(calc(100vh-1.5rem),52rem)] w-[min(100vw-1.5rem,56rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-background font-sans text-foreground shadow-lg";
+  "relative z-[1] flex h-[min(calc(100vh-1.5rem),52rem)] w-[min(100vw-1.5rem,56rem)] max-w-full flex-col overflow-hidden rounded-lg border border-border bg-background font-sans text-foreground shadow-lg";
 
 const REQUIRES_APPROVAL_LABEL = "Requires approval";
 
@@ -112,12 +128,11 @@ function skillSearchHaystack(t: AgentToolInfo): string {
   return parts.join("\n").toLowerCase();
 }
 
-function filterToolsBySearchQuery(tools: AgentToolInfo[], query: string): AgentToolInfo[] {
-  const words = query
-    .trim()
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean);
+function filterToolsBySearchQuery(
+  tools: AgentToolInfo[],
+  query: string,
+): AgentToolInfo[] {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) {
     return tools;
   }
@@ -155,12 +170,26 @@ function SkillDetailPanel({
   const descPrepared = prepareSkillMarkdownField(t.description);
   const whenPrepared = prepareSkillMarkdownField(t.when_to_use);
   const whenNotPrepared = prepareSkillMarkdownField(t.when_not_to_use);
-  const whenSource = isGuidanceRedundantInDescription(descPrepared, whenPrepared)
+  const whenSource = isGuidanceRedundantInDescription(
+    descPrepared,
+    whenPrepared,
+  )
     ? ""
     : t.when_to_use;
-  const whenNotSource = isGuidanceRedundantInDescription(descPrepared, whenNotPrepared)
+  const whenNotSource = isGuidanceRedundantInDescription(
+    descPrepared,
+    whenNotPrepared,
+  )
     ? ""
     : t.when_not_to_use;
+
+  const descForDisplay = stripGuidanceParagraphsForStructuredSections(
+    descPrepared,
+    {
+      showStructuredWhen: Boolean(whenSource.trim()),
+      showStructuredWhenNot: Boolean(whenNotSource.trim()),
+    },
+  );
 
   return (
     <>
@@ -186,7 +215,7 @@ function SkillDetailPanel({
       </div>
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
         <SkillSection label="Summary" source={t.tool_summary} />
-        <SkillSection label="Description" source={t.description} />
+        <SkillSection label="Description" source={descForDisplay} />
         <SkillSection label="When to use" source={whenSource} />
         <SkillSection label="When not to use" source={whenNotSource} />
         {t.related_tools.length > 0 ? (
@@ -250,7 +279,8 @@ export function HofAgentComposer({
   const [skillsErr, setSkillsErr] = useState<string | null>(null);
   const [skillsData, setSkillsData] = useState<AgentToolsResponse | null>(null);
   const [skillsSearchQuery, setSkillsSearchQuery] = useState("");
-  const [skillsSelectedTool, setSkillsSelectedTool] = useState<AgentToolInfo | null>(null);
+  const [skillsSelectedTool, setSkillsSelectedTool] =
+    useState<AgentToolInfo | null>(null);
   const [skillPanelEntered, setSkillPanelEntered] = useState(false);
 
   const syncTextareaHeight = useCallback(() => {
@@ -352,7 +382,9 @@ export function HofAgentComposer({
     if (!skillsSelectedTool) {
       return;
     }
-    const stillVisible = filteredSkills.some((x) => x.name === skillsSelectedTool.name);
+    const stillVisible = filteredSkills.some(
+      (x) => x.name === skillsSelectedTool.name,
+    );
     if (!stillVisible) {
       setSkillsSelectedTool(null);
       setSkillPanelEntered(false);
@@ -441,7 +473,7 @@ export function HofAgentComposer({
                 disabled={disabled}
                 onClick={openSkillsDialog}
               >
-                <Sparkles
+                <Terminal
                   className="size-4 shrink-0 text-secondary"
                   strokeWidth={2}
                   aria-hidden
@@ -525,12 +557,22 @@ export function HofAgentComposer({
         }}
       >
         <div
-          className={SKILLS_DIALOG_PANEL_CLASS}
-          onMouseDown={(e) => e.stopPropagation()}
+          className={SKILLS_DIALOG_SCRIM_CLASS}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              closeSkillsDialog();
+            }
+          }}
         >
+          <div
+            className={SKILLS_DIALOG_PANEL_CLASS}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3">
             <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              <span className="text-base font-medium text-foreground">Agent skills</span>
+              <span className="text-base font-medium text-foreground">
+                Agent skills
+              </span>
               {!skillsLoading &&
               !skillsErr &&
               skillsData?.configured &&
@@ -551,123 +593,136 @@ export function HofAgentComposer({
             </button>
           </div>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-sm">
-          {skillsLoading ? (
-            <div className="flex shrink-0 items-center gap-2 p-4 text-secondary">
-              <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
-              <span>Loading…</span>
-            </div>
-          ) : null}
-          {!skillsLoading && skillsErr ? (
-            <p className="shrink-0 px-4 py-3 text-[13px] text-[var(--color-destructive)]">
-              {skillsErr}
-            </p>
-          ) : null}
-          {!skillsLoading && !skillsErr && skillsData && !skillsData.configured ? (
-            <p className="shrink-0 px-4 py-3 text-secondary">
-              Agent is not configured on this server.
-            </p>
-          ) : null}
-          {!skillsLoading &&
-          !skillsErr &&
-          skillsData &&
-          skillsData.configured &&
-          skillsData.tools.length === 0 ? (
-            <p className="shrink-0 px-4 py-3 text-secondary">No tools in the agent allowlist.</p>
-          ) : null}
-          {!skillsLoading && !skillsErr && skillsData && skillsData.tools.length > 0 ? (
-            <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-              <div className="shrink-0 border-b border-border px-3 py-2">
-                <div className="relative">
-                  <Search
-                    className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-tertiary"
-                    strokeWidth={2}
-                    aria-hidden
-                  />
-                  <input
-                    type="search"
-                    value={skillsSearchQuery}
-                    onChange={(e) => setSkillsSearchQuery(e.target.value)}
-                    placeholder="Search skills…"
-                    aria-label="Search skills"
-                    className="w-full rounded-md border border-border bg-surface py-1.5 pl-8 pr-2 text-sm text-foreground placeholder:text-tertiary outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/35"
-                  />
-                </div>
+            {skillsLoading ? (
+              <div className="flex shrink-0 items-center gap-2 p-4 text-secondary">
+                <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+                <span>Loading…</span>
               </div>
+            ) : null}
+            {!skillsLoading && skillsErr ? (
+              <p className="shrink-0 px-4 py-3 text-[13px] text-[var(--color-destructive)]">
+                {skillsErr}
+              </p>
+            ) : null}
+            {!skillsLoading &&
+            !skillsErr &&
+            skillsData &&
+            !skillsData.configured ? (
+              <p className="shrink-0 px-4 py-3 text-secondary">
+                Agent is not configured on this server.
+              </p>
+            ) : null}
+            {!skillsLoading &&
+            !skillsErr &&
+            skillsData &&
+            skillsData.configured &&
+            skillsData.tools.length === 0 ? (
+              <p className="shrink-0 px-4 py-3 text-secondary">
+                No tools in the agent allowlist.
+              </p>
+            ) : null}
+            {!skillsLoading &&
+            !skillsErr &&
+            skillsData &&
+            skillsData.tools.length > 0 ? (
               <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-                {filteredSkills.length === 0 ? (
-                  <p className="p-4 text-[13px] text-secondary">No skills match your search.</p>
-                ) : (
-                  <ul
-                    className="min-h-0 flex-1 list-none space-y-0.5 overflow-y-auto overflow-x-hidden overscroll-contain p-2 [scrollbar-gutter:stable]"
-                    role="listbox"
-                  >
-                    {filteredSkills.map((t) => {
-                      const preview = skillListPreviewLine(t);
-                      const selected = skillsSelectedTool?.name === t.name;
-                      return (
-                        <li key={t.name}>
-                          <button
-                            type="button"
-                            role="option"
-                            aria-selected={selected}
-                            onClick={() => setSkillsSelectedTool(t)}
-                            className={`flex w-full flex-col gap-1 rounded-md border px-2.5 py-2 text-left transition-colors ${
-                              selected
-                                ? "border-[var(--color-accent)]/40 bg-[var(--color-accent)]/8"
-                                : "border-transparent hover:bg-hover"
-                            }`}
-                          >
-                            <div className="flex min-w-0 items-start justify-between gap-2">
-                              <span className="min-w-0 flex-1 text-sm font-medium leading-snug text-foreground">
-                                {humanizeToolName(t.name)}
-                              </span>
-                              {t.mutation ? (
-                                <span className="shrink-0 rounded bg-hover px-1.5 py-0.5 text-[10px] font-medium leading-tight text-secondary">
-                                  {REQUIRES_APPROVAL_LABEL}
+                <div className="shrink-0 border-b border-border px-3 py-2">
+                  <div className="relative">
+                    <Search
+                      className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-tertiary"
+                      strokeWidth={2}
+                      aria-hidden
+                    />
+                    <input
+                      type="search"
+                      value={skillsSearchQuery}
+                      onChange={(e) => setSkillsSearchQuery(e.target.value)}
+                      placeholder="Search skills…"
+                      aria-label="Search skills"
+                      className="w-full rounded-md border border-border bg-surface py-1.5 pl-8 pr-2 text-sm text-foreground placeholder:text-tertiary outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/35"
+                    />
+                  </div>
+                </div>
+                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+                  {filteredSkills.length === 0 ? (
+                    <p className="p-4 text-[13px] text-secondary">
+                      No skills match your search.
+                    </p>
+                  ) : (
+                    <ul
+                      className="min-h-0 flex-1 list-none space-y-0.5 overflow-y-auto overflow-x-hidden overscroll-contain p-2 [scrollbar-gutter:stable]"
+                      role="listbox"
+                    >
+                      {filteredSkills.map((t) => {
+                        const preview = skillListPreviewLine(t);
+                        const selected = skillsSelectedTool?.name === t.name;
+                        return (
+                          <li key={t.name}>
+                            <button
+                              type="button"
+                              role="option"
+                              aria-selected={selected}
+                              onClick={() => setSkillsSelectedTool(t)}
+                              className={`flex w-full flex-col gap-1 rounded-md border px-2.5 py-2 text-left transition-colors ${
+                                selected
+                                  ? "border-[var(--color-accent)]/40 bg-[var(--color-accent)]/8"
+                                  : "border-transparent hover:bg-hover"
+                              }`}
+                            >
+                              <div className="flex min-w-0 items-start justify-between gap-2">
+                                <span className="min-w-0 flex-1 text-sm font-medium leading-snug text-foreground">
+                                  {humanizeToolName(t.name)}
+                                </span>
+                                {t.mutation ? (
+                                  <span className="shrink-0 rounded bg-hover px-1.5 py-0.5 text-[10px] font-medium leading-tight text-secondary">
+                                    {REQUIRES_APPROVAL_LABEL}
+                                  </span>
+                                ) : null}
+                              </div>
+                              {preview ? (
+                                <span className="line-clamp-3 text-[11px] leading-snug text-secondary">
+                                  {preview}
                                 </span>
                               ) : null}
-                            </div>
-                            {preview ? (
-                              <span className="line-clamp-3 text-[11px] leading-snug text-secondary">
-                                {preview}
-                              </span>
-                            ) : null}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-                {skillsSelectedTool ? (
-                  <>
-                    <button
-                      type="button"
-                      aria-label="Close skill details"
-                      className="absolute inset-0 z-[1] bg-foreground/10 transition-opacity"
-                      onClick={() => {
-                        setSkillsSelectedTool(null);
-                        setSkillPanelEntered(false);
-                      }}
-                    />
-                    <div
-                      className={`absolute inset-y-0 right-0 z-[2] flex min-h-0 w-full max-w-[min(100%,22rem)] flex-col border-l border-border bg-background shadow-xl transition-transform duration-200 ease-out sm:max-w-[26rem] ${
-                        skillPanelEntered ? "translate-x-0" : "translate-x-full"
-                      }`}
-                      onMouseDown={(e) => e.stopPropagation()}
-                    >
-                      <SkillDetailPanel
-                        tool={skillsSelectedTool}
-                        onBack={() => {
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  {skillsSelectedTool ? (
+                    <>
+                      <button
+                        type="button"
+                        aria-label="Close skill details"
+                        className="absolute inset-0 z-[1] bg-foreground/10 transition-opacity"
+                        onClick={() => {
                           setSkillsSelectedTool(null);
                           setSkillPanelEntered(false);
                         }}
                       />
-                    </div>
-                  </>
-                ) : null}
+                      <div
+                        className={`absolute inset-y-0 right-0 z-[2] flex min-h-0 w-full max-w-[min(100%,22rem)] flex-col border-l border-border bg-background shadow-xl transition-transform duration-200 ease-out sm:max-w-[26rem] ${
+                          skillPanelEntered
+                            ? "translate-x-0"
+                            : "translate-x-full"
+                        }`}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <SkillDetailPanel
+                          tool={skillsSelectedTool}
+                          onBack={() => {
+                            setSkillsSelectedTool(null);
+                            setSkillPanelEntered(false);
+                          }}
+                        />
+                      </div>
+                    </>
+                  ) : null}
+                </div>
               </div>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
           </div>
         </div>
       </dialog>

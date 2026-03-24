@@ -46,6 +46,14 @@ function polishProseMarkdownSource(src: string): string {
     /\(mutation\s*[—–-]\s*confirms?\s+in\s+(?:the\s+)?(?:assistant\s+)?UI\)/gi,
     "(requires your approval in the app)",
   );
+  s = s.replace(
+    /\(?\s*mutation\s*\(\s*confirms?\s+in\s+UI\s*\)\s*\)?\.?/gi,
+    "(requires your approval in the app)",
+  );
+  s = s.replace(
+    /(\(requires your approval in the app\)\s*){2,}/g,
+    "(requires your approval in the app) ",
+  );
   s = s.replace(/\)\s+\./g, ").");
   s = s.replace(/#\s+\)/g, "#)");
 
@@ -77,7 +85,53 @@ function polishProseMarkdownSource(src: string): string {
     return `\`${t}\``;
   });
 
+  s = s.replace(/`\s*\/\s*`/g, "`, `");
+
   return s.trim();
+}
+
+function paragraphStartsWithGuidanceHeading(
+  firstLine: string,
+  kind: "when_to_use" | "when_not_to_use",
+): boolean {
+  const t = firstLine.trim();
+  const re =
+    kind === "when_to_use"
+      ? /^(#{1,6}\s+|\*{0,2}\s*)When\s+to\s+use(?:\s*\*{0,2})?\s*:?/i
+      : /^(#{1,6}\s+|\*{0,2}\s*)When\s+not\s+to\s+use(?:\s*\*{0,2})?\s*:?/i;
+  return re.test(t);
+}
+
+/**
+ * When the API already exposes ``when_to_use`` / ``when_not_to_use`` as separate fields, drop
+ * paragraphs in the description that repeat those headings so the UI does not show two blocks.
+ * Operates on an already {@link prepareSkillMarkdownField}-processed string.
+ */
+export function stripGuidanceParagraphsForStructuredSections(
+  preparedDescription: string,
+  options: { showStructuredWhen: boolean; showStructuredWhenNot: boolean },
+): string {
+  if (!options.showStructuredWhen && !options.showStructuredWhenNot) {
+    return preparedDescription;
+  }
+  const paras = preparedDescription.split(/\n{2,}/);
+  const kept = paras.filter((para) => {
+    const first = para.trim().split("\n")[0] ?? "";
+    if (!first.trim()) {
+      return true;
+    }
+    if (options.showStructuredWhen && paragraphStartsWithGuidanceHeading(first, "when_to_use")) {
+      return false;
+    }
+    if (
+      options.showStructuredWhenNot &&
+      paragraphStartsWithGuidanceHeading(first, "when_not_to_use")
+    ) {
+      return false;
+    }
+    return true;
+  });
+  return kept.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 export function prepareSkillMarkdownField(text: string): string {
@@ -95,7 +149,7 @@ function collapseWhitespaceLower(s: string): string {
 export function isGuidanceRedundantInDescription(
   contextPrepared: string,
   snippetPrepared: string,
-  minSnippetLength = 24,
+  minSnippetLength = 16,
 ): boolean {
   const snippet = snippetPrepared.trim();
   if (snippet.length < minSnippetLength) {

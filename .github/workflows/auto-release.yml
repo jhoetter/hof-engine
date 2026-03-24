@@ -59,38 +59,47 @@ jobs:
             echo "already_tagged=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Bump patch version
+      - name: Sync main, bump version, commit, push
         if: steps.check_tag.outputs.already_tagged == 'false'
         id: bump
         run: |
-          LATEST_TAG="$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
-          if [ -z "$LATEST_TAG" ]; then
-            NEW_VERSION="0.1.0"
-          else
-            VERSION="${LATEST_TAG#v}"
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-            NEW_PATCH=$((PATCH + 1))
-            NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
-          fi
-          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          echo "new_tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Releasing $NEW_VERSION"
-
-      - name: Update pyproject.toml version
-        if: steps.check_tag.outputs.already_tagged == 'false'
-        run: |
-          sed -i "s/^version = .*/version = \"${{ steps.bump.outputs.new_version }}\"/" pyproject.toml
-
-      - name: Commit version bump
-        if: steps.check_tag.outputs.already_tagged == 'false'
-        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml
-          git diff --cached --quiet && exit 0
-          git commit -m "chore: bump to ${{ steps.bump.outputs.new_version }} [skip ci]"
-          git pull --rebase origin main
-          git push origin HEAD:main
+
+          # Apply one release bump on top of latest origin/main (avoids commit-then-rebase
+          # conflicts when main moved and pyproject.toml changed).
+          release_commit_push() {
+            git fetch origin main --tags
+            git merge origin/main --no-edit
+            LATEST_TAG="$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
+            if [ -z "$LATEST_TAG" ]; then
+              NEW_VERSION="0.1.0"
+            else
+              VERSION="${LATEST_TAG#v}"
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+              NEW_PATCH=$((PATCH + 1))
+              NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+            fi
+            echo "Releasing ${NEW_VERSION}"
+            sed -i "s/^version = .*/version = \"${NEW_VERSION}\"/" pyproject.toml
+            git add pyproject.toml
+            if git diff --cached --quiet; then
+              echo "ERROR: expected pyproject.toml version change"
+              exit 1
+            fi
+            git commit -m "chore: bump to ${NEW_VERSION} [skip ci]"
+            git push origin HEAD:main
+            echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "new_tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          }
+
+          if ! release_commit_push; then
+            echo "First attempt failed (e.g. non-fast-forward); reset to origin/main and retry once"
+            git fetch origin main --tags
+            git reset --hard origin/main
+            release_commit_push || exit 1
+          fi
 
       - name: Tag and push
         if: steps.check_tag.outputs.already_tagged == 'false'

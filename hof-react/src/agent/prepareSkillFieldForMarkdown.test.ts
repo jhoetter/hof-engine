@@ -19,6 +19,34 @@ describe("cleandoc", () => {
   });
 });
 
+describe("prepareSkillMarkdownField polish", () => {
+  it("fixes space before period after closing paren (spreadsheet #)", () => {
+    const raw = "Pass either `id` or `display_seq` (spreadsheet # ) . Read-only.";
+    expect(prepareSkillMarkdownField(raw)).toBe(
+      "Pass either `id` or `display_seq` (spreadsheet #). Read-only.",
+    );
+  });
+
+  it("rewrites mutation confirms-in-UI phrasing for end users", () => {
+    expect(
+      prepareSkillMarkdownField(
+        "Bulk insert (mutation — confirms in assistant UI). Done.",
+      ),
+    ).toContain("requires your approval in the app");
+    expect(prepareSkillMarkdownField("Bulk insert (mutation — confirms in assistant UI).")).not.toMatch(
+      /\(mutation/i,
+    );
+  });
+
+  it("collapses extra blank lines and trims inline code", () => {
+    const raw = "One.\n\n\n\nTwo.  `  x  ` end.";
+    const out = prepareSkillMarkdownField(raw);
+    expect(out).toContain("`x`");
+    expect(out).toContain("One.\n\nTwo.");
+    expect(out).not.toMatch(/\n\n\n/);
+  });
+});
+
 describe("isGuidanceRedundantInDescription", () => {
   it("returns false for short snippets", () => {
     expect(

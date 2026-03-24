@@ -34,8 +34,54 @@ export function cleandoc(doc: string): string {
   return cleaned.join("\n").trim();
 }
 
+/**
+ * Light-touch cleanup for tool/policy prose before markdown: stray spaces before punctuation,
+ * sloppy parentheses, repeated blank lines, and a few recurring end-user phrasing patterns.
+ * Conservative: skips lines that look like indented code (4+ leading spaces) or ``` fences.
+ */
+function polishProseMarkdownSource(src: string): string {
+  let s = src.replace(/\r\n/g, "\n");
+
+  s = s.replace(
+    /\(mutation\s*[—–-]\s*confirms?\s+in\s+(?:the\s+)?(?:assistant\s+)?UI\)/gi,
+    "(requires your approval in the app)",
+  );
+  s = s.replace(/\)\s+\./g, ").");
+  s = s.replace(/#\s+\)/g, "#)");
+
+  s = s.replace(/\n{3,}/g, "\n\n");
+
+  const lines = s.split("\n");
+  s = lines
+    .map((line) => {
+      const trimmedEnd = line.replace(/[ \t]+$/g, "");
+      const t = trimmedEnd.trimStart();
+      if (t.startsWith("```")) {
+        return trimmedEnd;
+      }
+      if (/^ {4,}\S/.test(trimmedEnd)) {
+        return trimmedEnd;
+      }
+      let out = trimmedEnd.replace(/[ \t]{2,}/g, " ");
+      out = out.replace(/\s+([.,;!?])(?=\s|$)/g, "$1");
+      out = out.replace(/([\w)])\s+(:)(?=\s|$)/g, "$1$2");
+      return out;
+    })
+    .join("\n");
+
+  s = s.replace(/`([^`\n]*?)`/g, (full, inner: string) => {
+    const t = String(inner).trim();
+    if (!t) {
+      return full;
+    }
+    return `\`${t}\``;
+  });
+
+  return s.trim();
+}
+
 export function prepareSkillMarkdownField(text: string): string {
-  return cleandoc(text.trim());
+  return polishProseMarkdownSource(cleandoc(text.trim()));
 }
 
 function collapseWhitespaceLower(s: string): string {

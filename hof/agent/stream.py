@@ -45,6 +45,28 @@ def _log_preview(text: str, max_len: int = 140) -> str:
     return f"{one[: max_len - 1]}…"
 
 
+def _collapse_agent_round_trace(parts: list[str], *, max_parts: int = 200) -> str:
+    """Compact trace: Sr/Sc=segment_start, r=reasoning_delta, cN/tN=repeated assistant/tool deltas, f=finish."""
+    seq = parts[:max_parts]
+    out: list[str] = []
+    i = 0
+    while i < len(seq):
+        ch = seq[i]
+        if ch in ("c", "t"):
+            j = i + 1
+            while j < len(seq) and seq[j] == ch:
+                j += 1
+            n = j - i
+            out.append(ch if n == 1 else f"{ch}{n}")
+            i = j
+        else:
+            out.append(ch)
+            i += 1
+    if len(parts) > max_parts:
+        out.append("…")
+    return "".join(out)
+
+
 _STREAM_DEBUG_UNSET = object()
 _stream_debug_path: Any = _STREAM_DEBUG_UNSET
 _stream_debug_open_warned = False
@@ -632,6 +654,10 @@ def _run_agent_openai_loop(
             last_usage: dict[str, Any] | None = None
             n_content_delta = 0
             n_reasoning_delta = 0
+            n_segment_start_reasoning = 0
+            n_segment_start_content = 0
+            reasoning_chars = 0
+            trace_parts: list[str] = []
 
             for ev in stream_agent_turn(
                 provider,
@@ -645,13 +671,22 @@ def _run_agent_openai_loop(
                 **_anthropic_stream_turn_extras(lm_backend, reasoning),
             ):
                 if isinstance(ev, AgentSegmentStart):
+                    if ev.segment == "reasoning":
+                        n_segment_start_reasoning += 1
+                        trace_parts.append("Sr")
+                    elif ev.segment == "content":
+                        n_segment_start_content += 1
+                        trace_parts.append("Sc")
                     yield {"type": "segment_start", "segment": ev.segment}
                 elif isinstance(ev, AgentContentDelta):
                     assistant_text += ev.text
                     n_content_delta += 1
+                    trace_parts.append("c")
                     yield {"type": "assistant_delta", "text": ev.text}
                 elif isinstance(ev, AgentReasoningDelta):
                     n_reasoning_delta += 1
+                    reasoning_chars += len(ev.text or "")
+                    trace_parts.append("r")
                     yield {"type": "reasoning_delta", "text": ev.text}
                 elif isinstance(ev, AgentToolCallDelta):
                     idx = int(ev.index)
@@ -663,9 +698,11 @@ def _run_agent_openai_loop(
                         parts[idx]["name"] += ev.name
                     if ev.arguments:
                         parts[idx]["arguments"] += ev.arguments
+                    trace_parts.append("t")
                 elif isinstance(ev, AgentMessageFinish):
                     finish_reason = ev.finish_reason
                     last_usage = ev.usage
+                    trace_parts.append("f")
 
             done_ev: dict[str, Any] = {
                 "type": "assistant_done",
@@ -674,6 +711,7 @@ def _run_agent_openai_loop(
             if last_usage:
                 done_ev["usage"] = last_usage
             yield done_ev
+            trace_collapsed = _collapse_agent_round_trace(trace_parts)
             _agent_stream_debug_append(
                 {
                     "kind": "model_round",
@@ -683,24 +721,51 @@ def _run_agent_openai_loop(
                     "finish_reason": finish_reason,
                     "content_deltas": n_content_delta,
                     "reasoning_deltas": n_reasoning_delta,
+                    "reasoning_chars": reasoning_chars,
+                    "segment_start_reasoning": n_segment_start_reasoning,
+                    "segment_start_content": n_segment_start_content,
                     "assistant_text_chars": len(assistant_text),
                     "tool_slots": len(parts),
+                    "event_trace": trace_collapsed,
                 },
             )
 
             logger.info(
                 "agent_chat model_round run_id=%s round=%d model=%s finish=%s "
-                "content_deltas=%d reasoning_deltas=%d assistant_chars=%d tool_slots=%d preview=%s",
+                "content_deltas=%d reasoning_deltas=%d reasoning_chars=%d "
+                "seg_start_reasoning=%d seg_start_content=%d assistant_chars=%d tool_slots=%d preview=%s",
                 run_id,
                 rounds,
                 model,
                 finish_reason,
                 n_content_delta,
                 n_reasoning_delta,
+                reasoning_chars,
+                n_segment_start_reasoning,
+                n_segment_start_content,
                 len(assistant_text),
                 len(parts),
                 _log_preview(assistant_text),
             )
+            logger.debug(
+                "agent_chat model_round_trace run_id=%s round=%d trace=%s "
+                "(Sr/Sc=segment_start reasoning|content, r=reasoning_delta, cN=assistant_delta×N, t=tool, f=finish)",
+                run_id,
+                rounds,
+                trace_collapsed,
+            )
+            if (
+                n_segment_start_reasoning > 0
+                and n_reasoning_delta == 0
+                and reasoning_chars == 0
+            ):
+                logger.info(
+                    "agent_chat model_round_note run_id=%s round=%d "
+                    "note=segment_reasoning_opened_but_no_native_thinking_chunks "
+                    "(UI may show an empty reasoning lane; provider sent no thinking deltas this round)",
+                    run_id,
+                    rounds,
+                )
 
             if finish_reason == "tool_calls":
                 if not parts:

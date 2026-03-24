@@ -71,13 +71,15 @@ describe("normalizeAssistantStreamSegments", () => {
     ).toEqual([{ kind: "content", text: "done" }]);
   });
 
-  it("drops reasoning that is a near-duplicate of the following reply", () => {
+  it("keeps reasoning even when identical to the following reply (separate thinking vs answer rows)", () => {
     const dup = "The total for Q4 is 19,200 EUR before tax.";
     const out = normalizeAssistantStreamSegments([
       { kind: "reasoning", text: dup },
       { kind: "content", text: dup },
     ]);
-    expect(out).toEqual([{ kind: "content", text: dup }]);
+    expect(out.length).toBe(2);
+    expect(out[0]).toEqual({ kind: "reasoning", text: dup });
+    expect(out[1]).toEqual({ kind: "content", text: dup });
   });
 
   it("keeps substantive reasoning that is not a near-duplicate of the reply", () => {
@@ -91,5 +93,26 @@ describe("normalizeAssistantStreamSegments", () => {
     expect(out.length).toBe(2);
     expect(out[0]).toEqual({ kind: "reasoning", text: reasoning });
     expect(out[1]).toEqual({ kind: "content", text: content });
+  });
+
+  it("keeps empty reasoning before non-empty content (structural thinking row)", () => {
+    const content = "Here are your expenses.";
+    const out = normalizeAssistantStreamSegments([
+      { kind: "reasoning", text: "" },
+      { kind: "content", text: content },
+    ]);
+    expect(out).toEqual([
+      { kind: "reasoning", text: "" },
+      { kind: "content", text: content },
+    ]);
+  });
+
+  it("drops trailing empty reasoning with no following content", () => {
+    expect(
+      normalizeAssistantStreamSegments([
+        { kind: "content", text: "done" },
+        { kind: "reasoning", text: "" },
+      ]),
+    ).toEqual([{ kind: "content", text: "done" }]);
   });
 });

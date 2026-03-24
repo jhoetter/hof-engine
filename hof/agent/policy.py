@@ -11,6 +11,16 @@ NormalizeAttachmentsFn = Callable[[Any], tuple[list[dict[str, str]], str | None]
 # normalized attachment list -> system prompt fragment
 AttachmentsSystemNoteFn = Callable[[list[dict[str, str]]], str]
 
+# Framework agent tools (read-only); registered after user discovery in ``discover_all``.
+BUILTIN_AGENT_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "hof_builtin_server_time",
+        "hof_builtin_runtime_info",
+        "hof_builtin_http_get",
+        "hof_builtin_calculate",
+    },
+)
+
 DEFAULT_SYSTEM_PROMPT_BODY = """Use tools to fetch real data; do not invent row counts or amounts.
 Tool JSON is live output from executed tools on this backend (not training recall). Treat it as
 authoritative: state counts, amounts, and labels directly. Avoid meta-disclaimers such as "based on
@@ -77,7 +87,7 @@ class AgentPolicy:
     attachments_system_note: AttachmentsSystemNoteFn | None = None
 
     def effective_allowlist(self) -> frozenset[str]:
-        return frozenset(self.allowlist_read | self.allowlist_mutation)
+        return frozenset(self.allowlist_read | self.allowlist_mutation | BUILTIN_AGENT_TOOL_NAMES)
 
     def rationale_for(self, function_name: str) -> str | None:
         key = (function_name or "").strip()

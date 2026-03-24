@@ -6,7 +6,12 @@ from unittest.mock import patch
 
 from llm_markdown.agent_stream import AgentContentDelta, AgentMessageFinish
 
-from hof.agent.policy import AgentPolicy, configure_agent, get_agent_policy
+from hof.agent.policy import (
+    BUILTIN_AGENT_TOOL_NAMES,
+    AgentPolicy,
+    configure_agent,
+    get_agent_policy,
+)
 from hof.agent.stream import (
     _append_client_messages,
     collect_agent_chat_from_stream,
@@ -80,7 +85,7 @@ def test_configure_and_effective_allowlist() -> None:
         )
     )
     p = get_agent_policy()
-    assert p.effective_allowlist() == frozenset({"a", "b", "c"})
+    assert p.effective_allowlist() == frozenset({"a", "b", "c"} | BUILTIN_AGENT_TOOL_NAMES)
 
 
 def test_collect_agent_chat_from_stream_final() -> None:

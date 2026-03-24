@@ -3,6 +3,7 @@ import {
   applyStreamEvent,
   compactBlocksForHistory,
   confirmationFooterFromOutcomes,
+  finalizeLiveBlocksAfterUserStop,
 } from "./hofAgentChatModel";
 import type { LiveBlock } from "./hofAgentChatModel";
 
@@ -77,6 +78,34 @@ describe("applyStreamEvent streaming caret / structured steps", () => {
     }
   });
 
+  it("assistant_done stamps reasoning_elapsed_ms when episode start and clock are provided", () => {
+    let blocks: LiveBlock[] = [];
+    blocks = applyStreamEvent(
+      blocks,
+      { type: "phase", phase: "model", round: 0 },
+      ctx,
+    );
+    blocks = applyStreamEvent(
+      blocks,
+      { type: "reasoning_delta", text: "plan" },
+      ctx,
+    );
+    blocks = applyStreamEvent(
+      blocks,
+      { type: "assistant_done", finish_reason: "stop" },
+      {
+        assistantStreamPhase: "model",
+        thinkingEpisodeStartedAtMs: 1_000,
+        assistantDoneClockMs: 29_000,
+      },
+    );
+    const asst = blocks.find((b) => b.kind === "assistant");
+    expect(asst?.kind).toBe("assistant");
+    if (asst?.kind === "assistant") {
+      expect(asst.reasoning_elapsed_ms).toBe(28_000);
+    }
+  });
+
   it("confirmationFooterFromOutcomes is silent once all choices are known", () => {
     expect(
       confirmationFooterFromOutcomes(["a"], { a: true }),
@@ -135,5 +164,54 @@ describe("applyStreamEvent streaming caret / structured steps", () => {
     if (asst?.kind === "assistant") {
       expect(asst.pendingStreamFinalize).toBeUndefined();
     }
+  });
+
+  it("finalizeLiveBlocksAfterUserStop keeps partial text and stamps cancelled", () => {
+    const blocks: LiveBlock[] = [
+      {
+        kind: "assistant",
+        id: "a1",
+        text: "Partial reply…",
+        streaming: true,
+        streamPhase: "model",
+      },
+    ];
+    const out = finalizeLiveBlocksAfterUserStop(blocks);
+    expect(out.length).toBe(1);
+    const asst = out[0];
+    expect(asst?.kind).toBe("assistant");
+    if (asst?.kind === "assistant") {
+      expect(asst.streaming).toBe(false);
+      expect(asst.text).toBe("Partial reply…");
+      expect(asst.finishReason).toBe("cancelled");
+    }
+  });
+
+  it("finalizeLiveBlocksAfterUserStop keeps tool_call rows", () => {
+    const blocks: LiveBlock[] = [
+      {
+        kind: "tool_call",
+        id: "t1",
+        name: "list_expenses",
+        cli_line: "hof fn list_expenses",
+        arguments: "{}",
+      },
+    ];
+    const out = finalizeLiveBlocksAfterUserStop(blocks);
+    expect(out.some((b) => b.kind === "tool_call")).toBe(true);
+  });
+
+  it("finalizeLiveBlocksAfterUserStop drops empty cancelled shell", () => {
+    const blocks: LiveBlock[] = [
+      {
+        kind: "assistant",
+        id: "a1",
+        text: "",
+        streaming: true,
+        streamPhase: "model",
+      },
+    ];
+    const out = finalizeLiveBlocksAfterUserStop(blocks);
+    expect(out.filter((b) => b.kind === "assistant").length).toBe(0);
   });
 });

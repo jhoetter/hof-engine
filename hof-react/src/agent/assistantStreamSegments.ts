@@ -1,3 +1,5 @@
+import { hofAgentConsoleDebug } from "./agentDebugConsole";
+
 /** Reasoning vs visible reply chunks from NDJSON ``segment_start`` + deltas (llm-markdown 0.3.8+). */
 export type AssistantStreamSegment = {
   kind: "reasoning" | "content";
@@ -17,35 +19,6 @@ export function appendAssistantStreamSegmentChunk(
     segs.push({ kind, text: chunk });
   }
   return segs;
-}
-
-function normSegText(s: string): string {
-  return s.trim().replace(/\s+/g, " ");
-}
-
-/**
- * True when visible reply repeats the preceding reasoning (exact match or substantive
- * substring containment — no fuzzy word-overlap tuning).
- */
-function isNearDuplicateSegText(reasoning: string, content: string): boolean {
-  const r = normSegText(reasoning);
-  const c = normSegText(content);
-  if (!r || !c) {
-    return false;
-  }
-  if (r === c) {
-    return true;
-  }
-  const minLen = Math.min(r.length, c.length);
-  if (minLen >= 10) {
-    if (c.startsWith(r) || r.startsWith(c)) {
-      return true;
-    }
-    if (c.includes(r) || r.includes(c)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /**
@@ -68,6 +41,34 @@ export function mergeAdjacentReasoningSegments(
   return out;
 }
 
+/**
+ * ``Thinking`` timer, shimmer, and live popover: active only during the **reasoning** phase of
+ * the turn (before the content segment receives text). Once reply tokens arrive, the row stays
+ * mounted but switches to settled “Thought” + frozen duration — even if the assistant row is
+ * still ``streaming`` (long table, etc.).
+ *
+ * An empty trailing ``content`` segment from ``segment_start: content`` does not end the phase.
+ */
+export function reasoningPhaseTickingLive(
+  merged: AssistantStreamSegment[],
+  segIndex: number,
+  lastReasoningIndex: number,
+  wireStreaming: boolean,
+): boolean {
+  if (!wireStreaming || segIndex !== lastReasoningIndex) {
+    return false;
+  }
+  const seg = merged[segIndex];
+  if (seg?.kind !== "reasoning") {
+    return false;
+  }
+  const next = merged[segIndex + 1];
+  if (!next || next.kind !== "content") {
+    return true;
+  }
+  return !next.text.trim();
+}
+
 /** Merge consecutive reply segments so one model turn does not render as multiple bubbles. */
 export function mergeAdjacentContentSegments(
   segments: AssistantStreamSegment[],
@@ -85,7 +86,7 @@ export function mergeAdjacentContentSegments(
   return out;
 }
 
-/** Drop trailing empty ``content`` shells and hide reasoning that duplicates the following reply. */
+/** Drop trailing empty ``content`` shells. Reasoning is kept even when similar to the reply so multi-round tool flows still show each thinking phase. */
 export function normalizeAssistantStreamSegments(
   segments: AssistantStreamSegment[],
 ): AssistantStreamSegment[] {
@@ -100,23 +101,57 @@ export function normalizeAssistantStreamSegments(
   ) {
     trimmedEnd.pop();
   }
-  const out: AssistantStreamSegment[] = [];
-  for (let i = 0; i < trimmedEnd.length; i++) {
-    const cur = trimmedEnd[i]!;
-    const next = trimmedEnd[i + 1];
-    if (cur.kind === "reasoning" && next?.kind === "content") {
-      if (isNearDuplicateSegText(cur.text, next.text)) {
-        out.push(next);
-        i++;
-        continue;
-      }
-      out.push(cur);
-      continue;
-    }
-    out.push(cur);
-  }
-  const merged = mergeAdjacentContentSegments(mergeAdjacentReasoningSegments(out));
-  return merged.filter(
-    (s) => s.kind !== "reasoning" || s.text.trim().length > 0,
+  const merged = mergeAdjacentContentSegments(
+    mergeAdjacentReasoningSegments(trimmedEnd),
   );
+  const out = merged.filter((s, i, arr) => {
+    if (s.kind !== "reasoning") {
+      return true;
+    }
+    if (s.text.trim().length > 0) {
+      return true;
+    }
+    // Keep empty reasoning before non-empty content: some streams only fill the content
+    // channel on finalize, but the UI still showed a thinking phase (debug H-E).
+    return arr
+      .slice(i + 1)
+      .some((t) => t.kind === "content" && t.text.trim().length > 0);
+  });
+  // #region agent log
+  if (segments.length !== out.length) {
+    const data = {
+      inLen: segments.length,
+      outLen: out.length,
+      inKinds: segments.map((s) => s.kind),
+      outKinds: out.map((s) => s.kind),
+    };
+    hofAgentConsoleDebug(
+      "E",
+      "assistantStreamSegments.ts:normalizeAssistantStreamSegments",
+      "segment count changed after normalize",
+      data,
+    );
+    if (typeof fetch !== "undefined") {
+      fetch(
+        "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Debug-Session-Id": "860625",
+          },
+          body: JSON.stringify({
+            sessionId: "860625",
+            hypothesisId: "E",
+            location: "assistantStreamSegments.ts:normalizeAssistantStreamSegments",
+            message: "segment count changed after normalize",
+            data,
+            timestamp: Date.now(),
+          }),
+        },
+      ).catch(() => {});
+    }
+  }
+  // #endregion
+  return out;
 }

@@ -1,4 +1,5 @@
 import type { HofStreamEvent } from "../hooks/streamHofFunction";
+import { hofAgentConsoleDebug } from "./agentDebugConsole";
 import type { AssistantStreamSegment } from "./assistantStreamSegments";
 import {
   appendAssistantStreamSegmentChunk,
@@ -55,6 +56,8 @@ export type LiveBlock =
         completion_tokens?: number;
         total_tokens?: number;
       };
+      /** Set on ``assistant_done`` from episode clock (persists after flush to thread). */
+      reasoning_elapsed_ms?: number;
     }
   | {
       kind: "tool_call";
@@ -254,9 +257,29 @@ export function mergePendingIdLists(
 }
 
 /** Passed into `applyStreamEvent` so assistant rows match stream `phase` (model vs summary). */
-type AgentApplyStreamCtx = {
+export type AgentApplyStreamCtx = {
   assistantStreamPhase: "model" | "summary" | null;
+  /** Wall time when ``assistant_done`` is applied; used with ``thinkingEpisodeStartedAtMs``. */
+  assistantDoneClockMs?: number;
+  /** Start of the current thinking episode (from stream consumer). */
+  thinkingEpisodeStartedAtMs?: number | null;
 };
+
+function reasoningElapsedStamp(
+  ctx: AgentApplyStreamCtx,
+): { reasoning_elapsed_ms: number } | Record<string, never> {
+  const ep = ctx.thinkingEpisodeStartedAtMs;
+  const clock = ctx.assistantDoneClockMs;
+  if (
+    typeof ep === "number" &&
+    typeof clock === "number" &&
+    Number.isFinite(ep) &&
+    Number.isFinite(clock)
+  ) {
+    return { reasoning_elapsed_ms: Math.max(0, Math.round(clock - ep)) };
+  }
+  return {};
+}
 
 /** Final lane after a model turn completes (streaming path uses reply shell + opacity until this is set). */
 export function computeAssistantUiLane(
@@ -430,6 +453,40 @@ export function applyStreamEvent(
     const segs = [...(last.streamSegments ?? [])];
     segs.push({ kind: seg, text: "" });
     const sp = stampStreamPhase(ctx, last.streamPhase);
+    // #region agent log
+    const fData = {
+      segment: seg,
+      prevSegCount: last.streamSegments?.length ?? 0,
+      nextSegCount: segs.length,
+      streamPhase: last.streamPhase,
+    };
+    hofAgentConsoleDebug(
+      "F",
+      "hofAgentChatModel.ts:applyStreamEvent:segment_start",
+      "segment_start",
+      fData,
+    );
+    if (typeof fetch !== "undefined") {
+      fetch(
+        "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Debug-Session-Id": "860625",
+          },
+          body: JSON.stringify({
+            sessionId: "860625",
+            hypothesisId: "F",
+            location: "hofAgentChatModel.ts:segment_start",
+            message: "segment_start",
+            data: fData,
+            timestamp: Date.now(),
+          }),
+        },
+      ).catch(() => {});
+    }
+    // #endregion
     return [
       ...base.slice(0, -1),
       {
@@ -513,6 +570,45 @@ export function applyStreamEvent(
       if (si < 0) {
         const spFallback = stampStreamPhase(ctx);
         const laneFallback = computeAssistantUiLane(spFallback, fr);
+        const fbStamp = reasoningElapsedStamp(ctx);
+        // #region agent log
+        const fbData = {
+          finishReason: fr,
+          streamPhase: spFallback,
+          reasoning_elapsed_ms:
+            "reasoning_elapsed_ms" in fbStamp
+              ? fbStamp.reasoning_elapsed_ms
+              : undefined,
+          thinkingEpisodeStartedAtMs: ctx.thinkingEpisodeStartedAtMs,
+          assistantDoneClockMs: ctx.assistantDoneClockMs,
+        };
+        hofAgentConsoleDebug(
+          "F",
+          "hofAgentChatModel.ts:applyStreamEvent:assistant_done",
+          "assistant_done fallback new empty row (no streaming match)",
+          fbData,
+        );
+        if (typeof fetch !== "undefined") {
+          fetch(
+            "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Debug-Session-Id": "860625",
+              },
+              body: JSON.stringify({
+                sessionId: "860625",
+                hypothesisId: "F",
+                location: "hofAgentChatModel.ts:assistant_done:fallback",
+                message: "assistant_done fallback new row",
+                data: fbData,
+                timestamp: Date.now(),
+              }),
+            },
+          ).catch(() => {});
+        }
+        // #endregion
         return [
           ...trimmed,
           {
@@ -524,6 +620,7 @@ export function applyStreamEvent(
             usage: u,
             uiLane: laneFallback,
             ...(spFallback ? { streamPhase: spFallback } : {}),
+            ...fbStamp,
           },
         ];
       }
@@ -532,13 +629,97 @@ export function applyStreamEvent(
       const sp = stampStreamPhase(ctx, last.streamPhase);
       const effPhase = sp ?? last.streamPhase;
       const lane = assistantDoneUiLane(fr, effPhase);
+      const reasoningStamp = reasoningElapsedStamp(ctx);
       let streamSegmentsOut: AssistantStreamSegment[] | undefined;
       if (last.streamSegments?.length) {
         const n = normalizeAssistantStreamSegments(last.streamSegments);
         // Never wipe segments on a bad normalize edge case (user saw thinking, then it vanished).
         streamSegmentsOut = n.length > 0 ? n : last.streamSegments;
+        // #region agent log
+        const doneData = {
+          assistantId: last.id,
+          finishReason: fr,
+          streamPhase: effPhase,
+          inKinds: last.streamSegments.map((s) => s.kind),
+          outKinds: streamSegmentsOut.map((s) => s.kind),
+          inLens: last.streamSegments.map((s) => s.text.length),
+          outLens: streamSegmentsOut.map((s) => s.text.length),
+          reasoning_elapsed_ms:
+            "reasoning_elapsed_ms" in reasoningStamp
+              ? reasoningStamp.reasoning_elapsed_ms
+              : undefined,
+          thinkingEpisodeStartedAtMs: ctx.thinkingEpisodeStartedAtMs,
+          assistantDoneClockMs: ctx.assistantDoneClockMs,
+        };
+        hofAgentConsoleDebug(
+          "F",
+          "hofAgentChatModel.ts:applyStreamEvent:assistant_done",
+          "assistant_done segments",
+          doneData,
+        );
+        if (typeof fetch !== "undefined") {
+          fetch(
+            "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Debug-Session-Id": "860625",
+              },
+              body: JSON.stringify({
+                sessionId: "860625",
+                hypothesisId: "F",
+                location: "hofAgentChatModel.ts:assistant_done",
+                message: "assistant_done segments",
+                data: doneData,
+                timestamp: Date.now(),
+              }),
+            },
+          ).catch(() => {});
+        }
+        // #endregion
       } else {
         streamSegmentsOut = last.streamSegments;
+        // #region agent log
+        const noSegData = {
+          assistantId: last.id,
+          finishReason: fr,
+          streamPhase: effPhase,
+          textLen: last.text.trim().length,
+          reasoning_elapsed_ms:
+            "reasoning_elapsed_ms" in reasoningStamp
+              ? reasoningStamp.reasoning_elapsed_ms
+              : undefined,
+          thinkingEpisodeStartedAtMs: ctx.thinkingEpisodeStartedAtMs,
+          assistantDoneClockMs: ctx.assistantDoneClockMs,
+        };
+        hofAgentConsoleDebug(
+          "F",
+          "hofAgentChatModel.ts:applyStreamEvent:assistant_done",
+          "assistant_done (no streamSegments)",
+          noSegData,
+        );
+        if (typeof fetch !== "undefined") {
+          fetch(
+            "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Debug-Session-Id": "860625",
+              },
+              body: JSON.stringify({
+                sessionId: "860625",
+                hypothesisId: "F",
+                location: "hofAgentChatModel.ts:assistant_done",
+                message: "assistant_done (no streamSegments)",
+                data: noSegData,
+                timestamp: Date.now(),
+              }),
+            },
+          ).catch(() => {});
+        }
+        // #endregion
       }
       return [
         ...trimmed.slice(0, si),
@@ -550,6 +731,7 @@ export function applyStreamEvent(
           uiLane: lane,
           streamSegments: streamSegmentsOut,
           ...(sp ? { streamPhase: sp } : {}),
+          ...reasoningStamp,
         },
         ...trimmed.slice(si + 1),
       ];
@@ -567,6 +749,7 @@ export function applyStreamEvent(
         usage: u,
         uiLane: laneFallback,
         ...(spFallback ? { streamPhase: spFallback } : {}),
+        ...reasoningElapsedStamp(ctx),
       },
     ];
   }
@@ -771,6 +954,40 @@ export function dedupeAdjacentDuplicateAssistants(
           assistantDedupeFingerprint(cur),
         );
         if (a.length > 0 && a === c) {
+          // #region agent log
+          const data = {
+            fpLen: a.length,
+            fpHead: a.slice(0, 120),
+            prevFinish: pa.finishReason,
+            curFinish: cur.finishReason,
+          };
+          hofAgentConsoleDebug(
+            "A",
+            "hofAgentChatModel.ts:dedupeAdjacentDuplicateAssistants",
+            "skipped adjacent duplicate assistant row",
+            data,
+          );
+          if (typeof fetch !== "undefined") {
+            fetch(
+              "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Debug-Session-Id": "860625",
+                },
+                body: JSON.stringify({
+                  sessionId: "860625",
+                  hypothesisId: "A",
+                  location: "hofAgentChatModel.ts:dedupeAdjacentDuplicateAssistants",
+                  message: "skipped adjacent duplicate assistant row",
+                  data,
+                  timestamp: Date.now(),
+                }),
+              },
+            ).catch(() => {});
+          }
+          // #endregion
           continue;
         }
       }
@@ -780,11 +997,88 @@ export function dedupeAdjacentDuplicateAssistants(
   return out;
 }
 
+/**
+ * Turn in-flight stream state into storable thread blocks after the user hits Stop
+ * (fetch aborted). Finalizes streaming assistant rows, stamps ``cancelled`` when the
+ * model never sent ``assistant_done``, then applies the same compaction as a normal run.
+ */
+export function finalizeLiveBlocksAfterUserStop(blocks: LiveBlock[]): LiveBlock[] {
+  const mapped = blocks.map((b) => {
+    if (b.kind !== "assistant") {
+      return b;
+    }
+    const a = b as Extract<LiveBlock, { kind: "assistant" }>;
+    if (!a.streaming) {
+      const { pendingStreamFinalize: _p, ...rest } = a;
+      return rest as Extract<LiveBlock, { kind: "assistant" }>;
+    }
+    const { pendingStreamFinalize: _p, ...rest } = a;
+    const hadFinish =
+      rest.finishReason !== undefined && rest.finishReason !== null;
+    return {
+      ...rest,
+      streaming: false,
+      finishReason: hadFinish ? rest.finishReason : "cancelled",
+    } as Extract<LiveBlock, { kind: "assistant" }>;
+  });
+  const noEmptyCancelledShell = mapped.filter((b) => {
+    if (b.kind !== "assistant") {
+      return true;
+    }
+    const a = b as Extract<LiveBlock, { kind: "assistant" }>;
+    if (a.finishReason !== "cancelled") {
+      return true;
+    }
+    const t = a.text.trim();
+    const hasSegText = a.streamSegments?.some((s) => s.text.trim()) ?? false;
+    return t.length > 0 || hasSegText;
+  });
+  return compactBlocksForHistory(noEmptyCancelledShell);
+}
+
 /** Drop noisy rows before persisting a completed run to the thread. */
 export function compactBlocksForHistory(blocks: LiveBlock[]): LiveBlock[] {
-  const base = dropRedundantModelPhaseBeforeAssistant(blocks).filter(
-    (b) => !isEphemeralAssistantShell(b) && b.kind !== "thinking_skeleton",
-  );
+  const base = dropRedundantModelPhaseBeforeAssistant(blocks).filter((b) => {
+    if (b.kind === "assistant" && isEphemeralAssistantShell(b)) {
+      // #region agent log
+      const a = b as Extract<LiveBlock, { kind: "assistant" }>;
+      const data = {
+        id: a.id,
+        finishReason: a.finishReason,
+        textLen: a.text.trim().length,
+        hasSegText: a.streamSegments?.some((s) => s.text.trim()) ?? false,
+      };
+      hofAgentConsoleDebug(
+        "B",
+        "hofAgentChatModel.ts:compactBlocksForHistory",
+        "dropped ephemeral assistant shell",
+        data,
+      );
+      if (typeof fetch !== "undefined") {
+        fetch(
+          "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Debug-Session-Id": "860625",
+            },
+            body: JSON.stringify({
+              sessionId: "860625",
+              hypothesisId: "B",
+              location: "hofAgentChatModel.ts:compactBlocksForHistory",
+              message: "dropped ephemeral assistant shell",
+              data,
+              timestamp: Date.now(),
+            }),
+          },
+        ).catch(() => {});
+      }
+      // #endregion
+      return false;
+    }
+    return b.kind !== "thinking_skeleton";
+  });
   const deduped = dedupeAdjacentDuplicateAssistants(base);
   return deduped.map((b) => {
     if (b.kind !== "assistant") {

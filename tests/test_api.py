@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from hof.agent.policy import AgentPolicy
+from hof.agent.policy import BUILTIN_AGENT_TOOL_NAMES, AgentPolicy
 from hof.api.auth import verify_auth
 from hof.core.registry import registry
 from hof.flows.flow import Flow
@@ -255,6 +256,8 @@ class TestAgentRoutes:
             """Mutation tool."""
             return {}
 
+        importlib.reload(importlib.import_module("hof.agent.builtin_tools"))
+
         policy = AgentPolicy(
             allowlist_read=frozenset({"agent_read_tool"}),
             allowlist_mutation=frozenset({"agent_mut_tool"}),
@@ -267,10 +270,13 @@ class TestAgentRoutes:
         assert data["configured"] is True
         tools = data["tools"]
         names = {t["name"] for t in tools}
-        assert names == {"agent_mut_tool", "agent_read_tool"}
+        assert names >= {"agent_mut_tool", "agent_read_tool"}
+        assert BUILTIN_AGENT_TOOL_NAMES <= names
         by_name = {t["name"]: t for t in tools}
         assert by_name["agent_read_tool"]["mutation"] is False
         assert by_name["agent_mut_tool"]["mutation"] is True
+        for bn in BUILTIN_AGENT_TOOL_NAMES:
+            assert by_name[bn]["mutation"] is False
         read = by_name["agent_read_tool"]
         assert read["description"] == "Read-side tool."
         assert "tool_summary" in read

@@ -14,9 +14,11 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type ReactNode,
   type SetStateAction,
 } from "react";
 import { createPortal } from "react-dom";
+import { hofAgentConsoleDebug } from "./agentDebugConsole";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { FunctionResultDisplay } from "./FunctionResultDisplay";
 import {
@@ -39,6 +41,7 @@ import {
   mergeAdjacentContentSegments,
   mergeAdjacentReasoningSegments,
 } from "./hofAgentChatModel";
+import { reasoningPhaseTickingLive } from "./assistantStreamSegments";
 import type {
   ApprovalBarrier,
   AssistantStreamSegment,
@@ -47,6 +50,11 @@ import type {
   ToolCallBlock,
   ToolResultBlock,
 } from "./hofAgentChatModel";
+import { useHofAgentChat } from "./hofAgentChatContext";
+import {
+  formatDurationMs,
+  useThinkingEpisodeElapsed,
+} from "./thinkingDuration";
 
 function formatToolJsonForDialog(raw: string): string {
   const t = raw.trim();
@@ -724,6 +732,33 @@ function sanitizeReasoningText(raw: string): string {
   return s.trim();
 }
 
+/**
+ * When the model streams prose on the **content** channel (no ``reasoning_delta``), the popover
+ * can still show the opening of the reply — usually lines before the first markdown table.
+ */
+function popoverMarkdownFromConsolidatedReply(markdown: string): string {
+  const raw = markdown.trim();
+  if (!raw) {
+    return "";
+  }
+  const lines = raw.split("\n");
+  const kept: string[] = [];
+  for (const line of lines) {
+    if (line.trimStart().startsWith("|")) {
+      break;
+    }
+    kept.push(line);
+    if (kept.join("\n").length >= 6000) {
+      break;
+    }
+  }
+  let slice = kept.join("\n").trim();
+  if (!slice) {
+    slice = raw.length > 4000 ? `${raw.slice(0, 4000)}…` : raw;
+  }
+  return slice;
+}
+
 const REASONING_SHIMMER_STYLE_ID = "hof-reasoning-shimmer-kf";
 
 function ensureReasoningShimmerKeyframes(): void {
@@ -746,22 +781,49 @@ function ensureReasoningShimmerKeyframes(): void {
 const REASONING_THINKING_SHIMMER_LABEL_CLASS =
   "text-[11px] font-medium bg-clip-text text-transparent [background-image:linear-gradient(98deg,var(--color-muted-foreground)_0%,var(--color-accent)_42%,var(--color-foreground)_52%,var(--color-accent)_62%,var(--color-muted-foreground)_100%)] bg-[length:220%_100%] [animation:hof-reasoning-shimmer_2.5s_ease-in-out_infinite]";
 
+export type AgentEarlyThinkingIndicatorProps = {
+  /**
+   * When set, shown as the live duration (parent owns {@link useThinkingEpisodeElapsed}).
+   * Omit to compute elapsed locally from {@link HofAgentChatContext}.
+   */
+  liveFormatted?: string | null;
+};
+
 /**
  * Shown while the agent run is busy but no live blocks exist yet (before first NDJSON row).
  * Replaces the old “Connecting” copy with the same visual “Thinking” treatment.
  */
-export function AgentEarlyThinkingIndicator() {
+export function AgentEarlyThinkingIndicator({
+  liveFormatted: liveFormattedFromParent,
+}: AgentEarlyThinkingIndicatorProps = {}) {
   useEffect(() => {
     ensureReasoningShimmerKeyframes();
   }, []);
+  const { thinkingEpisodeStartedAtMs } = useHofAgentChat();
+  const useInternalElapsed = liveFormattedFromParent === undefined;
+  const internalElapsed = useThinkingEpisodeElapsed(
+    useInternalElapsed,
+    thinkingEpisodeStartedAtMs,
+  );
+  const liveFormatted = useInternalElapsed
+    ? internalElapsed.liveFormatted
+    : liveFormattedFromParent;
+  const ariaThinking =
+    liveFormatted != null ? `Thinking (${liveFormatted})` : "Thinking";
   return (
     <div
       className={`${AGENT_CHAT_COLUMN_CLASS} font-sans`}
       aria-busy="true"
       aria-live="polite"
-      aria-label="Thinking"
+      aria-label={ariaThinking}
     >
       <span className={REASONING_THINKING_SHIMMER_LABEL_CLASS}>Thinking</span>
+      {liveFormatted != null ? (
+        <span className="text-[11px] font-medium text-tertiary">
+          {" "}
+          ({liveFormatted})
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -769,9 +831,18 @@ export function AgentEarlyThinkingIndicator() {
 function ReasoningStreamPeek({
   text,
   streaming,
+  reasoningElapsedMs,
+  consolidatedContentForPopover,
 }: {
   text: string;
   streaming: boolean;
+  /** From persisted assistant block after ``assistant_done`` (survives flush to thread). */
+  reasoningElapsedMs?: number;
+  /**
+   * Empty reasoning segment + content on the wire: same markdown as the following reply so the
+   * popover can show the model output (often streamed as ``assistant_delta`` only).
+   */
+  consolidatedContentForPopover?: string;
 }) {
   const [open, setOpen] = useState(false);
   const columnRef = useRef<HTMLDivElement>(null);
@@ -785,6 +856,16 @@ function ReasoningStreamPeek({
     left: number;
     width: number;
   } | null>(null);
+  const { thinkingEpisodeStartedAtMs } = useHofAgentChat();
+  const { liveFormatted, settledFormatted } = useThinkingEpisodeElapsed(
+    streaming,
+    thinkingEpisodeStartedAtMs,
+  );
+  const persistedFormatted =
+    reasoningElapsedMs != null
+      ? formatDurationMs(reasoningElapsedMs)
+      : null;
+  const effectiveSettled = persistedFormatted ?? settledFormatted;
 
   useEffect(() => {
     ensureReasoningShimmerKeyframes();
@@ -890,18 +971,40 @@ function ReasoningStreamPeek({
       return;
     }
     el.scrollTop = el.scrollHeight;
-  }, [clean, streaming, open]);
+  }, [clean, text, streaming, open]);
 
-  /**
-   * Same shimmer as {@link AgentEarlyThinkingIndicator} so there is no blank beat after the
-   * live assistant row mounts but before the first reasoning character.
-   */
+  /** Shimmer “Thinking” label matches {@link AgentEarlyThinkingIndicator} (used where no popover is needed). */
   if (!text.trim() && !clean) {
-    if (streaming) {
-      return <AgentEarlyThinkingIndicator />;
+    if (!streaming) {
+      const allowEmptyReasoningChrome =
+        reasoningElapsedMs != null ||
+        thinkingEpisodeStartedAtMs != null ||
+        Boolean(consolidatedContentForPopover?.trim());
+      if (!allowEmptyReasoningChrome) {
+        return null;
+      }
     }
-    return null;
+    // Streaming + empty: keep button + popover (live text appears as tokens arrive).
   }
+
+  /** Empty primary reasoning text: duration row and/or consolidated reply popover. */
+  const primaryEmptyReasoningChrome = !streaming && !text.trim();
+  const consolidatedPopoverMd =
+    primaryEmptyReasoningChrome && consolidatedContentForPopover?.trim()
+      ? popoverMarkdownFromConsolidatedReply(consolidatedContentForPopover)
+      : "";
+
+  /** Prefer sanitized text; while streaming, raw ``text`` if sanitizer cleared partial output. */
+  const streamingPopoverMarkdown =
+    !primaryEmptyReasoningChrome && streaming
+      ? clean.trim()
+        ? clean
+        : text.trim()
+      : "";
+  const settledPopoverMarkdown =
+    !primaryEmptyReasoningChrome && !streaming
+      ? clean.trim() || text.trim()
+      : "";
 
   const thinkingLabelClass = streaming
     ? REASONING_THINKING_SHIMMER_LABEL_CLASS
@@ -910,15 +1013,21 @@ function ReasoningStreamPeek({
   const bodyClass =
     "font-sans text-[12px] leading-relaxed break-words whitespace-pre-wrap text-secondary";
 
+  const popoverReasoningAria = streaming
+    ? liveFormatted != null
+      ? `Reasoning in progress, ${liveFormatted}`
+      : "Reasoning in progress"
+    : effectiveSettled != null
+      ? `Completed reasoning after ${effectiveSettled}`
+      : "Completed reasoning";
+
   const popoverContent =
     open && popoverBox ? (
       <div
         ref={popoverRef}
         id={popoverId}
         role="dialog"
-        aria-label={
-          streaming ? "Reasoning in progress" : "Completed reasoning"
-        }
+        aria-label={popoverReasoningAria}
         className={`fixed z-[100] max-h-[min(70vh,20rem)] overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-background)] p-3 shadow-lg outline-none ring-1 ring-black/5 dark:ring-white/10 ${bodyClass}`}
         style={{
           top: popoverBox.top,
@@ -930,7 +1039,34 @@ function ReasoningStreamPeek({
         onPointerEnter={cancelScheduledPopoverClose}
         onPointerLeave={schedulePopoverCloseAfterLeave}
       >
-        {clean || (streaming ? "\u200b" : null)}
+        {primaryEmptyReasoningChrome ? (
+          consolidatedPopoverMd.trim() ? (
+            <AssistantMarkdown source={consolidatedPopoverMd} />
+          ) : consolidatedContentForPopover?.trim() ? (
+            <AssistantMarkdown source={consolidatedContentForPopover.trim()} />
+          ) : effectiveSettled != null ? (
+            <p className="text-[12px] text-secondary">
+              The model used a separate reasoning phase ({effectiveSettled}).
+            </p>
+          ) : null
+        ) : streaming ? (
+          streamingPopoverMarkdown ? (
+            <AssistantMarkdown source={streamingPopoverMarkdown} />
+          ) : (
+            <>
+              {liveFormatted != null ? (
+                <p className="text-[11px] text-tertiary">
+                  Thinking ({liveFormatted})
+                </p>
+              ) : (
+                <p className="text-[11px] text-tertiary">Thinking…</p>
+              )}
+              {"\u200b"}
+            </>
+          )
+        ) : settledPopoverMarkdown ? (
+          <AssistantMarkdown source={settledPopoverMarkdown} />
+        ) : null}
         {streaming ? (
           <span
             className="ml-px inline-block h-[0.9em] w-px animate-pulse bg-foreground/35 align-middle"
@@ -961,8 +1097,29 @@ function ReasoningStreamPeek({
           }}
           onClick={() => setOpen((v) => !v)}
         >
-          <span className={thinkingLabelClass} aria-live="polite">
-            {streaming ? "Thinking" : "Thought"}
+          <span
+            className="inline-flex max-w-full flex-wrap items-baseline gap-x-1"
+            aria-live="polite"
+          >
+            {streaming ? (
+              <>
+                <span className={thinkingLabelClass}>Thinking</span>
+                {liveFormatted != null ? (
+                  <span className="text-[11px] font-medium text-tertiary">
+                    ({liveFormatted})
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <span className={thinkingLabelClass}>Thought</span>
+                {effectiveSettled != null ? (
+                  <span className="text-[11px] font-medium text-tertiary">
+                    for {effectiveSettled}
+                  </span>
+                ) : null}
+              </>
+            )}
           </span>
         </button>
       </div>
@@ -980,7 +1137,9 @@ function AssistantModelStreamShell({
   replyBubbleClass,
   bodyClassName,
   emptyLabel,
-  streaming = true,
+  wireStreaming = true,
+  caretVisible,
+  reasoningElapsedMs,
 }: {
   streamText: string;
   streamTextRole: "content" | "reasoning" | "mixed" | undefined;
@@ -988,25 +1147,41 @@ function AssistantModelStreamShell({
   /** Optional override for the streaming markdown wrapper (defaults to ``replyBubbleClass``). */
   bodyClassName?: string;
   emptyLabel: string;
-  /** When false, no typing caret (e.g. stream finalized on wire but flag not yet cleared). */
-  streaming?: boolean;
+  /** HTTP stream still open (Thinking / live reasoning). */
+  wireStreaming?: boolean;
+  /** Typing caret in content bubble; defaults to ``wireStreaming``. */
+  caretVisible?: boolean;
+  reasoningElapsedMs?: number;
 }) {
+  const showCaret = caretVisible ?? wireStreaming;
   const hasStreamText = streamText.trim().length > 0;
   if (streamTextRole === "reasoning") {
-    return <ReasoningStreamPeek text={streamText} streaming={streaming} />;
+    return (
+      <ReasoningStreamPeek
+        text={streamText}
+        streaming={wireStreaming}
+        reasoningElapsedMs={reasoningElapsedMs}
+      />
+    );
   }
   if (!hasStreamText) {
-    if (!streaming) {
+    if (!wireStreaming) {
       return null;
     }
-    return <AgentEarlyThinkingIndicator />;
+    return (
+      <ReasoningStreamPeek
+        text=""
+        streaming={true}
+        reasoningElapsedMs={reasoningElapsedMs}
+      />
+    );
   }
   const bodyClass = bodyClassName ?? replyBubbleClass;
   return (
     <div className={AGENT_CHAT_COLUMN_CLASS}>
       <div className={bodyClass}>
         <AssistantMarkdown source={streamText} />
-        {streaming ? (
+        {showCaret ? (
           <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
         ) : null}
       </div>
@@ -1017,89 +1192,206 @@ function AssistantModelStreamShell({
 /** Renders ``streamSegments`` from NDJSON ``segment_start`` + deltas (llm-markdown agentic contract). */
 function AssistantSegmentedBody({
   segments,
-  streaming,
+  wireStreaming,
+  caretVisible,
   replyBubbleClass,
   contentBubbleClass,
   emptyLabel,
   assistantUiLane,
+  persistedReasoningElapsedMs,
+  afterToolResult,
 }: {
   segments: AssistantStreamSegment[];
-  streaming: boolean;
+  /** HTTP stream still open (Thinking label, live reasoning). */
+  wireStreaming: boolean;
+  /** Caret on the last content segment; defaults to ``wireStreaming``. Summary round hides caret once text exists while wire stays open. */
+  caretVisible?: boolean;
   replyBubbleClass: string;
   /** CSS class for ``content`` segments; defaults to ``replyBubbleClass``. */
   contentBubbleClass?: string;
   emptyLabel: string;
   /** Finalized lane: when ``reply`` and segments are reasoning-only, render as chat bubble (not peek). */
   assistantUiLane: "thinking" | "reply";
+  /** Shown on the last reasoning peek after ``assistant_done`` (thread / persisted). */
+  persistedReasoningElapsedMs?: number;
+  /**
+   * When true (assistant row after tool output), keep reasoning in {@link ReasoningStreamPeek}
+   * so later model rounds still show “Thought for …” like the first turn.
+   */
+  afterToolResult?: boolean;
 }) {
   const contentClass = contentBubbleClass ?? replyBubbleClass;
+  const showCaret = caretVisible ?? wireStreaming;
   const merged = mergeAdjacentContentSegments(
     mergeAdjacentReasoningSegments(segments),
   );
   const onlyReasoning =
     merged.length > 0 && merged.every((s) => s.kind === "reasoning");
   const reasoningAsReplyBubble =
-    onlyReasoning && assistantUiLane === "reply" && !streaming;
-  return (
-    <div className={`${AGENT_CHAT_COLUMN_CLASS} space-y-3`}>
-      {merged.map((s, i) => {
-        const isLast = i === merged.length - 1;
-        const pulse = streaming && isLast;
-        if (s.kind === "reasoning") {
-          if (reasoningAsReplyBubble) {
-            return (
-              <div key={`seg-r-${i}`} className={contentClass}>
-                <AssistantMarkdown source={s.text} />
-                {pulse ? (
-                  <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
-                ) : null}
-              </div>
-            );
-          }
-          if (!s.text.trim()) {
-            return pulse ? (
-              <AgentEarlyThinkingIndicator key={`seg-r-${i}`} />
-            ) : null;
-          }
-          return (
-            <ReasoningStreamPeek
-              key={`seg-r-${i}`}
-              text={s.text}
-              streaming={pulse}
-            />
-          );
-        }
-        if (!s.text.trim() && !pulse) {
-          return null;
-        }
-        if (!s.text.trim() && pulse) {
-          return (
-            <div
-              key={`seg-c-${i}`}
-              className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center gap-1.5 py-0.5`}
-              aria-busy="true"
-              aria-label={emptyLabel || "Assistant is drafting"}
-            >
-              <span
-                className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
-                aria-hidden
-              />
-              <span className="inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
-            </div>
-          );
-        }
-        return (
-          <div key={`seg-c-${i}`} className={contentClass}>
+    onlyReasoning &&
+    assistantUiLane === "reply" &&
+    !wireStreaming &&
+    !afterToolResult;
+  const lastReasoningIndex = merged.reduce(
+    (acc, seg, idx) => (seg.kind === "reasoning" ? idx : acc),
+    -1,
+  );
+
+  const { thinkingEpisodeStartedAtMs } = useHofAgentChat();
+  const reasoningPhaseEndedAtRef = useRef<number | null>(null);
+  const reasoningPhaseWasLiveRef = useRef(false);
+  const anyReasoningLive = merged.some((_, idx) =>
+    reasoningPhaseTickingLive(merged, idx, lastReasoningIndex, wireStreaming),
+  );
+  if (anyReasoningLive) {
+    reasoningPhaseWasLiveRef.current = true;
+    reasoningPhaseEndedAtRef.current = null;
+  } else if (reasoningPhaseWasLiveRef.current && reasoningPhaseEndedAtRef.current == null) {
+    reasoningPhaseEndedAtRef.current = Date.now();
+  }
+  if (!wireStreaming) {
+    reasoningPhaseWasLiveRef.current = false;
+  }
+  const capturedReasoningElapsedMs =
+    reasoningPhaseEndedAtRef.current != null && thinkingEpisodeStartedAtMs != null
+      ? reasoningPhaseEndedAtRef.current - thinkingEpisodeStartedAtMs
+      : undefined;
+
+  const children: ReactNode[] = [];
+  for (let i = 0; i < merged.length; i++) {
+    const s = merged[i]!;
+    const isLast = i === merged.length - 1;
+    const reasoningTicking = reasoningPhaseTickingLive(
+      merged,
+      i,
+      lastReasoningIndex,
+      wireStreaming,
+    );
+    const reasoningPeekLive = s.kind === "reasoning" && reasoningTicking;
+    const emptyReasoningPulse =
+      s.kind === "reasoning" && reasoningTicking && !s.text.trim();
+
+    if (s.kind === "reasoning") {
+      if (reasoningAsReplyBubble) {
+        children.push(
+          <div key={`seg-r-${i}`} className={contentClass}>
             <AssistantMarkdown source={s.text} />
-            {pulse ? (
+            {showCaret && isLast ? (
               <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
             ) : null}
-          </div>
+          </div>,
         );
-      })}
-    </div>
+        continue;
+      }
+      if (!s.text.trim()) {
+        if (emptyReasoningPulse) {
+          children.push(
+            <ReasoningStreamPeek
+              key={`seg-r-${i}`}
+              text=""
+              streaming={true}
+            />,
+          );
+          continue;
+        }
+        const nextEmptyReasoning = merged[i + 1];
+        if (nextEmptyReasoning?.kind === "content" && nextEmptyReasoning.text.trim()) {
+          const nextIsLast = i + 1 === merged.length - 1;
+          const contentPulse = showCaret && nextIsLast;
+          const elapsedForConsolidated = !wireStreaming
+            ? persistedReasoningElapsedMs
+            : capturedReasoningElapsedMs;
+          children.push(
+            <div key={`seg-rc-${i}`} className={contentClass}>
+              <div className="mb-2">
+                <ReasoningStreamPeek
+                  text=""
+                  streaming={false}
+                  reasoningElapsedMs={elapsedForConsolidated}
+                  consolidatedContentForPopover={nextEmptyReasoning.text}
+                />
+              </div>
+              <AssistantMarkdown source={nextEmptyReasoning.text} />
+              {contentPulse ? (
+                <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+              ) : null}
+            </div>,
+          );
+          i += 1;
+          continue;
+        }
+        if (
+          !wireStreaming &&
+          i === lastReasoningIndex &&
+          persistedReasoningElapsedMs != null
+        ) {
+          children.push(
+            <ReasoningStreamPeek
+              key={`seg-r-${i}`}
+              text=""
+              streaming={false}
+              reasoningElapsedMs={persistedReasoningElapsedMs}
+            />,
+          );
+          continue;
+        }
+        continue;
+      }
+      const durationProp =
+        !wireStreaming &&
+        i === lastReasoningIndex &&
+        persistedReasoningElapsedMs != null
+          ? persistedReasoningElapsedMs
+          : undefined;
+      children.push(
+        <ReasoningStreamPeek
+          key={`seg-r-${i}`}
+          text={s.text}
+          streaming={reasoningPeekLive}
+          reasoningElapsedMs={durationProp}
+        />,
+      );
+      continue;
+    }
+
+    const contentPulse = showCaret && isLast;
+    if (!s.text.trim() && !contentPulse) {
+      continue;
+    }
+    if (!s.text.trim() && contentPulse) {
+      children.push(
+        <div
+          key={`seg-c-${i}`}
+          className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center gap-1.5 py-0.5`}
+          aria-busy="true"
+          aria-label={emptyLabel || "Assistant is drafting"}
+        >
+          <span
+            className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
+            aria-hidden
+          />
+          <span className="inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+        </div>,
+      );
+      continue;
+    }
+    children.push(
+      <div key={`seg-c-${i}`} className={contentClass}>
+        <AssistantMarkdown source={s.text} />
+        {contentPulse ? (
+          <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
+        ) : null}
+      </div>,
+    );
+  }
+
+  return (
+    <div className={`${AGENT_CHAT_COLUMN_CLASS} space-y-3`}>{children}</div>
   );
 }
+
+/** Dedupe D console lines when React re-renders the same assistant snapshot. */
+const _hofAgentDbgDSnapById = new Map<string, string>();
 
 export function LiveBlockView({
   b,
@@ -1148,6 +1440,53 @@ export function LiveBlockView({
     const streamCaretActive =
       streamActive &&
       !(isSummary && (anySegText || b.text.trim().length > 0));
+    const persistedReasoningMs = b.reasoning_elapsed_ms;
+
+    // #region agent log
+    const dbgDData = {
+      id: b.id,
+      afterToolResult,
+      busy,
+      streamPhase: b.streamPhase,
+      lane,
+      streamTextRole: b.streamTextRole,
+      finishReason: b.finishReason,
+      streamSegsLen: streamSegs?.length ?? 0,
+      anySegText,
+      textLen: b.text.trim().length,
+      reasoning_elapsed_ms: b.reasoning_elapsed_ms,
+    };
+    const dbgDSnap = JSON.stringify(dbgDData);
+    if (_hofAgentDbgDSnapById.get(b.id) !== dbgDSnap) {
+      _hofAgentDbgDSnapById.set(b.id, dbgDSnap);
+      hofAgentConsoleDebug(
+        "D",
+        "HofAgentChatBlocks.tsx:LiveBlockView:assistant",
+        "assistant block render snapshot",
+        dbgDData,
+      );
+    }
+    if (typeof window !== "undefined" && typeof fetch !== "undefined") {
+      fetch(
+        "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Debug-Session-Id": "860625",
+          },
+          body: JSON.stringify({
+            sessionId: "860625",
+            hypothesisId: "D",
+            location: "HofAgentChatBlocks.tsx:LiveBlockView:assistant",
+            message: "assistant block render snapshot",
+            data: dbgDData,
+            timestamp: Date.now(),
+          }),
+        },
+      ).catch(() => {});
+    }
+    // #endregion
 
     if (afterToolResult || isSummary) {
       if (streamActive) {
@@ -1161,9 +1500,11 @@ export function LiveBlockView({
             return (
               <AssistantSegmentedBody
                 segments={streamSegs}
-                streaming={streamCaretActive}
+                wireStreaming={streamActive}
+                caretVisible={streamCaretActive}
                 replyBubbleClass={replyBubbleClass}
                 contentBubbleClass={replyBubbleClass}
+                afterToolResult={afterToolResult}
                 assistantUiLane={lane}
                 emptyLabel=""
               />
@@ -1197,9 +1538,11 @@ export function LiveBlockView({
           return (
             <AssistantSegmentedBody
               segments={streamSegs}
-              streaming={streamCaretActive}
+              wireStreaming={streamActive}
+              caretVisible={streamCaretActive}
               replyBubbleClass={replyBubbleClass}
               contentBubbleClass={replyBubbleClass}
+              afterToolResult={afterToolResult}
               assistantUiLane={lane}
               emptyLabel="Drafting the answer…"
             />
@@ -1211,28 +1554,90 @@ export function LiveBlockView({
             streamTextRole={b.streamTextRole}
             replyBubbleClass={replyBubbleClass}
             emptyLabel="Drafting the answer…"
-            streaming={streamCaretActive}
+            wireStreaming={streamActive}
+            caretVisible={streamCaretActive}
           />
         );
       }
       if (streamSegs) {
         if (!anySegText) {
+          // #region agent log
+          const dbgCData = {
+            id: b.id,
+            afterToolResult,
+            segCount: streamSegs.length,
+            segKinds: streamSegs.map((s) => s.kind),
+            segTextLens: streamSegs.map((s) => s.text.trim().length),
+          };
+          hofAgentConsoleDebug(
+            "C",
+            "HofAgentChatBlocks.tsx:LiveBlockView:afterToolOrSummary",
+            "return null — streamSegs present but anySegText false",
+            dbgCData,
+          );
+          if (typeof window !== "undefined" && typeof fetch !== "undefined") {
+            fetch(
+              "http://127.0.0.1:7647/ingest/11fbb78f-7b72-4875-817f-889dd296aaf3",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Debug-Session-Id": "860625",
+                },
+                body: JSON.stringify({
+                  sessionId: "860625",
+                  hypothesisId: "C",
+                  location:
+                    "HofAgentChatBlocks.tsx:LiveBlockView:afterToolOrSummary",
+                  message:
+                    "return null — streamSegs present but anySegText false",
+                  data: dbgCData,
+                  timestamp: Date.now(),
+                }),
+              },
+            ).catch(() => {});
+          }
+          // #endregion
           return null;
         }
         return (
           <AssistantSegmentedBody
             segments={streamSegs}
-            streaming={false}
+            wireStreaming={false}
             replyBubbleClass={replyBubbleClass}
             contentBubbleClass={replyBubbleClass}
+            afterToolResult={afterToolResult}
             assistantUiLane={lane}
             emptyLabel=""
+            persistedReasoningElapsedMs={persistedReasoningMs}
           />
         );
       }
       const text = b.text.trim();
       if (!text) {
         return null;
+      }
+      if (
+        afterToolResult &&
+        b.streamPhase === "model" &&
+        (b.streamTextRole === "reasoning" ||
+          b.streamTextRole === "mixed" ||
+          (b.streamTextRole === undefined && lane === "thinking"))
+      ) {
+        const sr = b.streamTextRole;
+        return (
+          <AssistantModelStreamShell
+            streamText={b.text}
+            streamTextRole={
+              sr === "mixed" || sr === "reasoning" ? sr : "reasoning"
+            }
+            replyBubbleClass={replyBubbleClass}
+            emptyLabel=""
+            wireStreaming={false}
+            caretVisible={false}
+            reasoningElapsedMs={persistedReasoningMs}
+          />
+        );
       }
       return (
         <div className={replyBubbleClass}>
@@ -1246,9 +1651,11 @@ export function LiveBlockView({
         return (
           <AssistantSegmentedBody
             segments={streamSegs}
-            streaming={streamActive}
+            wireStreaming={streamActive}
+            caretVisible={streamActive}
             replyBubbleClass={replyBubbleClass}
             contentBubbleClass={replyBubbleClass}
+            afterToolResult={afterToolResult}
             assistantUiLane={lane}
             emptyLabel="Tools may run before any reply text appears."
           />
@@ -1260,7 +1667,8 @@ export function LiveBlockView({
           streamTextRole={b.streamTextRole}
           replyBubbleClass={replyBubbleClass}
           emptyLabel="Tools may run before any reply text appears."
-          streaming={streamActive}
+          wireStreaming={streamActive}
+          caretVisible={streamActive}
         />
       );
     }
@@ -1280,11 +1688,13 @@ export function LiveBlockView({
         return (
           <AssistantSegmentedBody
             segments={streamSegs}
-            streaming={false}
+            wireStreaming={false}
             replyBubbleClass={replyBubbleClass}
             contentBubbleClass={replyBubbleClass}
+            afterToolResult={afterToolResult}
             assistantUiLane={lane}
             emptyLabel=""
+            persistedReasoningElapsedMs={persistedReasoningMs}
           />
         );
       }
@@ -1299,7 +1709,13 @@ export function LiveBlockView({
           </div>
         );
       }
-      return <ReasoningStreamPeek text={b.text} streaming={false} />;
+      return (
+        <ReasoningStreamPeek
+          text={b.text}
+          streaming={false}
+          reasoningElapsedMs={persistedReasoningMs}
+        />
+      );
     }
 
     if (isModel && !streamActive && lane === "reply") {
@@ -1307,11 +1723,13 @@ export function LiveBlockView({
         return (
           <AssistantSegmentedBody
             segments={streamSegs}
-            streaming={false}
+            wireStreaming={false}
             replyBubbleClass={replyBubbleClass}
             contentBubbleClass={replyBubbleClass}
+            afterToolResult={afterToolResult}
             assistantUiLane={lane}
             emptyLabel=""
+            persistedReasoningElapsedMs={persistedReasoningMs}
           />
         );
       }
@@ -1332,15 +1750,23 @@ export function LiveBlockView({
         return (
           <AssistantSegmentedBody
             segments={streamSegs}
-            streaming={false}
+            wireStreaming={false}
             replyBubbleClass={replyBubbleClass}
             contentBubbleClass={replyBubbleClass}
+            afterToolResult={afterToolResult}
             assistantUiLane={lane}
             emptyLabel=""
+            persistedReasoningElapsedMs={persistedReasoningMs}
           />
         );
       }
-      return <ReasoningStreamPeek text={b.text} streaming={false} />;
+      return (
+        <ReasoningStreamPeek
+          text={b.text}
+          streaming={false}
+          reasoningElapsedMs={persistedReasoningMs}
+        />
+      );
     }
 
     if (streamActive) {
@@ -1348,9 +1774,11 @@ export function LiveBlockView({
         return (
           <AssistantSegmentedBody
             segments={streamSegs}
-            streaming={streamActive}
+            wireStreaming={streamActive}
+            caretVisible={streamCaretActive}
             replyBubbleClass={replyBubbleClass}
             contentBubbleClass={replyBubbleClass}
+            afterToolResult={afterToolResult}
             assistantUiLane={lane}
             emptyLabel="Waiting for the model…"
           />
@@ -1362,7 +1790,8 @@ export function LiveBlockView({
           streamTextRole={b.streamTextRole}
           replyBubbleClass={replyBubbleClass}
           emptyLabel="Waiting for the model…"
-          streaming={streamActive}
+          wireStreaming={streamActive}
+          caretVisible={streamCaretActive}
         />
       );
     }
@@ -1371,11 +1800,13 @@ export function LiveBlockView({
       return (
         <AssistantSegmentedBody
           segments={streamSegs}
-          streaming={false}
+          wireStreaming={false}
           replyBubbleClass={replyBubbleClass}
           contentBubbleClass={replyBubbleClass}
+          afterToolResult={afterToolResult}
           assistantUiLane={lane}
           emptyLabel=""
+          persistedReasoningElapsedMs={persistedReasoningMs}
         />
       );
     }

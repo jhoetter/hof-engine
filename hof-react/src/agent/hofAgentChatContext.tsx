@@ -30,6 +30,7 @@ import {
   collectThreadAttachments,
   compactBlocksForHistory,
   coerceRunId,
+  finalizeLiveBlocksAfterUserStop,
   mergePendingIdLists,
   mutationPendingIdsFromBlocks,
   newId,
@@ -91,6 +92,11 @@ export type HofAgentChatContextValue = {
   /** Abort the in-flight ``agent_chat`` or ``agent_resume_mutations`` stream. */
   stop: () => void;
   conversationEmpty: boolean;
+  /**
+   * Wall-clock start of the current “thinking” episode (model round), for live timers.
+   * Reset on ``run_start`` / ``resume_start`` / ``phase: model``; cleared when the request ends.
+   */
+  thinkingEpisodeStartedAtMs: number | null;
 };
 
 const HofAgentChatContext = createContext<HofAgentChatContextValue | null>(
@@ -121,6 +127,13 @@ export function HofAgentChatProvider({
   const [liveBlocks, setLiveBlocks] = useState<LiveBlock[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [thinkingEpisodeStartedAtMs, setThinkingEpisodeStartedAtMs] =
+    useState<number | null>(null);
+  const thinkingEpisodeStartedAtRef = useRef<number | null>(null);
+  const updateThinkingEpisodeStart = useCallback((ms: number | null) => {
+    thinkingEpisodeStartedAtRef.current = ms;
+    setThinkingEpisodeStartedAtMs(ms);
+  }, []);
   const [attachmentQueue, setAttachmentQueue] = useState<AgentAttachment[]>(
     [],
   );
@@ -322,6 +335,7 @@ export function HofAgentChatProvider({
       abortRef.current?.abort();
       abortRef.current = new AbortController();
       setBusy(true);
+      updateThinkingEpisodeStart(Date.now());
       liveBlocksRef.current = [];
       setLiveBlocks([]);
       currentAgentRunIdRef.current = "";
@@ -354,9 +368,13 @@ export function HofAgentChatProvider({
               currentAgentRunIdRef.current = coerceRunId(ev.run_id);
               setApprovalBarrier(null);
               setApprovalDecisions({});
+              updateThinkingEpisodeStart(Date.now());
             }
             if (typ === "phase") {
               const ph = typeof ev.phase === "string" ? ev.phase : "";
+              if (ph === "model") {
+                updateThinkingEpisodeStart(Date.now());
+              }
               if (ph === "model" || ph === "summary") {
                 assistantStreamPhaseRef.current = ph;
               }
@@ -410,8 +428,13 @@ export function HofAgentChatProvider({
                   : ev;
             }
             setLiveBlocks((prev) => {
+              const et = typeof evForBlocks.type === "string" ? evForBlocks.type : "";
               const next = applyStreamEventWithDedupe(prev, evForBlocks, {
                 assistantStreamPhase: assistantStreamPhaseRef.current,
+                thinkingEpisodeStartedAtMs: thinkingEpisodeStartedAtRef.current,
+                ...(et === "assistant_done"
+                  ? { assistantDoneClockMs: Date.now() }
+                  : {}),
               });
               liveBlocksRef.current = next;
               return next;
@@ -470,6 +493,15 @@ export function HofAgentChatProvider({
           return;
         }
         if (e instanceof Error && e.name === "AbortError") {
+          const raw = liveBlocksRef.current;
+          if (raw.length > 0) {
+            const frozen = finalizeLiveBlocksAfterUserStop(
+              structuredClone(raw),
+            );
+            if (frozen.length > 0) {
+              flushLiveToThread(structuredClone(frozen));
+            }
+          }
           liveBlocksRef.current = [];
           setLiveBlocks([]);
           return;
@@ -487,11 +519,18 @@ export function HofAgentChatProvider({
       } finally {
         if (myId === reqIdRef.current) {
           setBusy(false);
+          updateThinkingEpisodeStart(null);
           sendingRef.current = false;
         }
       }
     },
-    [flushLiveToThread, prepareAgentChatRequest, threadToApiMessages],
+    [
+      flushLiveToThread,
+      finalizeLiveBlocksAfterUserStop,
+      prepareAgentChatRequest,
+      threadToApiMessages,
+      updateThinkingEpisodeStart,
+    ],
   );
 
   const runResume = useCallback(async () => {
@@ -510,6 +549,7 @@ export function HofAgentChatProvider({
     abortRef.current?.abort();
     abortRef.current = new AbortController();
     setBusy(true);
+    updateThinkingEpisodeStart(Date.now());
     liveBlocksRef.current = [];
     setLiveBlocks([]);
     mutationPendingIdsThisRunRef.current = [];
@@ -537,16 +577,25 @@ export function HofAgentChatProvider({
             const rtyp = typeof ev.type === "string" ? ev.type : "";
             if (rtyp === "resume_start") {
               assistantStreamPhaseRef.current = null;
+              updateThinkingEpisodeStart(Date.now());
             }
             if (rtyp === "phase") {
               const ph = typeof ev.phase === "string" ? ev.phase : "";
+              if (ph === "model") {
+                updateThinkingEpisodeStart(Date.now());
+              }
               if (ph === "model" || ph === "summary") {
                 assistantStreamPhaseRef.current = ph;
               }
             }
             setLiveBlocks((prev) => {
+              const rt = typeof ev.type === "string" ? ev.type : "";
               const next = applyStreamEventWithDedupe(prev, ev, {
                 assistantStreamPhase: assistantStreamPhaseRef.current,
+                thinkingEpisodeStartedAtMs: thinkingEpisodeStartedAtRef.current,
+                ...(rt === "assistant_done"
+                  ? { assistantDoneClockMs: Date.now() }
+                  : {}),
               });
               liveBlocksRef.current = next;
               return next;
@@ -578,6 +627,15 @@ export function HofAgentChatProvider({
         return;
       }
       if (e instanceof Error && e.name === "AbortError") {
+        const raw = liveBlocksRef.current;
+        if (raw.length > 0) {
+          const frozen = finalizeLiveBlocksAfterUserStop(
+            structuredClone(raw),
+          );
+          if (frozen.length > 0) {
+            flushLiveToThread(structuredClone(frozen));
+          }
+        }
         liveBlocksRef.current = [];
         setLiveBlocks([]);
         return;
@@ -595,13 +653,16 @@ export function HofAgentChatProvider({
     } finally {
       if (myId === reqIdRef.current) {
         setBusy(false);
+        updateThinkingEpisodeStart(null);
       }
     }
   }, [
     approvalBarrier,
     approvalDecisions,
     flushLiveToThread,
+    finalizeLiveBlocksAfterUserStop,
     prepareAgentResumeRequest,
+    updateThinkingEpisodeStart,
   ]);
 
   runResumeRef.current = runResume;
@@ -714,6 +775,7 @@ export function HofAgentChatProvider({
     }
     sendingRef.current = true;
     setBusy(true);
+    updateThinkingEpisodeStart(Date.now());
     setInput("");
     abortRef.current?.abort();
     const baseThread = threadRef.current;
@@ -736,7 +798,15 @@ export function HofAgentChatProvider({
     setThread(nextThread);
     setAttachmentQueue([]);
     void runAgent(nextThread);
-  }, [approvalBarrier, attachmentQueue, busy, input, runAgent, uploadBusy]);
+  }, [
+    approvalBarrier,
+    attachmentQueue,
+    busy,
+    input,
+    runAgent,
+    uploadBusy,
+    updateThinkingEpisodeStart,
+  ]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -765,6 +835,7 @@ export function HofAgentChatProvider({
       send,
       stop,
       conversationEmpty,
+      thinkingEpisodeStartedAtMs,
     }),
     [
       welcomeName,
@@ -782,6 +853,7 @@ export function HofAgentChatProvider({
       send,
       stop,
       conversationEmpty,
+      thinkingEpisodeStartedAtMs,
     ],
   );
 

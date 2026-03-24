@@ -39,6 +39,9 @@ def discover_all(project_root: Path, dir_overrides: dict[str, str] | None = None
             continue
         _import_directory(target, dirname)
 
+    # Re-register after app code so ``registry.clear()`` in tests still repopulates builtins.
+    importlib.reload(importlib.import_module("hof.agent.builtin_tools"))
+
 
 def _import_directory(directory: Path, package_prefix: str) -> None:
     """Recursively import all .py files in a directory."""

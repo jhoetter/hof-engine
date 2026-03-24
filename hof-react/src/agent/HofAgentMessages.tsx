@@ -9,6 +9,7 @@ import {
   CHAT_USER_BUBBLE_CLASS,
   userMessageDisplayText,
 } from "./hofAgentChatModel";
+import type { ReactNode } from "react";
 import { useHofAgentChat } from "./hofAgentChatContext";
 
 export type HofAgentMessagesProps = {
@@ -16,11 +17,17 @@ export type HofAgentMessagesProps = {
   className?: string;
   /** Inner content column (padding, max-width). */
   contentClassName?: string;
+  /**
+   * Shown under the welcome line when the thread is empty (e.g. {@link HofAgentComposer})
+   * so the input sits with the greeting instead of a distant footer.
+   */
+  emptyStateFooter?: ReactNode;
 };
 
 export function HofAgentMessages({
   className = "min-h-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]",
   contentClassName = "mx-auto flex min-h-full w-full flex-col px-5 py-6 sm:px-6 sm:py-8",
+  emptyStateFooter,
 }: HofAgentMessagesProps) {
   const {
     welcomeName,
@@ -122,15 +129,14 @@ export function HofAgentMessages({
         <div
           className={`${contentClassName} flex min-h-0 flex-1 flex-col justify-center !py-0`.trim()}
         >
-          <header className="flex flex-col items-center text-center font-sans">
-            <p className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
+          <div className="flex w-full flex-col items-center gap-4 font-sans">
+            <p className="text-center text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
               Welcome, {welcomeName}
             </p>
-            <p className="mt-2 max-w-sm text-[13px] leading-relaxed text-secondary">
-              This is your assistant inbox. New replies show up here. Use the
-              field below to write a message or attach a PDF.
-            </p>
-          </header>
+            {emptyStateFooter ? (
+              <div className="w-full shrink-0">{emptyStateFooter}</div>
+            ) : null}
+          </div>
         </div>
       ) : (
         <div className={contentClassName}>

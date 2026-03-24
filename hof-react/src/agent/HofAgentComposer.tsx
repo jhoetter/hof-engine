@@ -18,8 +18,7 @@ export function HofAgentComposer({
   rowClassName = "flex items-stretch gap-1.5 sm:gap-2",
   /** One surface + outer border; inner controls stay flush (no nested white-on-gray band). */
   inputShellClassName = "rounded-xl border border-border bg-background p-1 sm:p-1.5",
-  disclaimerClassName =
-    "mt-2.5 mb-3 text-center text-[11px] leading-snug text-tertiary",
+  disclaimerClassName = "mt-2.5 mb-3 text-center text-[11px] leading-snug text-tertiary",
 }: HofAgentComposerProps) {
   const {
     input,
@@ -33,6 +32,7 @@ export function HofAgentComposer({
     uploadErr,
     fileInputRef,
     onPickFiles,
+    conversationEmpty,
   } = useHofAgentChat();
 
   const composerRow = (
@@ -124,10 +124,11 @@ export function HofAgentComposer({
         </p>
       ) : null}
       <div className={inputShellClassName}>{composerRow}</div>
-      <p className={disclaimerClassName}>
-        The assistant can make mistakes. Data changes only run after you approve
-        them.
-      </p>
+      {!conversationEmpty ? (
+        <p className={disclaimerClassName}>
+          AI can make mistakes. Please review the output carefully.
+        </p>
+      ) : null}
     </div>
   );
 }

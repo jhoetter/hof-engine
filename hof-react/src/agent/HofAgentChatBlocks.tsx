@@ -37,7 +37,6 @@ import {
   showProposedActionsLabel,
   toolArgumentsAreEffectivelyEmpty,
   toolCallCliLine,
-  toolGroupSummaryLine,
   toolResultUiStatus,
   mergeAdjacentContentSegments,
   mergeAdjacentReasoningSegments,
@@ -309,10 +308,6 @@ export function ToolGroupCard({
 }) {
   const title = humanizeToolName(call.name);
   const line = toolCallCliLine(call);
-  const summaryHint: string | null =
-    mutation && mutationOutcome !== undefined
-      ? `${title} · ${mutationOutcome ? "Approved" : "Rejected"}`
-      : toolGroupSummaryLine(call, mutation, result);
   const cmd = mutation
     ? mutation.cli_line || mutation.arguments_preview || ""
     : "";
@@ -374,16 +369,6 @@ export function ToolGroupCard({
               >
                 Confirmation
               </span>
-            ) : null}
-            {summaryHint ? (
-              <p className="mt-0.5 line-clamp-2 text-[11px] text-secondary">
-                {summaryHint}
-              </p>
-            ) : null}
-            {call.internal_rationale ? (
-              <p className="mt-0.5 line-clamp-2 text-[10px] text-tertiary">
-                {call.internal_rationale}
-              </p>
             ) : null}
           </div>
           {mutation ? (
@@ -1439,15 +1424,11 @@ export function LiveBlockView({
   }
   if (b.kind === "tool_call") {
     const title = humanizeToolName(b.name);
-    const line = toolCallCliLine(b);
     return (
-      <div className={`${AGENT_CHAT_COLUMN_CLASS} space-y-1`}>
-        <div className="text-[11px] font-medium text-foreground">{title}</div>
-        <ToolTerminalCommandRow
-          cliLine={line}
-          argumentsStr={b.arguments}
-          borderBottom={false}
-        />
+      <div className={`${AGENT_CHAT_COLUMN_CLASS}`}>
+        <div className="rounded-lg border border-border bg-surface/40 px-3 py-2.5 text-[12px] leading-snug">
+          <span className="font-medium text-foreground">{title}</span>
+        </div>
       </div>
     );
   }

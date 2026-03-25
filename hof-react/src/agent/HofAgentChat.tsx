@@ -3,6 +3,7 @@
 import { HofAgentComposer } from "./HofAgentComposer";
 import { HofAgentMessages } from "./HofAgentMessages";
 import { HofAgentPendingApprovalBar } from "./HofAgentPendingApprovalBar";
+import { HofAgentProviderWaitBanner } from "./HofAgentProviderWaitBanner";
 import {
   HofAgentChatProvider,
   type HofAgentChatProps,
@@ -30,6 +31,7 @@ export function HofAgentChat({
         className={`hof-agent flex min-h-0 min-w-0 w-full flex-1 flex-col font-sans ${className}`.trim()}
       >
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <HofAgentProviderWaitBanner />
           <HofAgentMessages />
         </div>
         <HofAgentPendingApprovalBar />

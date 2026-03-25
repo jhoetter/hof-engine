@@ -88,6 +88,52 @@ export type HofAgentChatPresignResult = {
   object_key: string;
 };
 
+/** Latest ``provider_wait`` line from the agent NDJSON stream (rate limit / transient backoff). */
+export type ProviderWaitNotice = {
+  /** Server-reported wait duration (for reference). */
+  seconds: number;
+  reason: string;
+  /** Wall-clock deadline for a live client-side countdown. */
+  deadlineMs: number;
+};
+
+function updateProviderWaitFromStreamType(
+  typ: string,
+  ev: HofStreamEvent,
+  setNotice: Dispatch<SetStateAction<ProviderWaitNotice | null>>,
+): void {
+  if (typ === "error" || typ === "final" || typ === "cancelled") {
+    setNotice(null);
+    return;
+  }
+  if (typ === "provider_wait") {
+    const raw = (ev as { seconds?: unknown }).seconds;
+    const sec =
+      typeof raw === "number" && Number.isFinite(raw)
+        ? Math.max(0, raw)
+        : 0;
+    const rounded = Math.max(1, Math.round(sec));
+    const reasonRaw = (ev as { reason?: unknown }).reason;
+    const reason =
+      typeof reasonRaw === "string" && reasonRaw.trim()
+        ? reasonRaw.trim()
+        : "transient_error";
+    setNotice({
+      seconds: sec,
+      reason,
+      deadlineMs: Date.now() + rounded * 1000,
+    });
+    return;
+  }
+  if (
+    typ === "assistant_delta" ||
+    typ === "reasoning_delta" ||
+    typ === "tool_call"
+  ) {
+    setNotice(null);
+  }
+}
+
 export type HofAgentChatProps = {
   welcomeName: string;
   presignUpload: (
@@ -146,6 +192,8 @@ export type HofAgentChatContextValue = {
    * Reset on ``run_start`` / ``resume_start`` / ``phase: model``; cleared when the request ends.
    */
   thinkingEpisodeStartedAtMs: number | null;
+  /** Set when the stream emits ``provider_wait`` (API backoff); cleared when tokens or tools resume. */
+  providerWaitNotice: ProviderWaitNotice | null;
   /**
    * After Approve/Reject on every pending mutation, call to run ``agent_resume_mutations``
    * (replaces the previous auto-submit timer).
@@ -206,6 +254,8 @@ export function HofAgentChatProvider({
     useState<InboxReviewBarrier | null>(null);
   const [inboxPollWaiting, setInboxPollWaiting] = useState(false);
   const [inboxResumeError, setInboxResumeError] = useState<string | null>(null);
+  const [providerWaitNotice, setProviderWaitNotice] =
+    useState<ProviderWaitNotice | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const threadRef = useRef<ThreadItem[]>([]);
   const sendingRef = useRef(false);
@@ -488,8 +538,10 @@ export function HofAgentChatProvider({
               setApprovalDecisions({});
               setInboxReviewBarrier(null);
               setInboxResumeError(null);
+              setProviderWaitNotice(null);
               updateThinkingEpisodeStart(Date.now());
             }
+            updateProviderWaitFromStreamType(typ, ev, setProviderWaitNotice);
             if (typ === "phase") {
               const ph = typeof ev.phase === "string" ? ev.phase : "";
               if (ph === "model") {
@@ -667,6 +719,7 @@ export function HofAgentChatProvider({
           setBusy(false);
           updateThinkingEpisodeStart(null);
           sendingRef.current = false;
+          setProviderWaitNotice(null);
         }
       }
     },
@@ -730,8 +783,10 @@ export function HofAgentChatProvider({
               mutationPendingIdsThisRunRef.current = [];
               setInboxReviewBarrier(null);
               setInboxResumeError(null);
+              setProviderWaitNotice(null);
               updateThinkingEpisodeStart(Date.now());
             }
+            updateProviderWaitFromStreamType(rtyp, ev, setProviderWaitNotice);
             if (rtyp === "phase") {
               const ph = typeof ev.phase === "string" ? ev.phase : "";
               if (ph === "model") {
@@ -923,6 +978,7 @@ export function HofAgentChatProvider({
       if (myId === reqIdRef.current) {
         setBusy(false);
         updateThinkingEpisodeStart(null);
+        setProviderWaitNotice(null);
       }
     }
   }, [
@@ -976,8 +1032,10 @@ export function HofAgentChatProvider({
               mutationPendingIdsThisRunRef.current = [];
               setInboxReviewBarrier(null);
               setInboxResumeError(null);
+              setProviderWaitNotice(null);
               updateThinkingEpisodeStart(Date.now());
             }
+            updateProviderWaitFromStreamType(rtyp, ev, setProviderWaitNotice);
             if (rtyp === "phase") {
               const ph = typeof ev.phase === "string" ? ev.phase : "";
               if (ph === "model") {
@@ -1163,6 +1221,7 @@ export function HofAgentChatProvider({
         if (myId === reqIdRef.current) {
           setBusy(false);
           updateThinkingEpisodeStart(null);
+          setProviderWaitNotice(null);
         }
       }
     },
@@ -1360,6 +1419,7 @@ export function HofAgentChatProvider({
       stop,
       conversationEmpty,
       thinkingEpisodeStartedAtMs,
+      providerWaitNotice,
       confirmPendingMutations,
     }),
     [
@@ -1382,6 +1442,7 @@ export function HofAgentChatProvider({
       stop,
       conversationEmpty,
       thinkingEpisodeStartedAtMs,
+      providerWaitNotice,
       confirmPendingMutations,
     ],
   );

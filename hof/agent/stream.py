@@ -47,6 +47,220 @@ from hof.config import get_config
 logger = logging.getLogger(__name__)
 
 
+def _provider_wait_wire(ev: Any) -> dict[str, Any] | None:
+    """Map llm-markdown :class:`~llm_markdown.agent_stream.AgentRateLimitWait` to NDJSON."""
+    from llm_markdown.agent_stream import AgentRateLimitWait
+
+    if isinstance(ev, AgentRateLimitWait):
+        return {
+            "type": "provider_wait",
+            "seconds": float(ev.seconds),
+            "reason": ev.reason,
+        }
+    return None
+
+
+def _resolve_agent_engine_stream_max_attempts() -> int:
+    """How many times Hof may run ``stream_agent_turn`` for one model step (after llm-markdown retries)."""
+    raw = os.environ.get("HOF_AGENT_ENGINE_STREAM_ATTEMPTS", "").strip()
+    if not raw:
+        n = 3
+    else:
+        try:
+            n = int(raw, 10)
+        except ValueError:
+            n = 3
+    return max(1, min(10, n))
+
+
+class _AgentStreamTurnExhaustedError(Exception):
+    """``stream_agent_turn`` failed with a retryable provider error after all engine-level attempts."""
+
+    __slots__ = ("attempts", "cause")
+
+    def __init__(self, cause: BaseException, *, attempts: int) -> None:
+        self.cause = cause
+        self.attempts = attempts
+        super().__init__(str(cause))
+
+
+def _provider_error_eligible_for_engine_stream_retry(exc: BaseException) -> bool:
+    from llm_markdown.providers.base import ProviderError
+    from llm_markdown.providers.failure_info import ProviderFailureCategory
+
+    if not isinstance(exc, ProviderError):
+        return False
+    if exc.failure is not None:
+        return exc.failure.category in {
+            ProviderFailureCategory.RATE_LIMIT,
+            ProviderFailureCategory.OVERLOADED,
+            ProviderFailureCategory.SERVER,
+            ProviderFailureCategory.TIMEOUT,
+        }
+    return bool(exc.retryable)
+
+
+def _engine_stream_retry_sleep_seconds(exc: ProviderError) -> float:
+    from llm_markdown.providers.failure_info import ProviderFailureCategory
+
+    f = exc.failure
+    raw = (
+        float(f.retry_after_seconds)
+        if f is not None and f.retry_after_seconds is not None
+        else None
+    )
+    if raw is not None and raw > 0:
+        return min(120.0, max(0.5, raw))
+    if f is not None and f.category == ProviderFailureCategory.TIMEOUT:
+        return 3.0
+    return 5.0
+
+
+def _engine_stream_wait_reason(exc: ProviderError) -> str:
+    from llm_markdown.providers.failure_info import ProviderFailureCategory
+
+    if exc.failure is not None and exc.failure.category == ProviderFailureCategory.RATE_LIMIT:
+        return "rate_limit"
+    return "transient_error"
+
+
+def _user_message_after_engine_retries_exhausted(
+    f: Any,
+    *,
+    attempts: int,
+) -> str:
+    """First-person copy after all Hof engine-level stream retries failed (no raw provider payload)."""
+    times_word = "time" if attempts == 1 else "times"
+    base = (
+        "I hit a usage limit (too many requests or tokens in a short window). "
+        f"I waited and tried again automatically {attempts} {times_word}, then had to stop."
+    )
+    ra = getattr(f, "retry_after_seconds", None)
+    if ra is not None and isinstance(ra, (int, float)) and ra > 0:
+        secs = max(1, int(round(float(ra))))
+        base += f" Waiting about {secs} more seconds before you send your message again may help."
+    else:
+        base += " Please wait a short while, then send your message again."
+    return base
+
+
+def _user_message_transient_limit_without_exhausted_retries(f: Any) -> str:
+    """First-person copy when a limit error is shown without engine-exhausted wording (e.g. partial stream)."""
+    from llm_markdown.providers.failure_info import ProviderFailureCategory
+
+    cat = getattr(f, "category", None)
+    ra = getattr(f, "retry_after_seconds", None)
+    if cat == ProviderFailureCategory.RATE_LIMIT:
+        msg = (
+            "I hit a usage limit before I could finish this step. "
+            "Please wait a short moment and try again."
+        )
+    elif cat == ProviderFailureCategory.TIMEOUT:
+        msg = (
+            "The request timed out before I could finish this step. "
+            "Please try again in a moment."
+        )
+    else:
+        msg = (
+            "The AI service was temporarily unavailable before I could finish this step. "
+            "Please try again in a moment."
+        )
+    if ra is not None and isinstance(ra, (int, float)) and ra > 0:
+        secs = max(1, int(round(float(ra))))
+        msg += f" A delay of about {secs}s may help."
+    return msg
+
+
+def _iter_stream_agent_turn_with_engine_retries(
+    *st_args: Any,
+    **st_kwargs: Any,
+) -> Iterator[Any]:
+    """Run ``stream_agent_turn`` with up to N outer attempts on retryable provider limits.
+
+    Yields the same event objects as ``stream_agent_turn``. Emits :class:`AgentRateLimitWait`
+    and sleeps before each retry so clients can show a wait notice.
+    """
+    from llm_markdown.agent_stream import (
+        AgentContentDelta,
+        AgentRateLimitWait,
+        AgentReasoningDelta,
+        AgentToolCallDelta,
+    )
+    from llm_markdown.providers.base import ProviderError
+
+    max_attempts = _resolve_agent_engine_stream_max_attempts()
+    for attempt in range(max_attempts):
+        # Do not treat AgentSegmentStart as progress: agent_turn injects it before the
+        # provider opens the stream, so a failure on stream open would wrongly skip retries.
+        emitted_meaningful = False
+        try:
+            for ev in stream_agent_turn(*st_args, **st_kwargs):
+                if isinstance(
+                    ev,
+                    (AgentContentDelta, AgentReasoningDelta, AgentToolCallDelta),
+                ):
+                    emitted_meaningful = True
+                yield ev
+            return
+        except ProviderError as exc:
+            if emitted_meaningful:
+                raise
+            if not _provider_error_eligible_for_engine_stream_retry(exc):
+                raise
+            if attempt + 1 >= max_attempts:
+                raise _AgentStreamTurnExhaustedError(exc, attempts=max_attempts) from exc
+            wait = _engine_stream_retry_sleep_seconds(exc)
+            yield AgentRateLimitWait(
+                seconds=wait,
+                reason=_engine_stream_wait_reason(exc),  # type: ignore[arg-type]
+            )
+            time.sleep(wait)
+
+
+def _agent_stream_error_event(
+    exc: BaseException,
+    *,
+    engine_turn_retries_exhausted: bool = False,
+    engine_retry_max_attempts: int | None = None,
+) -> dict[str, Any]:
+    """Map exceptions to NDJSON ``error``; use structured fields when :class:`ProviderError` carries failure info."""
+    from llm_markdown.providers.base import ProviderError
+    from llm_markdown.providers.failure_info import ProviderFailureCategory
+
+    exhausted_categories = {
+        ProviderFailureCategory.RATE_LIMIT,
+        ProviderFailureCategory.OVERLOADED,
+        ProviderFailureCategory.SERVER,
+        ProviderFailureCategory.TIMEOUT,
+    }
+
+    if isinstance(exc, ProviderError) and exc.failure is not None:
+        f = exc.failure
+        attempts = (
+            engine_retry_max_attempts
+            if engine_retry_max_attempts is not None
+            else _resolve_agent_engine_stream_max_attempts()
+        )
+        if engine_turn_retries_exhausted and f.category in exhausted_categories:
+            detail = _user_message_after_engine_retries_exhausted(f, attempts=attempts)
+        elif f.category in exhausted_categories:
+            detail = _user_message_transient_limit_without_exhausted_retries(f)
+        else:
+            detail = f.public_message
+        out: dict[str, Any] = {
+            "type": "error",
+            "detail": detail,
+            "error_category": f.category.value,
+            "retryable": False if engine_turn_retries_exhausted else bool(exc.retryable),
+        }
+        if f.http_status is not None:
+            out["http_status"] = f.http_status
+        if f.retry_after_seconds is not None:
+            out["retry_after_seconds"] = f.retry_after_seconds
+        return out
+    return {"type": "error", "detail": str(exc)}
+
+
 def _mutation_preview_payload(
     name: str,
     arguments_json: str,
@@ -593,7 +807,7 @@ def _stream_confirmation_summary_for_ui(
     finish_reason: str | None = None
     last_usage: dict[str, Any] | None = None
     try:
-        for ev in stream_agent_turn(
+        for ev in _iter_stream_agent_turn_with_engine_retries(
             provider,
             lm_backend,
             msgs,
@@ -604,6 +818,10 @@ def _stream_confirmation_summary_for_ui(
             reasoning=reasoning,
             **_anthropic_stream_turn_extras(lm_backend, reasoning),
         ):
+            pw = _provider_wait_wire(ev)
+            if pw is not None:
+                yield pw
+                continue
             if isinstance(ev, AgentContentDelta):
                 assistant_text += ev.text
                 yield {"type": "assistant_delta", "text": ev.text}
@@ -612,6 +830,13 @@ def _stream_confirmation_summary_for_ui(
             elif isinstance(ev, AgentMessageFinish):
                 finish_reason = ev.finish_reason
                 last_usage = ev.usage
+    except _AgentStreamTurnExhaustedError:
+        logger.warning(
+            "confirmation summary model call failed after engine stream retries, using static fallback",
+        )
+        yield {"type": "assistant_delta", "text": _CONFIRMATION_SUMMARY_STATIC_FALLBACK}
+        yield {"type": "assistant_done", "finish_reason": "stop"}
+        return
     except Exception as exc:
         logger.warning("confirmation summary model call failed: %s", exc)
         yield {"type": "assistant_delta", "text": _CONFIRMATION_SUMMARY_STATIC_FALLBACK}
@@ -736,7 +961,7 @@ def _stream_inbox_review_summary_for_ui(
         last_usage: dict[str, Any] | None = None
 
         try:
-            for ev in stream_agent_turn(
+            for ev in _iter_stream_agent_turn_with_engine_retries(
                 provider,
                 lm_backend,
                 oa_messages,
@@ -747,6 +972,10 @@ def _stream_inbox_review_summary_for_ui(
                 reasoning=reasoning,
                 **_anthropic_stream_turn_extras(lm_backend, reasoning),
             ):
+                pw = _provider_wait_wire(ev)
+                if pw is not None:
+                    yield pw
+                    continue
                 if isinstance(ev, AgentSegmentStart):
                     yield {"type": "segment_start", "segment": ev.segment}
                 elif isinstance(ev, AgentContentDelta):
@@ -767,6 +996,15 @@ def _stream_inbox_review_summary_for_ui(
                 elif isinstance(ev, AgentMessageFinish):
                     finish_reason = ev.finish_reason
                     last_usage = ev.usage
+        except _AgentStreamTurnExhaustedError:
+            logger.warning(
+                "inbox review summary model call failed after engine stream retries, using static fallback",
+            )
+            fb = _inbox_review_static_message_from_wires(wires)
+            yield {"type": "assistant_delta", "text": fb}
+            yield {"type": "assistant_done", "finish_reason": "stop"}
+            oa_messages.append({"role": "assistant", "content": fb})
+            return
         except Exception as exc:
             logger.warning("inbox review summary model call failed: %s", exc)
             fb = _inbox_review_static_message_from_wires(wires)
@@ -1004,7 +1242,7 @@ def _run_agent_openai_loop(
             reasoning_chars = 0
             trace_parts: list[str] = []
 
-            for ev in stream_agent_turn(
+            for ev in _iter_stream_agent_turn_with_engine_retries(
                 provider,
                 lm_backend,
                 oa_messages,
@@ -1015,6 +1253,10 @@ def _run_agent_openai_loop(
                 reasoning=reasoning,
                 **_anthropic_stream_turn_extras(lm_backend, reasoning),
             ):
+                pw = _provider_wait_wire(ev)
+                if pw is not None:
+                    yield pw
+                    continue
                 if isinstance(ev, AgentSegmentStart):
                     if ev.segment == "reasoning":
                         n_segment_start_reasoning += 1
@@ -1301,6 +1543,21 @@ def _run_agent_openai_loop(
             return
 
         yield {"type": "error", "detail": f"Stopped after {max_rounds} model turns"}
+    except _AgentStreamTurnExhaustedError as wrap:
+        logger.exception("agent_openai_loop failed after engine stream retries")
+        _agent_stream_debug_append(
+            {
+                "kind": "stream_error",
+                "run_id": run_id,
+                "exc_type": type(wrap.cause).__name__,
+                "detail": str(wrap.cause)[:400],
+            },
+        )
+        yield _agent_stream_error_event(
+            wrap.cause,
+            engine_turn_retries_exhausted=True,
+            engine_retry_max_attempts=wrap.attempts,
+        )
     except Exception as exc:
         logger.exception("agent_openai_loop failed")
         _agent_stream_debug_append(
@@ -1311,7 +1568,7 @@ def _run_agent_openai_loop(
                 "detail": str(exc)[:400],
             },
         )
-        yield {"type": "error", "detail": str(exc)}
+        yield _agent_stream_error_event(exc)
 
 
 def _run_agent_chat_stream(

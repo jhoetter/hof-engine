@@ -9,9 +9,11 @@ export {
   useHofAgentChat,
   type HofAgentChatContextValue,
   type HofAgentChatProviderProps,
+  type ProviderWaitNotice,
 } from "./agent/hofAgentChatContext";
 export { HofAgentMessages, type HofAgentMessagesProps } from "./agent/HofAgentMessages";
 export { HofAgentPendingApprovalBar } from "./agent/HofAgentPendingApprovalBar";
+export { HofAgentProviderWaitBanner } from "./agent/HofAgentProviderWaitBanner";
 export { defaultPollInboxReviewWatch } from "./agent/hofAgentChatContext";
 export {
   HofAgentComposer,

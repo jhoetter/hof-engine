@@ -6,6 +6,8 @@ import importlib
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from llm_markdown.agent_stream import (
     AgentContentDelta,
     AgentMessageFinish,
@@ -25,7 +27,10 @@ from hof.agent.policy import (
 )
 from hof.agent.state import load_agent_run, save_agent_run
 from hof.agent.stream import (
+    _agent_stream_error_event,
+    _AgentStreamTurnExhaustedError,
     _append_client_messages,
+    _iter_stream_agent_turn_with_engine_retries,
     _mutation_preview_payload,
     collect_agent_chat_from_stream,
     default_normalize_attachments,
@@ -1115,3 +1120,206 @@ def test_two_mutations_one_turn_then_mixed_resume(monkeypatch) -> None:
     assert fin
     assert "Continued" in str(fin[0].get("reply") or "")
     assert stream_calls == [0, 1]
+
+
+def test_agent_stream_error_event_maps_provider_failure() -> None:
+    """Non-transient categories keep llm-markdown ``public_message`` on the wire."""
+    from llm_markdown.providers.base import ProviderError
+    from llm_markdown.providers.failure_info import ProviderFailure, ProviderFailureCategory
+
+    failure = ProviderFailure(
+        category=ProviderFailureCategory.BAD_REQUEST,
+        http_status=400,
+        retry_after_seconds=None,
+        public_message="Short user-facing message.",
+        technical_detail="x",
+    )
+    exc = ProviderError("anthropic", "long internal message", failure=failure, retryable=False)
+    d = _agent_stream_error_event(exc)
+    assert d["type"] == "error"
+    assert d["detail"] == "Short user-facing message."
+    assert d["error_category"] == "bad_request"
+    assert d["http_status"] == 400
+    assert d["retryable"] is False
+    assert "technical_detail" not in d
+
+
+def test_agent_stream_error_event_rate_limit_uses_first_person_copy() -> None:
+    from llm_markdown.providers.base import ProviderError
+    from llm_markdown.providers.failure_info import ProviderFailure, ProviderFailureCategory
+
+    failure = ProviderFailure(
+        category=ProviderFailureCategory.RATE_LIMIT,
+        http_status=429,
+        retry_after_seconds=16.0,
+        public_message="IGNORED llm-markdown copy",
+        technical_detail="x",
+    )
+    exc = ProviderError("anthropic", "internal", failure=failure, retryable=True)
+    d = _agent_stream_error_event(exc)
+    assert d["type"] == "error"
+    assert "I hit a usage limit" in d["detail"]
+    assert "IGNORED" not in d["detail"]
+    assert "16" in d["detail"]
+
+
+def test_agent_stream_error_event_after_engine_retries_exhausted() -> None:
+    from llm_markdown.providers.base import ProviderError
+    from llm_markdown.providers.failure_info import ProviderFailure, ProviderFailureCategory
+
+    failure = ProviderFailure(
+        category=ProviderFailureCategory.RATE_LIMIT,
+        http_status=429,
+        retry_after_seconds=12.0,
+        public_message="ignored for exhausted path",
+        technical_detail="x",
+    )
+    exc = ProviderError("anthropic", "internal", failure=failure, retryable=True)
+    d = _agent_stream_error_event(
+        exc,
+        engine_turn_retries_exhausted=True,
+        engine_retry_max_attempts=3,
+    )
+    assert d["type"] == "error"
+    assert "3 times" in d["detail"]
+    assert "had to stop" in d["detail"].lower()
+    assert "12" in d["detail"]
+    assert d["retryable"] is False
+    assert "technical_detail" not in d
+
+
+def test_iter_stream_agent_turn_retries_when_only_segment_start_before_error(
+    monkeypatch,
+) -> None:
+    """Agentic turns emit ``AgentSegmentStart`` before the provider opens the stream."""
+    from llm_markdown.agent_stream import (
+        AgentContentDelta,
+        AgentMessageFinish,
+        AgentRateLimitWait,
+        AgentSegmentStart,
+    )
+    from llm_markdown.providers.base import ProviderError
+    from llm_markdown.providers.failure_info import ProviderFailure, ProviderFailureCategory
+
+    monkeypatch.setattr("hof.agent.stream.time.sleep", lambda _s: None)
+    monkeypatch.setenv("HOF_AGENT_ENGINE_STREAM_ATTEMPTS", "2")
+
+    calls = {"n": 0}
+
+    def fake_turn(*_a, **_kw):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            yield AgentSegmentStart(segment="reasoning")
+            f = ProviderFailure(
+                category=ProviderFailureCategory.RATE_LIMIT,
+                http_status=429,
+                retry_after_seconds=0.01,
+                public_message="pm",
+                technical_detail="t",
+            )
+            raise ProviderError("p", "m", failure=f, retryable=True)
+        yield AgentContentDelta(text="ok")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    monkeypatch.setattr("hof.agent.stream.stream_agent_turn", fake_turn)
+    out = list(
+        _iter_stream_agent_turn_with_engine_retries(
+            None,
+            "openai",
+            [],
+            model="m",
+            tools=None,
+            tool_choice=None,
+        ),
+    )
+    assert calls["n"] == 2
+    assert any(isinstance(e, AgentRateLimitWait) for e in out)
+    assert any(
+        isinstance(e, AgentContentDelta) and e.text == "ok" for e in out
+    )
+
+
+def test_iter_stream_agent_turn_engine_retries_then_succeeds(monkeypatch) -> None:
+    from llm_markdown.agent_stream import (
+        AgentContentDelta,
+        AgentMessageFinish,
+        AgentRateLimitWait,
+    )
+    from llm_markdown.providers.base import ProviderError
+    from llm_markdown.providers.failure_info import ProviderFailure, ProviderFailureCategory
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("hof.agent.stream.time.sleep", lambda s: sleeps.append(float(s)))
+    monkeypatch.setenv("HOF_AGENT_ENGINE_STREAM_ATTEMPTS", "3")
+
+    calls = {"n": 0}
+
+    def fake_turn(*_a, **_kw):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            f = ProviderFailure(
+                category=ProviderFailureCategory.RATE_LIMIT,
+                http_status=429,
+                retry_after_seconds=0.05,
+                public_message="pm",
+                technical_detail="t",
+            )
+            raise ProviderError("p", "m", failure=f, retryable=True)
+        yield AgentContentDelta(text="ok")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    monkeypatch.setattr("hof.agent.stream.stream_agent_turn", fake_turn)
+    out = list(
+        _iter_stream_agent_turn_with_engine_retries(
+            None,
+            "openai",
+            [],
+            model="m",
+            tools=None,
+            tool_choice=None,
+        ),
+    )
+    waits = [e for e in out if isinstance(e, AgentRateLimitWait)]
+    assert len(waits) == 2
+    assert len(sleeps) == 2
+    assert any(isinstance(e, AgentContentDelta) for e in out)
+
+
+def test_iter_stream_agent_turn_engine_retries_exhausted(monkeypatch) -> None:
+    from llm_markdown.providers.base import ProviderError
+    from llm_markdown.providers.failure_info import ProviderFailure, ProviderFailureCategory
+
+    monkeypatch.setattr("hof.agent.stream.time.sleep", lambda _s: None)
+    monkeypatch.setenv("HOF_AGENT_ENGINE_STREAM_ATTEMPTS", "3")
+
+    def fake_turn(*_a, **_kw):
+        f = ProviderFailure(
+            category=ProviderFailureCategory.RATE_LIMIT,
+            http_status=429,
+            retry_after_seconds=0.01,
+            public_message="pm",
+            technical_detail="t",
+        )
+        raise ProviderError("p", "m", failure=f, retryable=True)
+
+    monkeypatch.setattr("hof.agent.stream.stream_agent_turn", fake_turn)
+    with pytest.raises(_AgentStreamTurnExhaustedError) as ei:
+        list(
+            _iter_stream_agent_turn_with_engine_retries(
+                None,
+                "openai",
+                [],
+                model="m",
+                tools=None,
+                tool_choice=None,
+            ),
+        )
+    assert ei.value.attempts == 3
+    assert isinstance(ei.value.cause, ProviderError)
+
+
+def test_agent_stream_error_event_plain_exception() -> None:
+    assert _agent_stream_error_event(ValueError("plain oops")) == {
+        "type": "error",
+        "detail": "plain oops",
+    }

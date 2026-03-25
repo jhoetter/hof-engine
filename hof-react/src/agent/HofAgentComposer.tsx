@@ -347,7 +347,32 @@ export function HofAgentComposer({
     fileInputRef,
     onPickFiles,
     conversationEmpty,
+    providerWaitNotice,
   } = useHofAgentChat();
+
+  const [providerWaitComposerTick, setProviderWaitComposerTick] = useState(0);
+  useEffect(() => {
+    if (!providerWaitNotice) {
+      return;
+    }
+    const id = window.setInterval(() => {
+      setProviderWaitComposerTick((t) => t + 1);
+    }, 400);
+    return () => window.clearInterval(id);
+  }, [providerWaitNotice]);
+
+  const providerWaitComposerHint = useMemo(() => {
+    if (!providerWaitNotice) {
+      return null;
+    }
+    const rem = Math.max(
+      0,
+      Math.ceil((providerWaitNotice.deadlineMs - Date.now()) / 1000),
+    );
+    return rem > 0
+      ? `Temporary issue reaching the AI service — retrying automatically in ${rem}s. Nothing for you to do.`
+      : "Temporary issue reaching the AI service — retrying now. Nothing for you to do.";
+  }, [providerWaitNotice, providerWaitComposerTick]); // tick drives countdown refresh
 
   const voiceCfg = voiceTranscriptionProp ?? {};
   const voiceFeatureEnabled = voiceCfg.enabled !== false;
@@ -612,6 +637,15 @@ export function HofAgentComposer({
         className="min-h-9 min-w-0 w-full resize-none overflow-y-auto rounded-md border-0 bg-transparent px-1 py-0.5 text-sm leading-snug text-foreground shadow-none placeholder:text-secondary outline-none ring-0 transition-[height] focus:outline-none focus:ring-0 disabled:opacity-60 read-only:opacity-100"
         style={{ maxHeight: textareaMaxHeightPx } satisfies CSSProperties}
       />
+      {providerWaitComposerHint ? (
+        <p
+          role="status"
+          aria-live="polite"
+          className="px-1 text-[11px] leading-snug text-tertiary"
+        >
+          {providerWaitComposerHint}
+        </p>
+      ) : null}
       {voiceFeatureEnabled && voiceError ? (
         <p className="px-1 text-[12px] text-[var(--color-destructive)]">
           {voiceError}

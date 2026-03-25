@@ -134,7 +134,16 @@ export type LiveBlock =
       run_id: string;
       watches: InboxReviewWatchWire[];
     }
-  | { kind: "error"; id: string; detail: string };
+  | {
+      kind: "error";
+      id: string;
+      detail: string;
+      errorCategory?: string;
+      retryAfterSeconds?: number;
+      retryable?: boolean;
+      technicalDetail?: string;
+      httpStatus?: number;
+    };
 
 export type ThreadItem =
   | {
@@ -915,7 +924,43 @@ export function applyStreamEvent(
     const ready = finalizeStreamingAssistantBeforeStructuredStep(
       withoutThinkingSkeleton(prev),
     );
-    return [...ready, { kind: "error", id: newId(), detail }];
+    const errorCategory =
+      typeof (ev as { error_category?: unknown }).error_category === "string"
+        ? String((ev as { error_category: string }).error_category).trim()
+        : undefined;
+    const rawRetry = (ev as { retry_after_seconds?: unknown })
+      .retry_after_seconds;
+    const retryAfterSeconds =
+      typeof rawRetry === "number" && Number.isFinite(rawRetry)
+        ? rawRetry
+        : undefined;
+    const rawHttp = (ev as { http_status?: unknown }).http_status;
+    const httpStatus =
+      typeof rawHttp === "number" && Number.isFinite(rawHttp)
+        ? rawHttp
+        : undefined;
+    const technicalDetail =
+      typeof (ev as { technical_detail?: unknown }).technical_detail ===
+      "string"
+        ? String((ev as { technical_detail: string }).technical_detail).trim()
+        : undefined;
+    const retryable =
+      typeof (ev as { retryable?: unknown }).retryable === "boolean"
+        ? (ev as { retryable: boolean }).retryable
+        : undefined;
+    return [
+      ...ready,
+      {
+        kind: "error",
+        id: newId(),
+        detail,
+        ...(errorCategory ? { errorCategory } : {}),
+        ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+        ...(httpStatus !== undefined ? { httpStatus } : {}),
+        ...(retryable !== undefined ? { retryable } : {}),
+        ...(technicalDetail ? { technicalDetail } : {}),
+      },
+    ];
   }
   // Terminal / control events — reply already streamed via assistant_*; do not add UI blocks.
   if (t === "final") {

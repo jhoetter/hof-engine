@@ -1820,9 +1820,31 @@ export function LiveBlockView({
   if (b.kind === "inbox_review_required") {
     return null;
   }
-  return (
-    <div className="text-[12px] text-[var(--color-destructive)]">
-      {b.detail}
-    </div>
-  );
+  if (b.kind === "error") {
+    const rate = b.errorCategory === "rate_limit";
+    const title =
+      rate
+        ? "Usage limit"
+        : b.errorCategory === "server" || b.errorCategory === "overloaded"
+          ? "Service temporarily unavailable"
+          : b.errorCategory === "timeout"
+            ? "Request timed out"
+            : b.errorCategory === "auth"
+              ? "Authentication issue"
+              : b.errorCategory === "bad_request"
+                ? "Request not accepted"
+                : "Something went wrong";
+    return (
+      <div className={`${AGENT_CHAT_COLUMN_CLASS}`}>
+        <div
+          role="alert"
+          className="rounded-lg border border-[color:color-mix(in_srgb,var(--color-destructive)_25%,var(--color-border))] bg-[color:color-mix(in_srgb,var(--color-destructive)_6%,transparent)] px-3 py-2.5 text-[12px] leading-snug"
+        >
+          <div className="font-medium text-foreground">{title}</div>
+          <p className="mt-1.5 text-secondary">{b.detail}</p>
+        </div>
+      </div>
+    );
+  }
+  return null;
 }

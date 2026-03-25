@@ -45,6 +45,31 @@ describe("applyStreamEvent streaming caret / structured steps", () => {
     expect(blocks.some((b) => b.kind === "tool_call")).toBe(true);
   });
 
+  it("tool_call maps display_title to displayTitle on the block", () => {
+    let blocks: LiveBlock[] = [];
+    blocks = applyStreamEvent(
+      blocks,
+      { type: "phase", phase: "model", round: 0 },
+      ctx,
+    );
+    blocks = applyStreamEvent(
+      blocks,
+      {
+        type: "tool_call",
+        name: "register_receipt_upload",
+        arguments: "{}",
+        cli_line: "hof fn register_receipt_upload",
+        display_title: "Uploading invoice_72.pdf",
+      },
+      ctx,
+    );
+    const tc = blocks.find((b) => b.kind === "tool_call");
+    expect(tc?.kind).toBe("tool_call");
+    if (tc?.kind === "tool_call") {
+      expect(tc.displayTitle).toBe("Uploading invoice_72.pdf");
+    }
+  });
+
   it("assistant_done still finalizes assistant after tool_call pre-close", () => {
     let blocks: LiveBlock[] = [];
     blocks = applyStreamEvent(

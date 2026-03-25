@@ -77,6 +77,8 @@ Without streamed reasoning, the observable tool chain is: `assistant_done` (`fin
 
 `@hof-engine/react` consumes `segment_start` and `reasoning_delta` / `assistant_delta` for ordered reasoning vs reply segments.
 
+**Tool row title (optional):** The model may include **`_display_title`** (short string) in the tool call **arguments JSON**. Hof **strips** it before validation/execution and from persisted assistant `tool_calls`, and emits optional **`display_title`** on NDJSON **`tool_call`** lines. **`@hof-engine/react`** builds the row heading from the humanized tool name, **`display_title`**, and a short hint parsed from arguments (e.g. `#` from `display_seq`, basename from `object_key`) so parallel calls stay distinct. If `display_title` looks like only a filename or bare token, the UI **prefixes** the humanized tool name (e.g. `Register Receipt Upload · invoice.pdf`). Prefer model phrases that already state action + target (see schema description). Every OpenAI tool schema includes optional `_display_title` in `parameters.properties`.
+
 **Anthropic:** set `AGENT_LLM_BACKEND=anthropic` and `ANTHROPIC_API_KEY`. The same NDJSON stream and tool loop apply; `stream_agent_turn` uses the Messages API with **`thinking=`** (default adaptive) and fixed **`output_config.effort=high`** whenever thinking is enabled.
 
 ## Built-in agent tools

@@ -40,6 +40,7 @@ from hof.agent.tooling import (
     format_tool_result_for_model,
     openai_tool_specs,
     parsed_tool_result_for_stream,
+    split_agent_tool_display_metadata,
     tool_result_status_for_ui,
 )
 from hof.config import get_config
@@ -700,14 +701,16 @@ def collect_agent_chat_from_stream(
             if len(meta_ev) > 1:
                 legacy.append(meta_ev)
         elif t == "tool_call":
-            legacy.append(
-                {
-                    "type": "tool_call",
-                    "name": ev.get("name"),
-                    "arguments": str(ev.get("arguments") or "")[:2000],
-                    "cli_line": ev.get("cli_line", ""),
-                },
-            )
+            leg_tc: dict[str, Any] = {
+                "type": "tool_call",
+                "name": ev.get("name"),
+                "arguments": str(ev.get("arguments") or "")[:2000],
+                "cli_line": ev.get("cli_line", ""),
+            }
+            dtl = ev.get("display_title")
+            if isinstance(dtl, str) and dtl.strip():
+                leg_tc["display_title"] = dtl.strip()
+            legacy.append(leg_tc)
         elif t == "tool_result":
             tr_legacy: dict[str, Any] = {
                 "type": "tool_result",
@@ -1051,12 +1054,13 @@ def _stream_inbox_review_summary_for_ui(
             tc = parts[idx]
             tid = tc["id"] or f"call_{idx}"
             name = tc["name"]
-            args = tc["arguments"] or "{}"
+            args_raw = tc["arguments"] or "{}"
+            args_wire, _ = split_agent_tool_display_metadata(args_raw)
             tool_calls_payload.append(
                 {
                     "id": tid,
                     "type": "function",
-                    "function": {"name": name, "arguments": args},
+                    "function": {"name": name, "arguments": args_wire},
                 },
             )
         oa_messages.append(
@@ -1069,23 +1073,26 @@ def _stream_inbox_review_summary_for_ui(
         for idx in sorted_idx:
             tc = parts[idx]
             name = tc["name"]
-            args = tc["arguments"] or "{}"
+            args_raw = tc["arguments"] or "{}"
+            args_wire, display_title = split_agent_tool_display_metadata(args_raw)
             tid = tc["id"] or f"call_{idx}"
-            cli = format_cli_line(name, args, max_cli_line_chars=max_cli_line_chars)
+            cli = format_cli_line(name, args_wire, max_cli_line_chars=max_cli_line_chars)
             tc_ev: dict[str, Any] = {
                 "type": "tool_call",
                 "name": name,
-                "arguments": args[:2000],
+                "arguments": args_wire[:2000],
                 "cli_line": cli,
                 "tool_call_id": tid,
             }
+            if display_title:
+                tc_ev["display_title"] = display_title
             note = policy.rationale_for(name)
             if note:
                 tc_ev["internal_rationale"] = note
             yield tc_ev
             out_json, summary = execute_tool(
                 name,
-                args,
+                args_wire,
                 read_allowlist,
                 max_tool_output_chars=max_tool_output_chars,
             )
@@ -1336,12 +1343,13 @@ def _run_agent_openai_loop(
                     tc = parts[idx]
                     tid = tc["id"] or f"call_{idx}"
                     name = tc["name"]
-                    args = tc["arguments"] or "{}"
+                    args_raw = tc["arguments"] or "{}"
+                    args_wire, _ = split_agent_tool_display_metadata(args_raw)
                     tool_calls_payload.append(
                         {
                             "id": tid,
                             "type": "function",
-                            "function": {"name": name, "arguments": args},
+                            "function": {"name": name, "arguments": args_wire},
                         },
                     )
                 oa_messages.append(
@@ -1355,16 +1363,19 @@ def _run_agent_openai_loop(
                 for idx in sorted_idx:
                     tc = parts[idx]
                     name = tc["name"]
-                    args = tc["arguments"] or "{}"
+                    args_raw = tc["arguments"] or "{}"
+                    args_wire, display_title = split_agent_tool_display_metadata(args_raw)
                     tid = tc["id"] or f"call_{idx}"
-                    cli = format_cli_line(name, args, max_cli_line_chars=max_cli_line_chars)
+                    cli = format_cli_line(name, args_wire, max_cli_line_chars=max_cli_line_chars)
                     tc_ev: dict[str, Any] = {
                         "type": "tool_call",
                         "name": name,
-                        "arguments": args[:2000],
+                        "arguments": args_wire[:2000],
                         "cli_line": cli,
                         "tool_call_id": tid,
                     }
+                    if display_title:
+                        tc_ev["display_title"] = display_title
                     note = policy.rationale_for(name)
                     if note:
                         tc_ev["internal_rationale"] = note
@@ -1376,7 +1387,7 @@ def _run_agent_openai_loop(
                         rounds,
                         name,
                         tid,
-                        len(args),
+                        len(args_wire),
                         "yes" if name in mutation_allowlist else "no",
                     )
                     _agent_stream_debug_append(
@@ -1385,19 +1396,19 @@ def _run_agent_openai_loop(
                             "run_id": run_id,
                             "round": rounds,
                             "name": name,
-                            "arguments_chars": len(args),
+                            "arguments_chars": len(args_wire),
                         },
                     )
                     if name in mutation_allowlist:
                         pid = str(uuid.uuid4())
-                        preview = _mutation_preview_payload(name, args, policy)
+                        preview = _mutation_preview_payload(name, args_wire, policy)
                         save_pending(
                             pid,
                             {
                                 "run_id": run_id,
                                 "tool_call_id": tid,
                                 "function_name": name,
-                                "arguments_json": args,
+                                "arguments_json": args_wire,
                             },
                         )
                         ph_obj: dict[str, Any] = {
@@ -1413,7 +1424,7 @@ def _run_agent_openai_loop(
                             "run_id": run_id,
                             "pending_id": pid,
                             "name": name,
-                            "arguments": args[:12000],
+                            "arguments": args_wire[:12000],
                             "cli_line": cli,
                             "tool_call_id": tid,
                         }
@@ -1454,7 +1465,7 @@ def _run_agent_openai_loop(
                     else:
                         out_json, summary = execute_tool(
                             name,
-                            args,
+                            args_wire,
                             allowlist,
                             max_tool_output_chars=max_tool_output_chars,
                         )

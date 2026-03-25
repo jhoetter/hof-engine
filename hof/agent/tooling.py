@@ -21,6 +21,10 @@ _REDACT_SUBSTRINGS = ("token", "password", "secret", "api_key", "authorization")
 # OpenAI and other providers accept long descriptions; keep a hard cap for stability.
 AGENT_TOOL_DESCRIPTION_MAX_CHARS = 2000
 
+# Optional tool-arguments key: model supplies a short UI label; stripped before execute/history/CLI.
+AGENT_TOOL_DISPLAY_TITLE_KEY = "_display_title"
+AGENT_TOOL_DISPLAY_TITLE_MAX_CHARS = 120
+
 
 def _json_type_for_param(type_name: str) -> str:
     return {
@@ -89,6 +93,30 @@ def compose_agent_tool_description(function_name: str, meta: FunctionMetadata) -
     if len(text) > AGENT_TOOL_DESCRIPTION_MAX_CHARS:
         text = text[: AGENT_TOOL_DESCRIPTION_MAX_CHARS - 1] + "…"
     return text
+
+
+def split_agent_tool_display_metadata(arguments_json: str) -> tuple[str, str | None]:
+    """Split UI-only display title from tool arguments JSON.
+
+    Returns ``(arguments_json_for_wire_and_execute, display_title_or_none)``.
+    On invalid JSON, returns the original string and ``None`` (caller may fall back to CLI formatting).
+    """
+    raw = (arguments_json or "").strip() or "{}"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw, None
+    if not isinstance(parsed, dict):
+        return raw, None
+    work = dict(parsed)
+    title_raw = work.pop(AGENT_TOOL_DISPLAY_TITLE_KEY, None)
+    title: str | None = None
+    if isinstance(title_raw, str):
+        t = title_raw.strip()
+        if t:
+            title = t[:AGENT_TOOL_DISPLAY_TITLE_MAX_CHARS]
+    wire = json.dumps(work, separators=(",", ":"), ensure_ascii=False)
+    return wire, title
 
 
 def structured_agent_tool_for_ui(
@@ -196,6 +224,17 @@ def openai_tool_specs(allowlist: frozenset[str]) -> list[dict[str, Any]]:
             properties[p.name] = _openai_property_schema_for_param(raw)
             if p.required:
                 required.append(p.name)
+        properties[AGENT_TOOL_DISPLAY_TITLE_KEY] = {
+            "type": "string",
+            "maxLength": AGENT_TOOL_DISPLAY_TITLE_MAX_CHARS,
+            "description": (
+                "Optional. One short phrase for the assistant UI tool row: **what you are doing** plus "
+                "**which target** (e.g. 'Registering receipt: Rechnung.pdf', 'Loading expense #3'). "
+                "When calling the same tool several times in parallel, make each title **distinct** "
+                "(use row #, id snippet, or filename). A bare filename alone is weak — include the action. "
+                "Not passed to the function implementation."
+            ),
+        }
         specs.append(
             {
                 "type": "function",
@@ -231,12 +270,13 @@ def _redact_for_cli(obj: Any) -> Any:
 def format_cli_line(name: str, arguments_json: str, *, max_cli_line_chars: int) -> str:
     """Human-readable pseudo-CLI for UI/TUI (not executed)."""
     raw = arguments_json or "{}"
+    wire, _ = split_agent_tool_display_metadata(raw)
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(wire)
         if not isinstance(parsed, dict):
             parsed = {"_": parsed}
     except json.JSONDecodeError:
-        frag = raw.strip().replace("\n", " ")
+        frag = wire.strip().replace("\n", " ")
         if len(frag) > 120:
             frag = frag[:117] + "…"
         return f"hof fn {name} {frag}" if frag else f"hof fn {name}"

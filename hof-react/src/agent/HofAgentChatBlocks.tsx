@@ -33,6 +33,7 @@ import {
   dropRedundantModelPhaseBeforeAssistant,
   humanizeToolName,
   inferAssistantUiLane,
+  toolCallRowTitle,
   isGenericAwaitingConfirmationSummary,
   postToolAssistantBlockIds,
   segmentLiveBlocks,
@@ -380,7 +381,7 @@ export function ToolGroupCard({
   /** `true` approved, `false` rejected, `undefined` unknown / still pending */
   mutationOutcome?: boolean;
 }) {
-  const title = humanizeToolName(call.name);
+  const title = toolCallRowTitle(call);
   const line = toolCallCliLine(call);
   const cmd = mutation
     ? normalizeAgentCliDisplayLine(
@@ -414,7 +415,9 @@ export function ToolGroupCard({
             mutationOutcome={mutationOutcome}
           />
           <div className="min-w-0 flex-1">
-            <span className="font-medium text-foreground">{title}</span>
+            <span className="min-w-0 truncate font-medium text-foreground">
+              {title}
+            </span>
           </div>
           {mutation ? (
             <ToolMutationCorner
@@ -1748,11 +1751,13 @@ export function LiveBlockView({
     );
   }
   if (b.kind === "tool_call") {
-    const title = humanizeToolName(b.name);
+    const title = toolCallRowTitle(b);
     return (
       <div className={`${AGENT_CHAT_COLUMN_CLASS}`}>
         <div className="rounded-lg border border-border bg-surface/40 px-3 py-2.5 text-[12px] leading-snug">
-          <span className="font-medium text-foreground">{title}</span>
+          <span className="block min-w-0 truncate font-medium text-foreground">
+            {title}
+          </span>
         </div>
       </div>
     );

@@ -83,6 +83,8 @@ export type LiveBlock =
       internal_rationale?: string;
       /** Provider tool call id — pairs with {@link tool_result.tool_call_id} (final result after resume). */
       tool_call_id?: string;
+      /** From NDJSON ``display_title``: short contextual label for the tool row (optional). */
+      displayTitle?: string;
     }
   | {
       kind: "tool_result";
@@ -206,6 +208,182 @@ export function humanizeToolName(name: string): string {
     .filter(Boolean)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(" ");
+}
+
+const _TOOL_TITLE_ATTACHMENT_EXT_RE =
+  /\.(pdf|png|jpe?g|gif|webp|csv|xlsx?|txt)$/i;
+
+function _toolTitleBasenameKey(key: string): string {
+  const k = key.trim().replace(/\\/g, "/");
+  const i = k.lastIndexOf("/");
+  return (i >= 0 ? k.slice(i + 1) : k).trim();
+}
+
+function _toolTitleIdSnippet(v: unknown, maxChars: number): string | null {
+  if (typeof v === "number" && Number.isFinite(v)) {
+    return String(v);
+  }
+  if (typeof v === "string" && v.trim()) {
+    const s = v.trim();
+    return s.length > maxChars ? `${s.slice(0, maxChars)}…` : s;
+  }
+  return null;
+}
+
+/** True when the model title looks like only a file / token (needs the tool name prefix). */
+function _looksLikeFilenameOrBareTokenTitle(s: string): boolean {
+  const t = s.trim();
+  if (!t) {
+    return false;
+  }
+  if (_TOOL_TITLE_ATTACHMENT_EXT_RE.test(t)) {
+    return true;
+  }
+  if (!t.includes(" ") && t.includes(".") && t.length <= 120) {
+    return true;
+  }
+  if (!t.includes(" ") && t.length > 0 && t.length <= 36) {
+    return true;
+  }
+  return false;
+}
+
+/** True when the model already wrote a full phrase (keep as-is). */
+function _looksLikeRichDisplayTitle(s: string): boolean {
+  const t = s.trim();
+  if (!t) {
+    return false;
+  }
+  if (/[:—–-]/.test(t)) {
+    return true;
+  }
+  if (/\s#\d+\b/.test(t)) {
+    return true;
+  }
+  const lower = t.toLowerCase();
+  const starters = [
+    "register",
+    "upload",
+    "loading",
+    "fetch",
+    "get ",
+    "create",
+    "update",
+    "delete",
+    "list ",
+    "remov",
+    "approv",
+    "reject",
+    "saving",
+    "deleting",
+    "draft",
+    "resolv",
+  ];
+  if (starters.some((x) => lower.startsWith(x))) {
+    return true;
+  }
+  if (t.includes(" · ") || t.includes(" — ")) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Short target hint from tool JSON arguments when ``display_title`` is absent (e.g. ``#3``, basename of
+ * ``object_key``, id snippet).
+ */
+export function toolRowContextFromArguments(
+  toolName: string,
+  rawArgs: string | undefined,
+): string | null {
+  if (!rawArgs?.trim()) {
+    return null;
+  }
+  let o: Record<string, unknown>;
+  try {
+    const p = JSON.parse(rawArgs) as unknown;
+    if (!p || typeof p !== "object" || Array.isArray(p)) {
+      return null;
+    }
+    o = p as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const fn = toolName.trim();
+  for (const k of ["file_name", "filename", "attachment_name"]) {
+    const v = o[k];
+    if (typeof v === "string" && v.trim()) {
+      return v.trim().slice(0, 80);
+    }
+  }
+  const nameVal = o.name;
+  if (typeof nameVal === "string" && nameVal.trim()) {
+    return nameVal.trim().slice(0, 80);
+  }
+  for (const k of ["object_key", "s3_key", "receipt_object_key"]) {
+    const v = o[k];
+    if (typeof v === "string" && v.trim()) {
+      const b = _toolTitleBasenameKey(v);
+      if (b) {
+        return b.slice(0, 80);
+      }
+    }
+  }
+  const ds = o.display_seq;
+  if (typeof ds === "number" && Number.isFinite(ds)) {
+    return `#${ds}`;
+  }
+  if (typeof ds === "string" && /^\d+$/.test(ds.trim())) {
+    return `#${ds.trim()}`;
+  }
+  if (fn.startsWith("get_") || fn.startsWith("update_") || fn.startsWith("delete_")) {
+    const id = _toolTitleIdSnippet(o.id, 12);
+    if (id) {
+      return id.length > 10 ? `id ${id}` : id;
+    }
+  }
+  for (const k of [
+    "expense_id",
+    "revenue_id",
+    "budget_id",
+    "receipt_document_id",
+    "record_id",
+  ]) {
+    const sn = _toolTitleIdSnippet(o[k], 12);
+    if (sn) {
+      return sn;
+    }
+  }
+  return null;
+}
+
+/**
+ * Row heading for tool cards: combines humanized tool name, optional ``display_title``, and argument hints
+ * so parallel calls stay distinguishable and bare filenames still show which tool ran.
+ */
+export function toolCallRowTitle(call: {
+  name: string;
+  displayTitle?: string;
+  arguments?: string;
+}): string {
+  const base = humanizeToolName(call.name);
+  const dt = call.displayTitle?.trim();
+  const ctx = toolRowContextFromArguments(call.name, call.arguments);
+
+  if (dt) {
+    if (_looksLikeRichDisplayTitle(dt)) {
+      return dt;
+    }
+    if (_looksLikeFilenameOrBareTokenTitle(dt)) {
+      return `${base} · ${dt}`;
+    }
+    return dt;
+  }
+
+  if (ctx) {
+    return `${base} · ${ctx}`;
+  }
+  return base;
 }
 
 /** Parse wire ``post_apply_review`` object (label + optional url/path). */
@@ -779,6 +957,9 @@ export function applyStreamEvent(
       typeof tcidRaw === "string" && tcidRaw.trim()
         ? tcidRaw.trim()
         : undefined;
+    const dtraw = (ev as { display_title?: unknown }).display_title;
+    const displayTitle =
+      typeof dtraw === "string" && dtraw.trim() ? dtraw.trim() : undefined;
     const base = dropTrailingEmptyStreamingAssistant(
       withoutThinkingSkeleton(prev),
     );
@@ -793,6 +974,7 @@ export function applyStreamEvent(
         arguments: args || undefined,
         internal_rationale,
         ...(tool_call_id ? { tool_call_id } : {}),
+        ...(displayTitle ? { displayTitle } : {}),
       },
     ];
   }
@@ -1499,7 +1681,7 @@ export function toolGroupSummaryLine(
   mutation: MutationPendingBlock | undefined,
   result: ToolResultBlock | undefined,
 ): string | null {
-  const title = humanizeToolName(call.name);
+  const title = toolCallRowTitle(call);
   if (mutation && !result) {
     return null;
   }

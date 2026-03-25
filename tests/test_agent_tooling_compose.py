@@ -7,10 +7,12 @@ import json
 from hof.agent.policy import AgentPolicy, configure_agent
 from hof.agent.tooling import (
     AGENT_TOOL_DESCRIPTION_MAX_CHARS,
+    AGENT_TOOL_DISPLAY_TITLE_KEY,
     compose_agent_tool_description,
     format_cli_line,
     format_tool_result_for_model,
     openai_tool_specs,
+    split_agent_tool_display_metadata,
     structured_agent_tool_for_ui,
     tool_result_status_for_ui,
 )
@@ -84,6 +86,9 @@ class TestComposeAgentToolDescription:
         desc = specs[0]["function"]["description"]
         assert "Hello." in desc
         assert "When to use: Always." in desc
+        props = specs[0]["function"]["parameters"]["properties"]
+        assert AGENT_TOOL_DISPLAY_TITLE_KEY in props
+        assert props[AGENT_TOOL_DISPLAY_TITLE_KEY]["type"] == "string"
 
     def test_truncates_long_description(self):
         @function
@@ -179,4 +184,23 @@ def test_format_cli_line_nested_payload_uses_hof_fn_not_post() -> None:
 def test_format_cli_line_flat_args_uses_flags() -> None:
     line = format_cli_line("list_expenses", '{"page":1}', max_cli_line_chars=200)
     assert line.startswith("hof fn list_expenses ")
+    assert "--page" in line
+
+
+def test_split_agent_tool_display_metadata_strips_title() -> None:
+    raw = json.dumps(
+        {"file_name": "invoice_72.pdf", AGENT_TOOL_DISPLAY_TITLE_KEY: "Uploading invoice_72.pdf"},
+    )
+    wire, title = split_agent_tool_display_metadata(raw)
+    assert title == "Uploading invoice_72.pdf"
+    parsed = json.loads(wire)
+    assert AGENT_TOOL_DISPLAY_TITLE_KEY not in parsed
+    assert parsed["file_name"] == "invoice_72.pdf"
+
+
+def test_format_cli_line_omits_display_title() -> None:
+    raw = json.dumps({"page": 1, AGENT_TOOL_DISPLAY_TITLE_KEY: "List page 1"})
+    line = format_cli_line("list_expenses", raw, max_cli_line_chars=200)
+    assert AGENT_TOOL_DISPLAY_TITLE_KEY not in line
+    assert "List page" not in line
     assert "--page" in line

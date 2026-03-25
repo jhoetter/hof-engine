@@ -437,17 +437,6 @@ def _append_client_messages(
             oa_messages.append({"role": "assistant", "content": stripped})
 
 
-def _usage_to_dict(u: Any) -> dict[str, Any] | None:
-    if u is None:
-        return None
-    out: dict[str, Any] = {}
-    for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
-        v = getattr(u, k, None)
-        if v is not None:
-            out[k] = v
-    return out or None
-
-
 def collect_agent_chat_from_stream(
     events_iter: Iterator[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -887,6 +876,76 @@ def _stream_inbox_review_summary_for_ui(
     yield {"type": "assistant_delta", "text": fb}
     yield {"type": "assistant_done", "finish_reason": "stop"}
     oa_messages.append({"role": "assistant", "content": fb})
+
+
+def _yield_awaiting_inbox_review_barrier(
+    *,
+    provider: Any,
+    model: str,
+    policy: AgentPolicy,
+    oa_messages: list[dict[str, Any]],
+    start_round: int,
+    rid: str,
+    wires: list[dict[str, Any]],
+    baseline_ids: list[str],
+    lm_backend: str,
+    reasoning: ReasoningConfig,
+    max_tool_output_chars: int,
+    max_cli_line_chars: int,
+    chained_from_inbox_resume: bool = False,
+) -> Iterator[dict[str, Any]]:
+    """Persist run, emit ``awaiting_inbox_review``, debug + log.
+
+    Used from mutation resume and chained inbox-resume paths.
+    """
+    inbox_ttl = max(60, int(policy.inbox_review_state_ttl_sec))
+    if policy.inbox_review_summary_mode != "none":
+        yield from _stream_inbox_review_summary_for_ui(
+            provider,
+            model,
+            policy,
+            oa_messages,
+            start_round,
+            rid,
+            wires,
+            lm_backend=lm_backend,
+            reasoning=reasoning,
+            max_tool_output_chars=max_tool_output_chars,
+            max_cli_line_chars=max_cli_line_chars,
+        )
+    save_agent_run_with_ttl(
+        rid,
+        {
+            "oa_messages": oa_messages,
+            "model": model,
+            "llm_backend": lm_backend,
+            "rounds": start_round,
+            "open_inbox_watches": wires,
+            "inbox_pending_baseline_ids": baseline_ids,
+        },
+        inbox_ttl,
+    )
+    yield {"type": "awaiting_inbox_review", "run_id": rid, "watches": wires}
+    dbg: dict[str, Any] = {
+        "kind": "awaiting_inbox_review",
+        "run_id": rid,
+        "n_watches": len(wires),
+    }
+    if chained_from_inbox_resume:
+        dbg["after_inbox_resume"] = True
+    _agent_stream_debug_append(dbg)
+    if chained_from_inbox_resume:
+        logger.debug(
+            "agent_chat awaiting_inbox_review (chained) run_id=%s watches=%d",
+            rid,
+            len(wires),
+        )
+    else:
+        logger.debug(
+            "agent_chat awaiting_inbox_review run_id=%s watches=%d",
+            rid,
+            len(wires),
+        )
 
 
 def _replace_tool_message_content(
@@ -1607,45 +1666,19 @@ def _run_agent_resume_stream(
                     "inbox pending baseline snapshot failed",
                     exc_info=True,
                 )
-        inbox_ttl = max(60, int(policy.inbox_review_state_ttl_sec))
-        if policy.inbox_review_summary_mode != "none":
-            yield from _stream_inbox_review_summary_for_ui(
-                provider,
-                model,
-                policy,
-                oa_messages,
-                start_round,
-                rid,
-                wires,
-                lm_backend=lm_backend,
-                reasoning=reasoning,
-                max_tool_output_chars=max_tool_output_chars,
-                max_cli_line_chars=max_cli_line_chars,
-            )
-        save_agent_run_with_ttl(
-            rid,
-            {
-                "oa_messages": oa_messages,
-                "model": model,
-                "llm_backend": lm_backend,
-                "rounds": start_round,
-                "open_inbox_watches": wires,
-                "inbox_pending_baseline_ids": baseline_ids,
-            },
-            inbox_ttl,
-        )
-        yield {"type": "awaiting_inbox_review", "run_id": rid, "watches": wires}
-        _agent_stream_debug_append(
-            {
-                "kind": "awaiting_inbox_review",
-                "run_id": rid,
-                "n_watches": len(wires),
-            },
-        )
-        logger.debug(
-            "agent_chat awaiting_inbox_review run_id=%s watches=%d",
-            rid,
-            len(wires),
+        yield from _yield_awaiting_inbox_review_barrier(
+            provider=provider,
+            model=model,
+            policy=policy,
+            oa_messages=oa_messages,
+            start_round=start_round,
+            rid=rid,
+            wires=wires,
+            baseline_ids=baseline_ids,
+            lm_backend=lm_backend,
+            reasoning=reasoning,
+            max_tool_output_chars=max_tool_output_chars,
+            max_cli_line_chars=max_cli_line_chars,
         )
         return
 
@@ -1857,46 +1890,20 @@ def _run_agent_resume_inbox_stream(
         if extra_watches:
             wires = [inbox_watch_to_wire(w) for w in extra_watches]
             bl_save = sorted(updated_baseline) if updated_baseline is not None else []
-            inbox_ttl = max(60, int(policy.inbox_review_state_ttl_sec))
-            if policy.inbox_review_summary_mode != "none":
-                yield from _stream_inbox_review_summary_for_ui(
-                    provider,
-                    model,
-                    policy,
-                    oa_messages,
-                    start_round,
-                    rid,
-                    wires,
-                    lm_backend=lm_backend,
-                    reasoning=reasoning,
-                    max_tool_output_chars=max_tool_output_chars,
-                    max_cli_line_chars=max_cli_line_chars,
-                )
-            save_agent_run_with_ttl(
-                rid,
-                {
-                    "oa_messages": oa_messages,
-                    "model": model,
-                    "llm_backend": lm_backend,
-                    "rounds": start_round,
-                    "open_inbox_watches": wires,
-                    "inbox_pending_baseline_ids": bl_save,
-                },
-                inbox_ttl,
-            )
-            yield {"type": "awaiting_inbox_review", "run_id": rid, "watches": wires}
-            _agent_stream_debug_append(
-                {
-                    "kind": "awaiting_inbox_review",
-                    "run_id": rid,
-                    "n_watches": len(wires),
-                    "after_inbox_resume": True,
-                },
-            )
-            logger.debug(
-                "agent_chat awaiting_inbox_review (chained) run_id=%s watches=%d",
-                rid,
-                len(wires),
+            yield from _yield_awaiting_inbox_review_barrier(
+                provider=provider,
+                model=model,
+                policy=policy,
+                oa_messages=oa_messages,
+                start_round=start_round,
+                rid=rid,
+                wires=wires,
+                baseline_ids=bl_save,
+                lm_backend=lm_backend,
+                reasoning=reasoning,
+                max_tool_output_chars=max_tool_output_chars,
+                max_cli_line_chars=max_cli_line_chars,
+                chained_from_inbox_resume=True,
             )
             return
 

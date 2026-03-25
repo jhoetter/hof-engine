@@ -9,6 +9,10 @@ const BAR_CLASS =
 
 /**
  * Shown when the engine pauses on ``awaiting_inbox_review``: Inbox links + poll/resume (not mutation Approve/Reject).
+ *
+ * @deprecated Default {@link HofAgentChat} uses streamed assistant copy plus inline “Waiting for Inbox”
+ *   in the thread instead of a composer-adjacent bar. Kept for custom layouts that still want this
+ *   pattern; may be removed in a future major.
  */
 export function HofAgentInboxReviewBar({ className = "" }: { className?: string }) {
   const { inboxReviewBarrier, inboxPollWaiting, inboxResumeError } =

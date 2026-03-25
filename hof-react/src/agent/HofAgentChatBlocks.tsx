@@ -31,7 +31,6 @@ import {
   humanizeToolName,
   inferAssistantUiLane,
   isGenericAwaitingConfirmationSummary,
-  postApplyReviewFromWire,
   postToolAssistantBlockIds,
   segmentLiveBlocks,
   showProposedActionsLabel,
@@ -48,7 +47,6 @@ import type {
   AssistantStreamSegment,
   InboxReviewBarrier,
   LiveBlock,
-  MutationAppliedBlock,
   MutationPendingBlock,
   ToolCallBlock,
   ToolResultBlock,
@@ -311,45 +309,10 @@ function ToolMutationCorner({
   );
 }
 
-function PostApplyReviewNotice({
-  mutationApplied,
-  toolTitle,
-}: {
-  mutationApplied: MutationAppliedBlock;
-  toolTitle: string;
-}) {
-  const link = postApplyReviewFromWire(mutationApplied.post_apply_review);
-  return (
-    <div
-      className="rounded-lg border border-border/80 bg-[color:color-mix(in_srgb,var(--color-accent)_6%,transparent)] px-3 py-2 text-[11px] leading-snug"
-      role="status"
-      aria-label={`Post-apply review: ${mutationApplied.post_apply_review.label}`}
-    >
-      <div className="font-medium text-foreground">
-        Next step · {toolTitle}
-      </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-2">
-        <span className="inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-secondary ring-1 ring-border/80">
-          {mutationApplied.post_apply_review.label}
-        </span>
-        {link ? (
-          <a
-            href={link.href}
-            className="text-[11px] font-medium text-[var(--color-accent)] underline-offset-2 hover:underline"
-          >
-            Open
-          </a>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
 export function ToolGroupCard({
   call,
   mutation,
   result,
-  mutationApplied,
   showApproval,
   approvalItemsForMutation,
   approvalDecisions,
@@ -361,7 +324,6 @@ export function ToolGroupCard({
   call: ToolCallBlock;
   mutation?: MutationPendingBlock;
   result?: ToolResultBlock;
-  mutationApplied?: MutationAppliedBlock;
   showApproval: boolean;
   approvalItemsForMutation: {
     pendingId: string;
@@ -469,12 +431,6 @@ export function ToolGroupCard({
           ) : null}
         </div>
       </details>
-      {mutationApplied ? (
-        <PostApplyReviewNotice
-          mutationApplied={mutationApplied}
-          toolTitle={title}
-        />
-      ) : null}
     </div>
   );
 }
@@ -637,7 +593,6 @@ export function RunBlocksList({
                 call={seg.call}
                 mutation={seg.mutation}
                 result={seg.result}
-                mutationApplied={seg.mutationApplied}
                 showApproval={showApproval}
                 approvalItemsForMutation={approvalItemsForMutation}
                 approvalDecisions={approvalDecisions}
@@ -1827,12 +1782,9 @@ export function LiveBlockView({
     );
   }
   if (b.kind === "mutation_applied") {
-    const title = humanizeToolName(b.name);
-    return (
-      <div className={`${AGENT_CHAT_COLUMN_CLASS}`}>
-        <PostApplyReviewNotice mutationApplied={b} toolTitle={title} />
-      </div>
-    );
+    // Inbox / manager-review links are shown in the assistant stream and inline Inbox status;
+    // avoid duplicating the old "Next step" accent box.
+    return null;
   }
   if (b.kind === "mutation_pending") {
     const title = humanizeToolName(b.name);

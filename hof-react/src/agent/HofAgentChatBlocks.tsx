@@ -28,7 +28,8 @@ import {
   CHAT_ASSISTANT_REPLY_BUBBLE_CLASS,
   assistantUiRole,
   barrierMatchesApprovalBlock,
-  confirmationFooterFromOutcomes,
+  confirmationFooterIconsFromOutcomes,
+  type ConfirmationFooterIconKind,
   dropRedundantModelPhaseBeforeAssistant,
   humanizeToolName,
   inferAssistantUiLane,
@@ -221,6 +222,36 @@ function ToolAggregatedStatusGlyph({
           className={`${base} text-tertiary`}
           aria-label={aria}
           strokeWidth={2}
+        />
+      );
+  }
+}
+
+function ConfirmationFooterGlyph({ kind }: { kind: ConfirmationFooterIconKind }) {
+  const base = "size-4 shrink-0";
+  switch (kind) {
+    case "approved":
+      return (
+        <CheckCircle2
+          className={`${base} text-[var(--color-success)]`}
+          strokeWidth={2}
+          aria-hidden
+        />
+      );
+    case "rejected":
+      return (
+        <XCircle
+          className={`${base} text-[var(--color-destructive)]`}
+          strokeWidth={2}
+          aria-hidden
+        />
+      );
+    case "pending":
+      return (
+        <Clock
+          className={`${base} text-[var(--color-accent)]`}
+          strokeWidth={2}
+          aria-hidden
         />
       );
   }
@@ -670,26 +701,29 @@ export function RunBlocksList({
             barrierMatchesApprovalBlock(barrier, b.run_id, b.pending_ids)
               ? barrier
               : null;
-          const footerDone = confirmationFooterFromOutcomes(
+          const footerIcons = confirmationFooterIconsFromOutcomes(
             b.pending_ids,
             mutationOutcomeByPendingId,
           );
           if (activeBarrier) {
             return null;
           }
-          if (!footerDone) {
+          if (footerIcons.length === 0) {
             return null;
           }
+          const ariaParts = footerIcons.map((k) =>
+            k === "approved" ? "approved" : k === "rejected" ? "rejected" : "pending",
+          );
           return (
             <div
               key={b.id}
-              className={`text-[11px] leading-snug ${
-                footerDone !== "Confirmation completed."
-                  ? "font-medium text-secondary"
-                  : "text-tertiary"
-              }`}
+              className="flex items-center gap-1.5"
+              role="status"
+              aria-label={`Confirmations: ${ariaParts.join(", ")}`}
             >
-              <p>{footerDone}</p>
+              {footerIcons.map((kind, i) => (
+                <ConfirmationFooterGlyph key={`${b.id}-cf-${i}`} kind={kind} />
+              ))}
             </div>
           );
         }

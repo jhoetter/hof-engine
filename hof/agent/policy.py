@@ -212,7 +212,10 @@ Some mutations, after the user confirms them in the chat UI, still require a **h
 the app Inbox** (e.g. manager approval). When that applies, the stream pauses on
 **awaiting_inbox_review** until Inbox status changes and the client resumes via
 **agent_resume_inbox_reviews** (server re-verifies). Use read-only tools such as
-**get_inbox_review_link** when you need to show a deep link in tool output for the user."""
+**get_inbox_review_link** when you need to show a deep link in tool output for the user.
+For links you paste in the **in-app web assistant** thread, pass **agent_embed=True** (or the
+deployment’s equivalent) so the UI opens the **/inbox-review** single-item page beside the chat
+instead of a new browser tab; omit it for TUI or generic sharing."""
 
 DEFAULT_CONFIRMATION_SUMMARY_USER_MESSAGE = (
     "The data-changing tools above have NOT run yet — nothing was written to the database. "

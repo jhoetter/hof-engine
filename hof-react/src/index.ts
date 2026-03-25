@@ -11,6 +11,7 @@ export {
   type HofAgentChatProviderProps,
   type ProviderWaitNotice,
 } from "./agent/hofAgentChatContext";
+export type { AssistantMarkdownLinkClickHandler } from "./agent/assistantMarkdownLinkContext";
 export { HofAgentMessages, type HofAgentMessagesProps } from "./agent/HofAgentMessages";
 export { HofAgentPendingApprovalBar } from "./agent/HofAgentPendingApprovalBar";
 export { HofAgentProviderWaitBanner } from "./agent/HofAgentProviderWaitBanner";

@@ -42,6 +42,10 @@ import {
   normalizeAgentCliDisplayLine,
   toolResultAwaitingUserConfirmation,
 } from "./hofAgentChatModel";
+import {
+  AssistantMarkdownLinkProvider,
+  type AssistantMarkdownLinkClickHandler,
+} from "./assistantMarkdownLinkContext";
 
 type PendingDetailsEntry = {
   name: string;
@@ -198,6 +202,11 @@ export type HofAgentChatProps = {
   prepareAgentResumeInboxRequest?: () => Promise<Record<string, unknown>>;
   /** Override inbox polling; default uses ``get_expense`` / ``get_revenue`` by ``record_type``. */
   pollInboxReviewWatch?: (w: InboxReviewWatchWire) => Promise<boolean>;
+  /**
+   * Runs before default link behavior in assistant Markdown. Call ``event.preventDefault()`` to handle
+   * the URL in the host (e.g. open same-origin inbox in an iframe).
+   */
+  onAssistantMarkdownLinkClick?: AssistantMarkdownLinkClickHandler;
 };
 
 export type HofAgentChatProviderProps = Omit<HofAgentChatProps, "className"> & {
@@ -276,6 +285,7 @@ export function HofAgentChatProvider({
   prepareAgentResumeRequest,
   prepareAgentResumeInboxRequest,
   pollInboxReviewWatch,
+  onAssistantMarkdownLinkClick,
   children,
 }: HofAgentChatProviderProps) {
   const [thread, setThread] = useState<ThreadItem[]>([]);
@@ -1517,8 +1527,12 @@ export function HofAgentChatProvider({
   }, []);
 
   return (
-    <HofAgentChatContext.Provider value={value}>
-      {children}
-    </HofAgentChatContext.Provider>
+    <AssistantMarkdownLinkProvider
+      onAssistantMarkdownLinkClick={onAssistantMarkdownLinkClick}
+    >
+      <HofAgentChatContext.Provider value={value}>
+        {children}
+      </HofAgentChatContext.Provider>
+    </AssistantMarkdownLinkProvider>
   );
 }

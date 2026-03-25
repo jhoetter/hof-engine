@@ -1,7 +1,12 @@
 "use client";
 
 import type { Components } from "react-markdown";
-import { useEffect, useMemo } from "react";
+import {
+  useEffect,
+  useMemo,
+  type ComponentPropsWithoutRef,
+  type MouseEvent,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -13,6 +18,38 @@ import { HLJS_SCOPED_CSS } from "./markdown/hljsTokens";
 import { MarkdownSortableTable } from "./markdown/MarkdownSortableTable";
 import { prepareAssistantMarkdownSource } from "./markdown/prepareAssistantMarkdownSource";
 import { rehypeFencedCodeClass } from "./markdown/rehypeFencedCodeClass";
+import { useAssistantMarkdownLinkClick } from "./assistantMarkdownLinkContext";
+
+function MarkdownAnchor({
+  href,
+  children,
+  onClick,
+  ...props
+}: ComponentPropsWithoutRef<"a">) {
+  const intercept = useAssistantMarkdownLinkClick();
+  const handleClick = (ev: MouseEvent<HTMLAnchorElement>) => {
+    if (typeof href === "string" && intercept && typeof window !== "undefined") {
+      const abs = new URL(href, window.location.origin).href;
+      intercept(abs, ev);
+      if (ev.defaultPrevented) {
+        return;
+      }
+    }
+    onClick?.(ev);
+  };
+  const external = typeof href === "string" && /^https?:\/\//i.test(href);
+  return (
+    <a
+      href={href}
+      className="font-medium text-[var(--color-accent)] underline decoration-[var(--color-accent)]/40 underline-offset-2 hover:decoration-[var(--color-accent)]"
+      {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+      onClick={handleClick}
+      {...props}
+    >
+      {children}
+    </a>
+  );
+}
 
 /**
  * Streaming can yield ragged GFM tables or half-open fences; sortable table
@@ -66,19 +103,11 @@ const mdComponents: Components = {
     </blockquote>
   ),
   hr: (props) => <hr className="my-3 border-border" {...props} />,
-  a: ({ href, children, ...props }) => {
-    const external = typeof href === "string" && /^https?:\/\//i.test(href);
-    return (
-      <a
-        href={href}
-        className="font-medium text-[var(--color-accent)] underline decoration-[var(--color-accent)]/40 underline-offset-2 hover:decoration-[var(--color-accent)]"
-        {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-        {...props}
-      >
-        {children}
-      </a>
-    );
-  },
+  a: ({ href, children, ...props }) => (
+    <MarkdownAnchor href={href} {...props}>
+      {children}
+    </MarkdownAnchor>
+  ),
   code: ({ className, children, node, ...props }) => {
     const cls = typeof className === "string" ? className : "";
     // Fenced blocks may omit `language-*`; hljs may be absent (unknown lang, nohighlight).

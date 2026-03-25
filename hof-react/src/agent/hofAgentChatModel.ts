@@ -1628,19 +1628,38 @@ export function barrierMatchesApprovalBlock(
   return true;
 }
 
+/** Status glyphs for the compact confirmation row (matches tool-card mutation icons). */
+export type ConfirmationFooterIconKind = "approved" | "rejected" | "pending";
+
 /**
- * After resume; outcomes are visible on tool cards — no summary line for mixed or
- * single-type results. Only the edge case of an empty pending-id list gets a short note.
+ * After resume, a compact status row (no prose). Empty `pending_ids` means the run used a
+ * synthetic barrier — show a single approved glyph. Otherwise one glyph per id (success /
+ * reject / pending), matching tool-card mutation icons in the UI.
  */
-export function confirmationFooterFromOutcomes(
+export function confirmationFooterIconsFromOutcomes(
   pendingIds: string[],
-  _outcomes: Record<string, boolean | undefined>,
-): string | null {
+  outcomes: Record<string, boolean | undefined>,
+): ConfirmationFooterIconKind[] {
   const norm = pendingIds.map((p) => p.trim()).filter(Boolean);
   if (norm.length === 0) {
-    return "Confirmation completed.";
+    return ["approved"];
   }
-  return null;
+  const allResolved = norm.every(
+    (id) => outcomes[id] === true || outcomes[id] === false,
+  );
+  if (allResolved) {
+    return [];
+  }
+  return norm.map((id) => {
+    const o = outcomes[id];
+    if (o === true) {
+      return "approved";
+    }
+    if (o === false) {
+      return "rejected";
+    }
+    return "pending";
+  });
 }
 
 export function assistantUiRole(

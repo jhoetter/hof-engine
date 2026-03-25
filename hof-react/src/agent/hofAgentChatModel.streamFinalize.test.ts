@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyStreamEvent,
   compactBlocksForHistory,
-  confirmationFooterFromOutcomes,
+  confirmationFooterIconsFromOutcomes,
   finalizeLiveBlocksAfterUserStop,
 } from "./hofAgentChatModel";
 import type { LiveBlock } from "./hofAgentChatModel";
@@ -106,26 +106,30 @@ describe("applyStreamEvent streaming caret / structured steps", () => {
     }
   });
 
-  it("confirmationFooterFromOutcomes is silent once all choices are known", () => {
-    expect(confirmationFooterFromOutcomes(["a"], {})).toBeNull();
+  it("confirmationFooterIconsFromOutcomes shows pending when not all resolved", () => {
+    expect(confirmationFooterIconsFromOutcomes(["a"], {})).toEqual(["pending"]);
     expect(
-      confirmationFooterFromOutcomes(["a"], { a: true }),
-    ).toBeNull();
-    expect(
-      confirmationFooterFromOutcomes(["a"], { a: false }),
-    ).toBeNull();
-    expect(
-      confirmationFooterFromOutcomes(["a", "b"], { a: true, b: true }),
-    ).toBeNull();
-    expect(
-      confirmationFooterFromOutcomes(["a", "b"], { a: true, b: false }),
-    ).toBeNull();
+      confirmationFooterIconsFromOutcomes(["a", "b"], { a: true }),
+    ).toEqual(["approved", "pending"]);
   });
 
-  it("confirmationFooterFromOutcomes notes empty pending-id list only", () => {
-    expect(confirmationFooterFromOutcomes([], { a: true })).toBe(
-      "Confirmation completed.",
+  it("confirmationFooterIconsFromOutcomes returns empty when all resolved (tool cards show icons)", () => {
+    expect(confirmationFooterIconsFromOutcomes(["a"], { a: true })).toEqual([]);
+    expect(confirmationFooterIconsFromOutcomes(["a"], { a: false })).toEqual(
+      [],
     );
+    expect(
+      confirmationFooterIconsFromOutcomes(["a", "b"], { a: true, b: true }),
+    ).toEqual([]);
+    expect(
+      confirmationFooterIconsFromOutcomes(["a", "b"], { a: true, b: false }),
+    ).toEqual([]);
+  });
+
+  it("confirmationFooterIconsFromOutcomes uses single approved for empty pending-id list", () => {
+    expect(confirmationFooterIconsFromOutcomes([], { a: true })).toEqual([
+      "approved",
+    ]);
   });
 
   it("compactBlocksForHistory clears streaming flags on flushed assistant rows", () => {

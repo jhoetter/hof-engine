@@ -257,19 +257,9 @@ function ConfirmationFooterGlyph({ kind }: { kind: ConfirmationFooterIconKind })
   }
 }
 
-/** Tool card header: same circle glyphs for “pick” and final status ({@link CheckCircle2} / {@link XCircle}). */
-const MUTATION_APPROVE_ICON_CLASS =
-  "size-4 shrink-0 text-[var(--color-success)]";
-const MUTATION_REJECT_ICON_CLASS =
-  "size-4 shrink-0 text-[var(--color-destructive)]";
-
 /** Labeled Approve / Reject on the tool card (matches PendingApprovalBar button styling). */
 const INLINE_APPROVAL_CHOICE_BTN_CLASS =
   "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40";
-
-/** Ghost hit target around the status glyph (no square border — matches static outcome row). */
-const MUTATION_CHOICE_BTN_BASE =
-  "inline-flex shrink-0 items-center justify-center rounded-full p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--color-accent)_45%,transparent)] focus-visible:ring-offset-1 focus-visible:ring-offset-background";
 
 function ToolMutationCorner({
   showApproval,
@@ -292,35 +282,8 @@ function ToolMutationCorner({
   busy: boolean;
   mutationOutcome?: boolean;
 }) {
-  if (mutationOutcome === true) {
-    return (
-      <div
-        className="flex shrink-0 items-center"
-        title="Approved"
-        aria-label="Approved"
-      >
-        <CheckCircle2
-          className={MUTATION_APPROVE_ICON_CLASS}
-          strokeWidth={2}
-          aria-hidden
-        />
-      </div>
-    );
-  }
-  if (mutationOutcome === false) {
-    return (
-      <div
-        className="flex shrink-0 items-center"
-        title="Rejected"
-        aria-label="Rejected"
-      >
-        <XCircle
-          className={MUTATION_REJECT_ICON_CLASS}
-          strokeWidth={2}
-          aria-hidden
-        />
-      </div>
-    );
+  if (mutationOutcome === true || mutationOutcome === false) {
+    return null;
   }
   if (!showApproval || approvalItemsForMutation.length === 0) {
     return null;

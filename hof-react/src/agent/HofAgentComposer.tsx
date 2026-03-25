@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertTriangle,
   Loader2,
   Mic,
   Paperclip,
@@ -646,15 +647,6 @@ export function HofAgentComposer({
         className="min-h-9 min-w-0 w-full resize-none overflow-y-auto rounded-md border-0 bg-transparent px-1 py-0.5 text-sm leading-snug text-foreground shadow-none placeholder:text-secondary outline-none ring-0 transition-[height] focus:outline-none focus:ring-0 disabled:opacity-60 read-only:opacity-100"
         style={{ maxHeight: textareaMaxHeightPx } satisfies CSSProperties}
       />
-      {providerWaitComposerHint ? (
-        <p
-          role="status"
-          aria-live="polite"
-          className="px-1 text-[11px] leading-snug text-tertiary"
-        >
-          {providerWaitComposerHint}
-        </p>
-      ) : null}
       {voiceFeatureEnabled && voiceError ? (
         <p className="px-1 text-[12px] text-[var(--color-destructive)]">
           {voiceError}
@@ -822,6 +814,22 @@ export function HofAgentComposer({
         <p className="mb-2 text-[12px] text-[var(--color-destructive)]">
           {uploadErr}
         </p>
+      ) : null}
+      {providerWaitComposerHint ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mb-2 flex w-full items-start gap-2 rounded-md border border-[color:color-mix(in_srgb,var(--bit-orange,#F4A51C)_42%,transparent)] bg-[color:color-mix(in_srgb,var(--bit-orange,#F4A51C)_11%,transparent)] px-2.5 py-2"
+        >
+          <AlertTriangle
+            className="mt-0.5 size-4 shrink-0 text-[var(--bit-orange,#F4A51C)]"
+            strokeWidth={2}
+            aria-hidden
+          />
+          <p className="min-w-0 flex-1 text-[13px] font-medium leading-snug text-foreground">
+            {providerWaitComposerHint}
+          </p>
+        </div>
       ) : null}
       <div
         className={`${inputShellClassName}${

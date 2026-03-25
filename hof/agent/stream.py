@@ -14,9 +14,14 @@ from typing import Any
 from llm_markdown.providers import ReasoningConfig, ReasoningMode, stream_agent_turn
 
 from hof.agent.policy import (
+    BUILTIN_AGENT_TOOL_NAMES,
     AgentPolicy,
+    InboxWatchDescriptor,
+    MutationBatchEntry,
     MutationPreviewResult,
     get_agent_policy,
+    inbox_watch_from_wire,
+    inbox_watch_to_wire,
     mutation_preview_to_wire,
     post_apply_review_hint_to_wire,
 )
@@ -26,6 +31,7 @@ from hof.agent.state import (
     load_agent_run,
     load_pending,
     save_agent_run,
+    save_agent_run_with_ttl,
     save_pending,
 )
 from hof.agent.tooling import (
@@ -71,7 +77,7 @@ def _mutation_preview_payload(
 
 
 def _collapse_agent_round_trace(parts: list[str], *, max_parts: int = 200) -> str:
-    """Compact trace: Sr/Sc=segment_start, r=reasoning_delta, cN/tN=repeated assistant/tool deltas, f=finish."""
+    """Compact trace: Sr/Sc=segment_start, r=reasoning, cN/tN repeated deltas, f=finish."""
     seq = parts[:max_parts]
     out: list[str] = []
     i = 0
@@ -633,6 +639,254 @@ def _stream_confirmation_summary_for_ui(
     if last_usage:
         done_ev["usage"] = last_usage
     yield done_ev
+
+
+_INBOX_REVIEW_SUMMARY_MAX_ROUNDS = 5
+
+
+def _format_inbox_watches_block(wires: list[dict[str, Any]]) -> str:
+    """Human- and model-readable lines for pending inbox watches (wire dicts)."""
+    lines: list[str] = []
+    for w in wires:
+        wid = str(w.get("watch_id") or "").strip()
+        rt = str(w.get("record_type") or "").strip()
+        rid = str(w.get("record_id") or "").strip()
+        label = str(w.get("label") or "").strip()
+        url = str(w.get("url") or "").strip()
+        path = str(w.get("path") or "").strip()
+        head = label or f"{rt} {rid}".strip() or wid or "item"
+        lines.append(
+            f"- watch_id={wid!r} record_type={rt!r} record_id={rid!r} "
+            f"label={head!r} url={url!r} path={path!r}"
+        )
+    return "\n".join(lines) if lines else "(no watch rows)"
+
+
+def _inbox_review_static_message_from_wires(wires: list[dict[str, Any]]) -> str:
+    parts = [
+        "Please complete the following **Inbox** review(s). "
+        "The assistant continues automatically when each item is resolved:",
+        "",
+    ]
+    for w in wires:
+        label = str(w.get("label") or "").strip()
+        rt = str(w.get("record_type") or "").strip()
+        rid = str(w.get("record_id") or "").strip()
+        head = label or f"{rt} · {rid}".strip() or "Inbox item"
+        url = str(w.get("url") or "").strip()
+        path = str(w.get("path") or "").strip()
+        link = url or path or "Open **Inbox** in the app to complete this review."
+        parts.append(f"- **{head}** — {link}")
+    return "\n".join(parts)
+
+
+def _stream_inbox_review_summary_for_ui(
+    provider: Any,
+    model: str,
+    policy: AgentPolicy,
+    oa_messages: list[dict[str, Any]],
+    start_round: int,
+    run_id: str,
+    wires: list[dict[str, Any]],
+    *,
+    lm_backend: str,
+    reasoning: ReasoningConfig,
+    max_tool_output_chars: int,
+    max_cli_line_chars: int,
+) -> Iterator[dict[str, Any]]:
+    """Stream assistant guidance before ``awaiting_inbox_review``; mutates ``oa_messages``."""
+    mode = policy.inbox_review_summary_mode
+    if mode == "none":
+        return
+
+    watch_block = _format_inbox_watches_block(wires)
+    user_content = (
+        f"{policy.inbox_review_summary_user_message}\n\n"
+        f"### Detected Inbox review items\n{watch_block}"
+    )
+
+    if mode == "static":
+        text = _inbox_review_static_message_from_wires(wires)
+        oa_messages.append({"role": "user", "content": user_content})
+        yield {"type": "phase", "round": start_round + 1, "phase": "inbox_review_summary"}
+        yield {"type": "assistant_delta", "text": text}
+        yield {"type": "assistant_done", "finish_reason": "stop"}
+        oa_messages.append({"role": "assistant", "content": text})
+        return
+
+    if mode != "llm_stream":
+        yield {
+            "type": "error",
+            "detail": (
+                f"invalid inbox_review_summary_mode={mode!r} "
+                "(expected llm_stream, static, or none)"
+            ),
+        }
+        return
+
+    oa_messages.append({"role": "user", "content": user_content})
+    read_allowlist = frozenset(policy.allowlist_read | BUILTIN_AGENT_TOOL_NAMES)
+    read_tools = openai_tool_specs(read_allowlist)
+
+    from llm_markdown.agent_stream import (
+        AgentContentDelta,
+        AgentMessageFinish,
+        AgentReasoningDelta,
+        AgentSegmentStart,
+        AgentToolCallDelta,
+    )
+
+    sub_start = start_round
+    for sub_i in range(_INBOX_REVIEW_SUMMARY_MAX_ROUNDS):
+        phase_round = sub_start + sub_i + 1
+        yield {"type": "phase", "round": phase_round, "phase": "inbox_review_summary"}
+
+        parts: dict[int, dict[str, str]] = {}
+        assistant_text = ""
+        finish_reason: str | None = None
+        last_usage: dict[str, Any] | None = None
+
+        try:
+            for ev in stream_agent_turn(
+                provider,
+                lm_backend,
+                oa_messages,
+                model=model,
+                tools=read_tools,
+                tool_choice="auto",
+                max_tokens=_AGENT_SUMMARY_MAX_TOKENS,
+                reasoning=reasoning,
+                **_anthropic_stream_turn_extras(lm_backend, reasoning),
+            ):
+                if isinstance(ev, AgentSegmentStart):
+                    yield {"type": "segment_start", "segment": ev.segment}
+                elif isinstance(ev, AgentContentDelta):
+                    assistant_text += ev.text
+                    yield {"type": "assistant_delta", "text": ev.text}
+                elif isinstance(ev, AgentReasoningDelta):
+                    yield {"type": "reasoning_delta", "text": ev.text}
+                elif isinstance(ev, AgentToolCallDelta):
+                    idx = int(ev.index)
+                    if idx not in parts:
+                        parts[idx] = {"id": "", "name": "", "arguments": ""}
+                    if ev.tool_call_id:
+                        parts[idx]["id"] = ev.tool_call_id
+                    if ev.name:
+                        parts[idx]["name"] += ev.name
+                    if ev.arguments:
+                        parts[idx]["arguments"] += ev.arguments
+                elif isinstance(ev, AgentMessageFinish):
+                    finish_reason = ev.finish_reason
+                    last_usage = ev.usage
+        except Exception as exc:
+            logger.warning("inbox review summary model call failed: %s", exc)
+            fb = _inbox_review_static_message_from_wires(wires)
+            yield {"type": "assistant_delta", "text": fb}
+            yield {"type": "assistant_done", "finish_reason": "stop"}
+            oa_messages.append({"role": "assistant", "content": fb})
+            return
+
+        if finish_reason != "tool_calls":
+            final_text = assistant_text.strip() or _inbox_review_static_message_from_wires(
+                wires,
+            )
+            if not assistant_text.strip():
+                yield {"type": "assistant_delta", "text": final_text}
+            done_ev_stop: dict[str, Any] = {
+                "type": "assistant_done",
+                "finish_reason": finish_reason or "stop",
+            }
+            if last_usage:
+                done_ev_stop["usage"] = last_usage
+            yield done_ev_stop
+            oa_messages.append({"role": "assistant", "content": final_text})
+            return
+
+        done_ev_tc: dict[str, Any] = {
+            "type": "assistant_done",
+            "finish_reason": finish_reason,
+        }
+        if last_usage:
+            done_ev_tc["usage"] = last_usage
+        yield done_ev_tc
+
+        if not parts:
+            fb = _inbox_review_static_message_from_wires(wires)
+            yield {"type": "assistant_delta", "text": fb}
+            yield {"type": "assistant_done", "finish_reason": "stop"}
+            oa_messages.append({"role": "assistant", "content": fb})
+            return
+
+        yield {"type": "phase", "round": phase_round, "phase": "inbox_review_summary_tools"}
+        sorted_idx = sorted(parts.keys())
+        tool_calls_payload: list[dict[str, Any]] = []
+        for idx in sorted_idx:
+            tc = parts[idx]
+            tid = tc["id"] or f"call_{idx}"
+            name = tc["name"]
+            args = tc["arguments"] or "{}"
+            tool_calls_payload.append(
+                {
+                    "id": tid,
+                    "type": "function",
+                    "function": {"name": name, "arguments": args},
+                },
+            )
+        oa_messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_text or None,
+                "tool_calls": tool_calls_payload,
+            },
+        )
+        for idx in sorted_idx:
+            tc = parts[idx]
+            name = tc["name"]
+            args = tc["arguments"] or "{}"
+            tid = tc["id"] or f"call_{idx}"
+            cli = format_cli_line(name, args, max_cli_line_chars=max_cli_line_chars)
+            tc_ev: dict[str, Any] = {
+                "type": "tool_call",
+                "name": name,
+                "arguments": args[:2000],
+                "cli_line": cli,
+                "tool_call_id": tid,
+            }
+            note = policy.rationale_for(name)
+            if note:
+                tc_ev["internal_rationale"] = note
+            yield tc_ev
+            out_json, summary = execute_tool(
+                name,
+                args,
+                read_allowlist,
+                max_tool_output_chars=max_tool_output_chars,
+            )
+            ok, status_code = tool_result_status_for_ui(out_json)
+            tr_out: dict[str, Any] = {
+                "type": "tool_result",
+                "name": name,
+                "summary": summary,
+                "tool_call_id": tid,
+                "ok": ok,
+                "status_code": status_code,
+            }
+            pdata = parsed_tool_result_for_stream(out_json)
+            if pdata is not None:
+                tr_out["data"] = pdata
+            yield tr_out
+            oa_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tid,
+                    "content": format_tool_result_for_model(name, out_json),
+                },
+            )
+
+    fb = _inbox_review_static_message_from_wires(wires)
+    yield {"type": "assistant_delta", "text": fb}
+    yield {"type": "assistant_done", "finish_reason": "stop"}
+    oa_messages.append({"role": "assistant", "content": fb})
 
 
 def _replace_tool_message_content(
@@ -1218,6 +1472,20 @@ def _run_agent_resume_stream(
         )
 
     by_id = {r["pending_id"]: r["confirm"] for r in res_norm}
+    inbox_watches_accum: list[InboxWatchDescriptor] = []
+    batch_entries: list[MutationBatchEntry] = []
+    inbox_id_snapshot: set[str] = set()
+    snap_fn = policy.inbox_snapshot_before_mutations
+    if snap_fn is not None:
+        try:
+            raw_snap = snap_fn()
+            inbox_id_snapshot = set(raw_snap) if raw_snap is not None else set()
+        except Exception:
+            logger.debug(
+                "inbox_snapshot_before_mutations failed",
+                exc_info=True,
+            )
+            inbox_id_snapshot = set()
     try:
         for pid in open_ids:
             confirm = by_id[pid]
@@ -1231,6 +1499,9 @@ def _run_agent_resume_stream(
             tid = str(p["tool_call_id"])
             fname = str(p["function_name"])
             args = str(p.get("arguments_json") or "{}")
+            parsed_args_loop = json.loads(args) if args else {}
+            if not isinstance(parsed_args_loop, dict):
+                parsed_args_loop = {}
             if confirm:
                 out_json, _s = execute_tool(
                     fname,
@@ -1238,16 +1509,22 @@ def _run_agent_resume_stream(
                     allowlist,
                     max_tool_output_chars=max_tool_output_chars,
                 )
+                parsed_args = parsed_args_loop
+                parsed_result = json.loads(out_json) if out_json else {}
+                if not isinstance(parsed_result, dict):
+                    parsed_result = {}
+                batch_entries.append(
+                    MutationBatchEntry(
+                        function_name=fname,
+                        arguments=parsed_args,
+                        result=parsed_result,
+                        confirmed=True,
+                    ),
+                )
                 model_tool_body = format_tool_result_for_model(fname, out_json)
                 post_apply_fn = policy.mutation_post_apply.get(fname)
                 if post_apply_fn is not None:
                     try:
-                        parsed_args = json.loads(args) if args else {}
-                        if not isinstance(parsed_args, dict):
-                            parsed_args = {}
-                        parsed_result = json.loads(out_json) if out_json else {}
-                        if not isinstance(parsed_result, dict):
-                            parsed_result = {}
                         hint = post_apply_fn(fname, parsed_args, parsed_result)
                     except Exception:
                         logger.debug(
@@ -1264,18 +1541,112 @@ def _run_agent_resume_stream(
                             "tool_call_id": tid,
                             "post_apply_review": post_apply_review_hint_to_wire(hint),
                         }
+                watch_fn = policy.mutation_inbox_watches.get(fname)
+                if watch_fn is not None:
+                    try:
+                        ws = watch_fn(fname, parsed_args, parsed_result)
+                    except Exception:
+                        logger.debug(
+                            "mutation_inbox_watches failed for %s",
+                            fname,
+                            exc_info=True,
+                        )
+                        ws = None
+                    if ws:
+                        inbox_watches_accum.extend(ws)
             else:
-                out_json = json.dumps(
-                    {
-                        "rejected": True,
-                        "message": "User rejected this action in the assistant.",
-                    }
+                rejected_result = {
+                    "rejected": True,
+                    "message": "User rejected this action in the assistant.",
+                }
+                out_json = json.dumps(rejected_result)
+                batch_entries.append(
+                    MutationBatchEntry(
+                        function_name=fname,
+                        arguments=parsed_args_loop,
+                        result=rejected_result,
+                        confirmed=False,
+                    ),
                 )
                 model_tool_body = format_tool_result_for_model(fname, out_json)
             _replace_tool_message_content(oa_messages, tid, model_tool_body)
             delete_pending(pid)
     except ValueError as exc:
         yield {"type": "error", "detail": str(exc)}
+        return
+
+    scan_fn = policy.inbox_scan_after_mutations
+    if scan_fn is not None:
+        try:
+            extra = scan_fn(
+                inbox_id_snapshot,
+                batch_entries,
+                list(inbox_watches_accum),
+            )
+        except Exception:
+            logger.debug(
+                "inbox_scan_after_mutations failed",
+                exc_info=True,
+            )
+            extra = None
+        if extra:
+            inbox_watches_accum.extend(extra)
+
+    if inbox_watches_accum:
+        wires = [inbox_watch_to_wire(w) for w in inbox_watches_accum]
+        baseline_ids: list[str] = []
+        snap_live = policy.inbox_snapshot_before_mutations
+        if snap_live is not None:
+            try:
+                raw_live = snap_live()
+                baseline_ids = sorted(
+                    str(x).strip() for x in (raw_live or []) if str(x).strip()
+                )
+            except Exception:
+                logger.debug(
+                    "inbox pending baseline snapshot failed",
+                    exc_info=True,
+                )
+        inbox_ttl = max(60, int(policy.inbox_review_state_ttl_sec))
+        if policy.inbox_review_summary_mode != "none":
+            yield from _stream_inbox_review_summary_for_ui(
+                provider,
+                model,
+                policy,
+                oa_messages,
+                start_round,
+                rid,
+                wires,
+                lm_backend=lm_backend,
+                reasoning=reasoning,
+                max_tool_output_chars=max_tool_output_chars,
+                max_cli_line_chars=max_cli_line_chars,
+            )
+        save_agent_run_with_ttl(
+            rid,
+            {
+                "oa_messages": oa_messages,
+                "model": model,
+                "llm_backend": lm_backend,
+                "rounds": start_round,
+                "open_inbox_watches": wires,
+                "inbox_pending_baseline_ids": baseline_ids,
+            },
+            inbox_ttl,
+        )
+        yield {"type": "awaiting_inbox_review", "run_id": rid, "watches": wires}
+        _agent_stream_debug_append(
+            {
+                "kind": "awaiting_inbox_review",
+                "run_id": rid,
+                "n_watches": len(wires),
+            },
+        )
+        logger.debug(
+            "agent_chat awaiting_inbox_review run_id=%s watches=%d",
+            rid,
+            len(wires),
+        )
         return
 
     delete_agent_run(rid)
@@ -1318,3 +1689,246 @@ def iter_agent_resume_stream(run_id: str, resolutions: list) -> Iterator[dict[st
     """Stream continued agent trace after mutation confirmation."""
     policy = get_agent_policy()
     yield from _run_agent_resume_stream(run_id, resolutions, policy=policy)
+
+
+def _run_agent_resume_inbox_stream(
+    run_id: str,
+    resolutions: list,
+    *,
+    policy: AgentPolicy,
+) -> Iterator[dict[str, Any]]:
+    """After client inbox watches clear: server verify, then continue the OpenAI loop."""
+    max_rounds, max_tool_output_chars, _m, max_cli_line_chars = _agent_limits()
+
+    rid = (run_id or "").strip()
+    if not rid:
+        yield {"type": "error", "detail": "run_id is required"}
+        return
+
+    run = load_agent_run(rid)
+    if not run:
+        yield {
+            "type": "error",
+            "detail": "Unknown or expired run_id; start a new chat.",
+        }
+        return
+
+    raw_watches = run.get("open_inbox_watches") or []
+    if not raw_watches:
+        yield {"type": "error", "detail": "No inbox review watches for this run."}
+        return
+
+    descriptors: list[InboxWatchDescriptor] = []
+    for w in raw_watches:
+        if not isinstance(w, dict):
+            continue
+        d = inbox_watch_from_wire(w)
+        if d is not None:
+            descriptors.append(d)
+    expected_ids = {d.watch_id for d in descriptors}
+    if len(descriptors) != len(expected_ids) or not expected_ids:
+        yield {"type": "error", "detail": "Invalid saved inbox watch state"}
+        return
+
+    res_norm: list[dict[str, Any]] = []
+    for r in resolutions or []:
+        if not isinstance(r, dict):
+            continue
+        wid = str(r.get("watch_id") or "").strip()
+        if wid:
+            res_norm.append({"watch_id": wid})
+
+    got = {r["watch_id"] for r in res_norm}
+    if got != expected_ids or len(res_norm) != len(expected_ids):
+        yield {
+            "type": "error",
+            "detail": (
+                "resolutions must include each watch_id from awaiting_inbox_review exactly once"
+            ),
+        }
+        return
+
+    verify_fn = policy.verify_inbox_watch
+    if verify_fn is None:
+        yield {
+            "type": "error",
+            "detail": "Inbox review verifier is not configured on AgentPolicy.",
+        }
+        return
+
+    summary_lines: list[str] = []
+    for desc in descriptors:
+        try:
+            ok, msg = verify_fn(desc)
+        except Exception as exc:
+            yield {"type": "error", "detail": f"Inbox verify failed: {exc}"}
+            return
+        if not ok:
+            yield {
+                "type": "error",
+                "detail": msg or f"Inbox watch {desc.watch_id!r} is still pending review",
+            }
+            return
+        summary_lines.append(
+            msg
+            or f"{desc.record_type} {desc.record_id}: inbox review completed."
+        )
+
+    oa_messages = run["oa_messages"]
+    if not isinstance(oa_messages, list):
+        yield {"type": "error", "detail": "Invalid saved agent state"}
+        return
+
+    model = str(run.get("model") or "gpt-4o-mini").strip() or "gpt-4o-mini"
+    lm_backend = str(run.get("llm_backend") or "openai").strip().lower()
+    if lm_backend not in ("openai", "anthropic"):
+        lm_backend = "openai"
+    try:
+        reasoning = _resolve_agent_reasoning_config(lm_backend)
+    except ValueError as exc:
+        yield {"type": "error", "detail": str(exc)}
+        return
+    start_round = int(run.get("rounds") or 0)
+    allowlist = policy.effective_allowlist()
+    tools = openai_tool_specs(allowlist)
+
+    if lm_backend == "anthropic":
+        api_key = _resolve_anthropic_api_key()
+        if not api_key:
+            yield {
+                "type": "error",
+                "detail": "Missing ANTHROPIC_API_KEY (required to resume this run)",
+            }
+            return
+        try:
+            from llm_markdown.providers import AnthropicProvider
+        except ImportError:
+            yield {
+                "type": "error",
+                "detail": "Install llm-markdown with the anthropic extra (llm-markdown[anthropic])",
+            }
+            return
+        provider = AnthropicProvider(
+            api_key=api_key,
+            model=model,
+            max_tokens=_resolve_agent_max_completion_tokens(),
+        )
+    else:
+        api_key = _resolve_openai_api_key()
+        if not api_key:
+            yield {
+                "type": "error",
+                "detail": "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)",
+            }
+            return
+        try:
+            from llm_markdown.providers import OpenAIProvider
+        except ImportError:
+            yield {
+                "type": "error",
+                "detail": "Install llm-markdown with the openai extra (llm-markdown[openai])",
+            }
+            return
+        provider = OpenAIProvider(
+            api_key=api_key,
+            model=model,
+            max_tokens=_resolve_agent_max_completion_tokens(),
+        )
+
+    combined = "Inbox review completed:\n" + "\n".join(summary_lines)
+
+    scan_resume_fn = policy.inbox_scan_after_inbox_resume
+    baseline_raw = run.get("inbox_pending_baseline_ids")
+    if (
+        scan_resume_fn is not None
+        and isinstance(baseline_raw, list)
+        and baseline_raw
+    ):
+        baseline_f = frozenset(str(x).strip() for x in baseline_raw if str(x).strip())
+        try:
+            extra_watches, updated_baseline = scan_resume_fn(descriptors, baseline_f)
+        except Exception:
+            logger.debug(
+                "inbox_scan_after_inbox_resume failed",
+                exc_info=True,
+            )
+            extra_watches = []
+            updated_baseline = None
+        if extra_watches:
+            wires = [inbox_watch_to_wire(w) for w in extra_watches]
+            bl_save = sorted(updated_baseline) if updated_baseline is not None else []
+            inbox_ttl = max(60, int(policy.inbox_review_state_ttl_sec))
+            if policy.inbox_review_summary_mode != "none":
+                yield from _stream_inbox_review_summary_for_ui(
+                    provider,
+                    model,
+                    policy,
+                    oa_messages,
+                    start_round,
+                    rid,
+                    wires,
+                    lm_backend=lm_backend,
+                    reasoning=reasoning,
+                    max_tool_output_chars=max_tool_output_chars,
+                    max_cli_line_chars=max_cli_line_chars,
+                )
+            save_agent_run_with_ttl(
+                rid,
+                {
+                    "oa_messages": oa_messages,
+                    "model": model,
+                    "llm_backend": lm_backend,
+                    "rounds": start_round,
+                    "open_inbox_watches": wires,
+                    "inbox_pending_baseline_ids": bl_save,
+                },
+                inbox_ttl,
+            )
+            yield {"type": "awaiting_inbox_review", "run_id": rid, "watches": wires}
+            _agent_stream_debug_append(
+                {
+                    "kind": "awaiting_inbox_review",
+                    "run_id": rid,
+                    "n_watches": len(wires),
+                    "after_inbox_resume": True,
+                },
+            )
+            logger.debug(
+                "agent_chat awaiting_inbox_review (chained) run_id=%s watches=%d",
+                rid,
+                len(wires),
+            )
+            return
+
+    oa_messages.append({"role": "user", "content": combined})
+
+    delete_agent_run(rid)
+    yield {"type": "resume_start", "run_id": rid, "model": model, "continuation": True}
+    logger.debug(
+        "agent_chat inbox resume_start run_id=%s model=%s start_round=%d",
+        rid,
+        model,
+        start_round,
+    )
+
+    yield from _run_agent_openai_loop(
+        provider,
+        model,
+        policy,
+        allowlist,
+        tools,
+        oa_messages,
+        start_round,
+        rid,
+        lm_backend=lm_backend,
+        reasoning=reasoning,
+        max_rounds=max_rounds,
+        max_tool_output_chars=max_tool_output_chars,
+        max_cli_line_chars=max_cli_line_chars,
+    )
+
+
+def iter_agent_resume_inbox_stream(run_id: str, resolutions: list) -> Iterator[dict[str, Any]]:
+    """Stream trace after inbox review resolution (client assert + server verify)."""
+    policy = get_agent_policy()
+    yield from _run_agent_resume_inbox_stream(run_id, resolutions, policy=policy)

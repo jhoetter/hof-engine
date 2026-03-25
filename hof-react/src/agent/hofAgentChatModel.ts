@@ -21,6 +21,21 @@ export type AgentAttachment = {
   content_type: string;
 };
 
+/** Wire shape from NDJSON ``awaiting_inbox_review`` (matches engine ``inbox_watch_to_wire``). */
+export type InboxReviewWatchWire = {
+  watch_id: string;
+  record_type: string;
+  record_id: string;
+  label?: string;
+  url?: string;
+  path?: string;
+};
+
+export type InboxReviewBarrier = {
+  runId: string;
+  watches: InboxReviewWatchWire[];
+};
+
 export type LiveBlock =
   | { kind: "phase"; id: string; round: number; phase: string }
   /** Ephemeral: shown from `phase: model` until first token or `tool_call` (models often emit no `assistant_delta` before tools). */
@@ -112,6 +127,12 @@ export type LiveBlock =
       id: string;
       run_id: string;
       pending_ids: string[];
+    }
+  | {
+      kind: "inbox_review_required";
+      id: string;
+      run_id: string;
+      watches: InboxReviewWatchWire[];
     }
   | { kind: "error"; id: string; detail: string };
 
@@ -340,6 +361,59 @@ export function mergePendingIdLists(
   return out;
 }
 
+/** Parse NDJSON ``awaiting_inbox_review`` for context + ``applyStreamEvent``. */
+export function inboxReviewBarrierFromStreamEvent(
+  ev: HofStreamEvent,
+): InboxReviewBarrier | null {
+  if (typeof ev.type !== "string" || ev.type !== "awaiting_inbox_review") {
+    return null;
+  }
+  const runId = coerceRunId(ev.run_id);
+  const rawW = Array.isArray((ev as { watches?: unknown }).watches)
+    ? ((ev as { watches: unknown[] }).watches as unknown[])
+    : [];
+  const watches: InboxReviewWatchWire[] = [];
+  for (const x of rawW) {
+    if (x == null || typeof x !== "object" || Array.isArray(x)) {
+      continue;
+    }
+    const o = x as Record<string, unknown>;
+    const watch_id = String(o.watch_id ?? "").trim();
+    const record_type = String(o.record_type ?? "").trim();
+    const record_id = String(o.record_id ?? "").trim();
+    if (!watch_id || !record_type || !record_id) {
+      continue;
+    }
+    const label = typeof o.label === "string" ? o.label.trim() : undefined;
+    const url = typeof o.url === "string" ? o.url.trim() : undefined;
+    const path = typeof o.path === "string" ? o.path.trim() : undefined;
+    watches.push({
+      watch_id,
+      record_type,
+      record_id,
+      ...(label ? { label } : {}),
+      ...(url ? { url } : {}),
+      ...(path ? { path } : {}),
+    });
+  }
+  if (!runId || watches.length === 0) {
+    return null;
+  }
+  return { runId, watches };
+}
+
+export function inboxReviewOpenHref(w: InboxReviewWatchWire): string | null {
+  const u = w.url?.trim();
+  if (u) {
+    return u;
+  }
+  const p = w.path?.trim();
+  if (p?.startsWith("/")) {
+    return p;
+  }
+  return null;
+}
+
 /** Passed into `applyStreamEvent` so assistant rows match stream `phase` (model vs summary). */
 export type AgentApplyStreamCtx = {
   assistantStreamPhase: "model" | "summary" | null;
@@ -505,7 +579,7 @@ export function applyStreamEvent(
     // *no* content deltas (straight to `tool_calls`), so we show `thinking_skeleton` until tokens
     // or `tool_call`. Plain `phase` rows were too easy to miss; empty `liveBlocks` forced only
     // “Connecting…”.
-    if (phase === "model") {
+    if (phase === "model" || phase === "inbox_review_summary") {
       const base = withoutThinkingSkeleton(prev);
       // Always tag model rounds from the wire event. Do not rely on ctx.assistantStreamPhase here:
       // React may run this updater after later events batched ref updates, leaving streamPhase
@@ -816,6 +890,24 @@ export function applyStreamEvent(
     return [
       ...ready,
       { kind: "approval_required", id: newId(), run_id, pending_ids },
+    ];
+  }
+  if (t === "awaiting_inbox_review") {
+    const parsed = inboxReviewBarrierFromStreamEvent(ev);
+    const ready = finalizeStreamingAssistantBeforeStructuredStep(
+      withoutThinkingSkeleton(prev),
+    );
+    if (!parsed) {
+      return ready;
+    }
+    return [
+      ...ready,
+      {
+        kind: "inbox_review_required",
+        id: newId(),
+        run_id: parsed.runId,
+        watches: parsed.watches,
+      },
     ];
   }
   if (t === "error") {

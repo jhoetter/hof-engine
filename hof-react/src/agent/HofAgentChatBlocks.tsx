@@ -42,16 +42,17 @@ import {
   mergeAdjacentReasoningSegments,
 } from "./hofAgentChatModel";
 import { reasoningPhaseTickingLive } from "./assistantStreamSegments";
+import { useHofAgentChat } from "./hofAgentChatContext";
 import type {
   ApprovalBarrier,
   AssistantStreamSegment,
+  InboxReviewBarrier,
   LiveBlock,
   MutationAppliedBlock,
   MutationPendingBlock,
   ToolCallBlock,
   ToolResultBlock,
 } from "./hofAgentChatModel";
-import { useHofAgentChat } from "./hofAgentChatContext";
 import {
   formatDurationMs,
   useThinkingEpisodeElapsed,
@@ -576,6 +577,7 @@ export function InlineApprovalControls({
 export function RunBlocksList({
   blocks,
   barrier,
+  inboxBarrier,
   approvalDecisions,
   setApprovalDecisions,
   busy,
@@ -583,6 +585,7 @@ export function RunBlocksList({
 }: {
   blocks: LiveBlock[];
   barrier: ApprovalBarrier | null;
+  inboxBarrier: InboxReviewBarrier | null;
   approvalDecisions: Record<string, boolean | null>;
   setApprovalDecisions: Dispatch<
     SetStateAction<Record<string, boolean | null>>
@@ -590,6 +593,7 @@ export function RunBlocksList({
   busy: boolean;
   mutationOutcomeByPendingId: Record<string, boolean | undefined>;
 }) {
+  const { inboxPollWaiting, inboxResumeError } = useHofAgentChat();
   const segments = segmentLiveBlocks(
     dropRedundantModelPhaseBeforeAssistant(blocks),
   );
@@ -672,6 +676,45 @@ export function RunBlocksList({
               }`}
             >
               <p>{footerDone}</p>
+            </div>
+          );
+        }
+        if (b.kind === "inbox_review_required") {
+          const activeInbox =
+            inboxBarrier &&
+            inboxBarrier.runId.trim() === b.run_id.trim() &&
+            inboxBarrier.watches.length > 0
+              ? inboxBarrier
+              : null;
+          if (activeInbox) {
+            return (
+              <div
+                key={b.id}
+                className="rounded-md border border-border bg-surface/90 px-2.5 py-2 text-[11px] leading-snug text-secondary"
+                role="status"
+                aria-live="polite"
+              >
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-tertiary">
+                  Waiting for Inbox
+                </p>
+                <p className="mt-1">
+                  Finish the review in Inbox; the assistant continues automatically when
+                  status updates.
+                </p>
+                {inboxPollWaiting ? (
+                  <p className="mt-1 text-tertiary">Checking status…</p>
+                ) : null}
+                {inboxResumeError ? (
+                  <p className="mt-1 text-[var(--color-destructive)]">
+                    {inboxResumeError}
+                  </p>
+                ) : null}
+              </div>
+            );
+          }
+          return (
+            <div key={b.id} className="text-[11px] text-tertiary">
+              <p>Inbox review step completed; assistant continued.</p>
             </div>
           );
         }
@@ -1820,6 +1863,9 @@ export function LiveBlockView({
     );
   }
   if (b.kind === "approval_required") {
+    return null;
+  }
+  if (b.kind === "inbox_review_required") {
     return null;
   }
   return (

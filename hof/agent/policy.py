@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -20,6 +20,52 @@ class PostApplyReviewHint:
     label: str
     url: str | None = None
     path: str | None = None
+
+
+@dataclass(frozen=True)
+class InboxWatchDescriptor:
+    """Persisted inbox HITL watch: user completes review in Inbox, then client resumes."""
+
+    watch_id: str
+    record_type: str
+    record_id: str
+    label: str | None = None
+    url: str | None = None
+    path: str | None = None
+
+
+def inbox_watch_to_wire(w: InboxWatchDescriptor) -> dict[str, Any]:
+    d: dict[str, Any] = {
+        "watch_id": w.watch_id,
+        "record_type": w.record_type,
+        "record_id": w.record_id,
+    }
+    if w.label is not None:
+        d["label"] = w.label
+    if w.url is not None:
+        d["url"] = w.url
+    if w.path is not None:
+        d["path"] = w.path
+    return d
+
+
+def inbox_watch_from_wire(raw: dict[str, Any]) -> InboxWatchDescriptor | None:
+    wid = str(raw.get("watch_id") or "").strip()
+    rt = str(raw.get("record_type") or "").strip()
+    rid = str(raw.get("record_id") or "").strip()
+    if not wid or not rt or not rid:
+        return None
+    lab = raw.get("label")
+    url = raw.get("url")
+    path = raw.get("path")
+    return InboxWatchDescriptor(
+        watch_id=wid,
+        record_type=rt,
+        record_id=rid,
+        label=str(lab).strip() if isinstance(lab, str) and lab.strip() else None,
+        url=str(url).strip() if isinstance(url, str) and url.strip() else None,
+        path=str(path).strip() if isinstance(path, str) and path.strip() else None,
+    )
 
 
 @dataclass(frozen=True)
@@ -42,6 +88,40 @@ MutationPreviewFn = Callable[
 MutationPostApplyFn = Callable[
     [str, dict[str, Any], dict[str, Any]],
     PostApplyReviewHint | None,
+]
+
+# after confirmed mutation -> inbox watches until Inbox review completes
+MutationInboxWatchFn = Callable[
+    [str, dict[str, Any], dict[str, Any]],
+    Sequence[InboxWatchDescriptor] | None,
+]
+# True + optional synthetic user line; False + None = pending; False + str = error detail
+VerifyInboxWatchFn = Callable[[InboxWatchDescriptor], tuple[bool, str | None]]
+
+
+@dataclass(frozen=True)
+class MutationBatchEntry:
+    """One resolved pending mutation from the resume batch (confirmed or rejected)."""
+
+    function_name: str
+    arguments: dict[str, Any]
+    result: dict[str, Any]
+    confirmed: bool
+
+
+# Pending inbox item ids before the mutation batch (e.g. workflow row ids).
+InboxSnapshotFn = Callable[[], set[str]]
+# (snapshot_ids, batch, watches_from_per_tool_hooks) -> extra watches from diff / async settle
+InboxScanAfterMutationsFn = Callable[
+    [set[str], list[MutationBatchEntry], list[InboxWatchDescriptor]],
+    list[InboxWatchDescriptor],
+]
+
+# After inbox watches verify: (resolved watches, baseline pending ids at last barrier) ->
+# (extra watches for newly appeared pending rows, updated baseline = current pending ids).
+InboxScanAfterInboxResumeFn = Callable[
+    [list[InboxWatchDescriptor], frozenset[str]],
+    tuple[list[InboxWatchDescriptor], frozenset[str]],
 ]
 
 
@@ -126,11 +206,18 @@ automatically—you do not need to explain that approval mechanism or where to c
 users to type "yes" as the only way to proceed; the UI is authoritative.
 
 Read/list tools run immediately. You may mix reads and mutations in one turn: reads return data
-while mutations wait for confirmation before the assistant continues."""
+while mutations wait for confirmation before the assistant continues.
+
+Some mutations, after the user confirms them in the chat UI, still require a **human step in
+the app Inbox** (e.g. manager approval). When that applies, the stream pauses on
+**awaiting_inbox_review** until Inbox status changes and the client resumes via
+**agent_resume_inbox_reviews** (server re-verifies). Use read-only tools such as
+**get_inbox_review_link** when you need to show a deep link in tool output for the user."""
 
 DEFAULT_CONFIRMATION_SUMMARY_USER_MESSAGE = (
     "The data-changing tools above have NOT run yet — nothing was written to the database. "
-    "The user must Approve or Reject each proposed action in the assistant UI (then Apply / confirm "
+    "The user must Approve or Reject each proposed action in the assistant UI "
+    "(then Apply / confirm "
     "if shown). Expandable tool rows show technical detail only.\n\n"
     "Reply with 1–3 short sentences in the same language as the user's chat messages "
     "(role user only), "
@@ -148,6 +235,22 @@ DEFAULT_CONFIRMATION_SUMMARY_USER_MESSAGE = (
 # - none: no assistant text; UI pending bar only (main reply streams after resume).
 ConfirmationSummaryMode = Literal["llm_stream", "static", "none"]
 
+DEFAULT_INBOX_REVIEW_SUMMARY_USER_MESSAGE = (
+    "The system detected one or more **Inbox reviews** that must be completed in the app "
+    "before this assistant run can continue (separate from chat mutation Approve/Reject).\n\n"
+    "Below is structured data for each pending review (record type, id, label, URL/path). "
+    "Reply to the user in the same language as their chat messages (role user only): "
+    "explain what needs doing, include the relevant link(s) in Markdown, and say you will "
+    "continue automatically after they finish in Inbox. You may call **read-only** tools "
+    "if you need more detail; do not call mutation tools."
+)
+
+# Before awaiting_inbox_review: optional streamed assistant turn(s) with read-only tools.
+# - llm_stream: model may use read tools and stream text (default).
+# - static: deterministic text from watch URLs/labels (no LLM).
+# - none: emit barrier immediately (legacy).
+InboxReviewSummaryMode = Literal["llm_stream", "static", "none"]
+
 
 @dataclass(frozen=True)
 class AgentPolicy:
@@ -160,6 +263,10 @@ class AgentPolicy:
     system_prompt_mutation_suffix: str = DEFAULT_SYSTEM_PROMPT_MUTATION_SUFFIX
     confirmation_summary_user_message: str = DEFAULT_CONFIRMATION_SUMMARY_USER_MESSAGE
     confirmation_summary_mode: ConfirmationSummaryMode = "llm_stream"
+    inbox_review_summary_user_message: str = DEFAULT_INBOX_REVIEW_SUMMARY_USER_MESSAGE
+    inbox_review_summary_mode: InboxReviewSummaryMode = "llm_stream"
+    # Redis/memory TTL for runs on awaiting_inbox_review (longer than mutation pending).
+    inbox_review_state_ttl_sec: int = 172_800
     # Short hint for streamed tool_call events (UI); keep concise.
     tool_internal_rationale: dict[str, str] = field(default_factory=dict)
     # Merged into OpenAI tool descriptions and hof fn describe.
@@ -170,6 +277,14 @@ class AgentPolicy:
     attachments_system_note: AttachmentsSystemNoteFn | None = None
     mutation_preview: dict[str, MutationPreviewFn] = field(default_factory=dict)
     mutation_post_apply: dict[str, MutationPostApplyFn] = field(default_factory=dict)
+    mutation_inbox_watches: dict[str, MutationInboxWatchFn] = field(default_factory=dict)
+    verify_inbox_watch: VerifyInboxWatchFn | None = None
+    # Optional: pending inbox ids before confirmed mutations (pair with inbox_scan_after_mutations).
+    inbox_snapshot_before_mutations: InboxSnapshotFn | None = None
+    # Optional: after the batch + per-tool watches, add watches (async pipelines, etc.).
+    inbox_scan_after_mutations: InboxScanAfterMutationsFn | None = None
+    # Optional: after inbox verify, new pending rows (e.g. expense_review after receipt HITL).
+    inbox_scan_after_inbox_resume: InboxScanAfterInboxResumeFn | None = None
 
     def effective_allowlist(self) -> frozenset[str]:
         return frozenset(self.allowlist_read | self.allowlist_mutation | BUILTIN_AGENT_TOOL_NAMES)

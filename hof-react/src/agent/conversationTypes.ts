@@ -11,6 +11,11 @@ export type AgentConversationDraftV1 = {
     runId: string;
     items: { pendingId: string; name: string; cli_line: string }[];
   } | null;
+  /** Engine ``awaiting_inbox_review`` (optional persisted gate). */
+  inboxReviewBarrier?: {
+    runId: string;
+    watches: unknown[];
+  } | null;
   approvalDecisions: Record<string, boolean | null>;
 };
 

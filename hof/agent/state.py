@@ -74,12 +74,22 @@ if _agent_redis is None:
 
 
 def save_agent_run(run_id: str, payload: dict[str, Any]) -> None:
+    save_agent_run_with_ttl(run_id, payload, _AGENT_STATE_TTL_SEC)
+
+
+def save_agent_run_with_ttl(run_id: str, payload: dict[str, Any], ttl_sec: int) -> None:
+    """Persist agent run state with an explicit TTL (e.g. long-lived inbox review barriers)."""
     raw = json.dumps(payload, default=str)
     rid = run_id.strip()
+    ttl = max(60, int(ttl_sec))
     if _agent_redis is not None:
-        _agent_redis.setex(_AGENT_KEY_RUN.format(run_id=rid), _AGENT_STATE_TTL_SEC, raw)
+        _agent_redis.setex(_AGENT_KEY_RUN.format(run_id=rid), ttl, raw)
         return
-    _agent_memory_set(_agent_memory_runs, rid, raw)
+    # In-memory store uses monotonic expiry; honor requested TTL instead of default constant.
+    now = time.monotonic()
+    with _agent_state_lock:
+        _agent_prune_memory(_agent_memory_runs, now)
+        _agent_memory_runs[rid] = (now + float(ttl), raw)
 
 
 def load_agent_run(run_id: str) -> dict[str, Any] | None:

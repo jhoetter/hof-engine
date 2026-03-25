@@ -15,17 +15,22 @@ from llm_markdown.agent_stream import (
 from hof.agent.policy import (
     BUILTIN_AGENT_TOOL_NAMES,
     AgentPolicy,
+    InboxWatchDescriptor,
+    MutationBatchEntry,
     MutationPreviewResult,
     PostApplyReviewHint,
     configure_agent,
     get_agent_policy,
+    inbox_watch_to_wire,
 )
+from hof.agent.state import load_agent_run, save_agent_run
 from hof.agent.stream import (
     _append_client_messages,
     _mutation_preview_payload,
     collect_agent_chat_from_stream,
     default_normalize_attachments,
     iter_agent_chat_stream,
+    iter_agent_resume_inbox_stream,
     iter_agent_resume_stream,
 )
 
@@ -200,6 +205,543 @@ def test_resume_emits_mutation_applied_from_post_apply_hook(monkeypatch) -> None
     assert isinstance(par, dict)
     assert par.get("label") == "Manager review"
     assert par.get("path") == "/inbox"
+    assert any(e.get("type") == "resume_start" for e in ev2)
+
+
+def test_resume_defers_openai_loop_when_inbox_watches(monkeypatch) -> None:
+    """After mutation confirm, inbox watches keep the run open and emit awaiting_inbox_review."""
+
+    from hof.functions import function
+
+    @function
+    def mut_review() -> dict:
+        """Mutation that ends in manager review."""
+        return {"approval_status": "pending_review", "ok": True, "id": "exp-1"}
+
+    importlib.reload(importlib.import_module("hof.agent.builtin_tools"))
+
+    def post_apply(
+        name: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> PostApplyReviewHint | None:
+        if result.get("approval_status") == "pending_review":
+            return PostApplyReviewHint(
+                label="Manager review",
+                path="/inbox",
+                url="http://localhost/inbox",
+            )
+        return None
+
+    def inbox_watches(
+        name: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> list[InboxWatchDescriptor] | None:
+        if result.get("approval_status") == "pending_review":
+            return [
+                InboxWatchDescriptor(
+                    watch_id="watch-a",
+                    record_type="expense",
+                    record_id="exp-1",
+                    label="Manager review",
+                    path="/inbox",
+                )
+            ]
+        return None
+
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset({"mut_review"}),
+            system_prompt_intro="test ",
+            confirmation_summary_mode="none",
+            inbox_review_summary_mode="none",
+            mutation_post_apply={"mut_review": post_apply},
+            mutation_inbox_watches={"mut_review": inbox_watches},
+            verify_inbox_watch=lambda _d: (True, "Approved."),
+        ),
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AGENT_REASONING_MODE", raising=False)
+
+    def fake_stream_round0(*_a, **_kw):
+        yield AgentToolCallDelta(
+            index=0,
+            tool_call_id="call_r",
+            name="mut_review",
+            arguments="{}",
+        )
+        yield AgentMessageFinish(finish_reason="tool_calls", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_round0):
+        ev1 = list(
+            iter_agent_chat_stream([{"role": "user", "content": "run"}], None),
+        )
+
+    ac = [e for e in ev1 if e.get("type") == "awaiting_confirmation"]
+    assert len(ac) == 1
+    pids = ac[0].get("pending_ids")
+    assert isinstance(pids, list) and len(pids) == 1
+    run_starts = [e for e in ev1 if e.get("type") == "run_start"]
+    run_id = str(run_starts[0].get("run_id") or "").strip()
+    assert run_id
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_round0):
+        ev2 = list(
+            iter_agent_resume_stream(
+                run_id,
+                [{"pending_id": pids[0], "confirm": True}],
+            ),
+        )
+
+    assert any(e.get("type") == "mutation_applied" for e in ev2)
+    air = [e for e in ev2 if e.get("type") == "awaiting_inbox_review"]
+    assert len(air) == 1
+    assert not any(e.get("type") == "resume_start" for e in ev2)
+    ws = air[0].get("watches")
+    assert isinstance(ws, list) and len(ws) == 1
+    assert ws[0].get("watch_id") == "watch-a"
+
+    saved = load_agent_run(run_id)
+    assert saved is not None
+    assert saved.get("open_inbox_watches")
+
+    def fake_stream_after_inbox(*_a, **_kw):
+        yield AgentContentDelta(text="After inbox.")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_after_inbox):
+        ev3 = list(
+            iter_agent_resume_inbox_stream(
+                run_id,
+                [{"watch_id": "watch-a"}],
+            ),
+        )
+
+    assert any(e.get("type") == "resume_start" for e in ev3)
+    fin = [e for e in ev3 if e.get("type") == "final"]
+    assert fin
+    assert "After inbox" in str(fin[0].get("reply") or "")
+
+
+def test_inbox_review_summary_llm_streams_before_awaiting_inbox(monkeypatch) -> None:
+    """Default inbox_review_summary_mode streams assistant guidance before awaiting_inbox_review."""
+
+    from hof.functions import function
+
+    @function
+    def mut_review() -> dict:
+        """Mutation that ends in manager review."""
+        return {"approval_status": "pending_review", "ok": True, "id": "exp-1"}
+
+    importlib.reload(importlib.import_module("hof.agent.builtin_tools"))
+
+    def inbox_watches(
+        name: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> list[InboxWatchDescriptor] | None:
+        if result.get("approval_status") == "pending_review":
+            return [
+                InboxWatchDescriptor(
+                    watch_id="watch-sum",
+                    record_type="expense",
+                    record_id="exp-1",
+                    label="Manager review",
+                    path="/inbox?id=exp-1",
+                )
+            ]
+        return None
+
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset({"mut_review"}),
+            system_prompt_intro="test ",
+            confirmation_summary_mode="none",
+            mutation_inbox_watches={"mut_review": inbox_watches},
+            verify_inbox_watch=lambda _d: (True, "ok"),
+        ),
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AGENT_REASONING_MODE", raising=False)
+
+    def fake_stream_round0(*_a, **_kw):
+        yield AgentToolCallDelta(
+            index=0,
+            tool_call_id="call_r",
+            name="mut_review",
+            arguments="{}",
+        )
+        yield AgentMessageFinish(finish_reason="tool_calls", usage=None)
+
+    def fake_inbox_summary(*_a, **_kw):
+        yield AgentContentDelta(text="Please complete the Inbox review.")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_round0):
+        ev1 = list(
+            iter_agent_chat_stream([{"role": "user", "content": "run"}], None),
+        )
+
+    pids = [e for e in ev1 if e.get("type") == "awaiting_confirmation"][0].get("pending_ids")
+    run_id = str([e for e in ev1 if e.get("type") == "run_start"][0].get("run_id") or "")
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_inbox_summary):
+        ev2 = list(
+            iter_agent_resume_stream(
+                run_id,
+                [{"pending_id": pids[0], "confirm": True}],
+            ),
+        )
+
+    phases = [e for e in ev2 if e.get("phase") == "inbox_review_summary"]
+    assert phases, "expected inbox_review_summary phase before barrier"
+    deltas = [e for e in ev2 if e.get("type") == "assistant_delta"]
+    assert any("Inbox" in str(e.get("text") or "") for e in deltas)
+    air = [e for e in ev2 if e.get("type") == "awaiting_inbox_review"]
+    assert len(air) == 1
+
+    saved = load_agent_run(run_id)
+    assert saved is not None
+    msgs = saved.get("oa_messages") or []
+    assert any(
+        m.get("role") == "assistant"
+        and "Inbox" in str(m.get("content") or "")
+        for m in msgs
+        if isinstance(m, dict)
+    )
+
+
+def test_inbox_scan_after_inbox_resume_second_barrier(monkeypatch) -> None:
+    """Chained pending_review rows after Inbox HITL can trigger another awaiting_inbox_review."""
+    calls = {"n": 0}
+
+    def scan_resume(
+        resolved: list[InboxWatchDescriptor],
+        baseline: frozenset[str],
+    ) -> tuple[list[InboxWatchDescriptor], frozenset[str]]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            assert len(resolved) == 1
+            assert baseline == frozenset({"receipt-1", "other-pending"})
+            return (
+                [
+                    InboxWatchDescriptor(
+                        watch_id="watch-exp",
+                        record_type="expense",
+                        record_id="exp-11",
+                        label="Expense review",
+                        path="/inbox?id=exp-11",
+                    ),
+                ],
+                frozenset({"receipt-1", "other-pending", "exp-11"}),
+            )
+        assert len(resolved) == 1
+        assert resolved[0].watch_id == "watch-exp"
+        return [], frozenset({"other-pending"})
+
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="test ",
+            inbox_review_summary_mode="none",
+            verify_inbox_watch=lambda _d: (True, "ok"),
+            inbox_scan_after_inbox_resume=scan_resume,
+        ),
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AGENT_REASONING_MODE", raising=False)
+
+    rid = "run-chain-inbox-1"
+    w1 = InboxWatchDescriptor(
+        watch_id="watch-r",
+        record_type="receipt_document",
+        record_id="receipt-1",
+        label="Receipt",
+        path="/inbox?id=receipt-1",
+    )
+    save_agent_run(
+        rid,
+        {
+            "oa_messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-4o-mini",
+            "llm_backend": "openai",
+            "rounds": 1,
+            "open_inbox_watches": [inbox_watch_to_wire(w1)],
+            "inbox_pending_baseline_ids": ["other-pending", "receipt-1"],
+        },
+    )
+
+    ev1 = list(
+        iter_agent_resume_inbox_stream(
+            rid,
+            [{"watch_id": "watch-r"}],
+        ),
+    )
+    air1 = [e for e in ev1 if e.get("type") == "awaiting_inbox_review"]
+    assert len(air1) == 1
+    assert air1[0].get("watches", [{}])[0].get("watch_id") == "watch-exp"
+    assert not any(e.get("type") == "resume_start" for e in ev1)
+
+    saved = load_agent_run(rid)
+    assert saved is not None
+    assert saved.get("inbox_pending_baseline_ids") == ["exp-11", "other-pending", "receipt-1"]
+
+    def fake_stream_done(*_a, **_kw):
+        yield AgentContentDelta(text="Done.")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_done):
+        ev2 = list(
+            iter_agent_resume_inbox_stream(
+                rid,
+                [{"watch_id": "watch-exp"}],
+            ),
+        )
+
+    assert calls["n"] == 2
+    assert any(e.get("type") == "resume_start" for e in ev2)
+    assert any(e.get("type") == "final" for e in ev2)
+    assert load_agent_run(rid) is None
+
+
+def test_inbox_scan_after_mutations_adds_watches(monkeypatch) -> None:
+    """inbox_scan_after_mutations can register watches without per-tool mutation_inbox_watches."""
+    from hof.functions import function
+
+    @function
+    def mut_no_inbox() -> dict:
+        return {"ok": True, "id": "x1"}
+
+    importlib.reload(importlib.import_module("hof.agent.builtin_tools"))
+
+    def scan(
+        snap: set[str],
+        batch: list[MutationBatchEntry],
+        already: list[InboxWatchDescriptor],
+    ) -> list[InboxWatchDescriptor]:
+        assert snap == set()
+        assert len(batch) == 1
+        assert batch[0].function_name == "mut_no_inbox"
+        assert batch[0].confirmed is True
+        assert already == []
+        return [
+            InboxWatchDescriptor(
+                watch_id="watch-scan",
+                record_type="expense",
+                record_id="exp-scan",
+                label="From scan",
+                path="/inbox",
+            ),
+        ]
+
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset({"mut_no_inbox"}),
+            system_prompt_intro="test ",
+            confirmation_summary_mode="none",
+            inbox_review_summary_mode="none",
+            inbox_snapshot_before_mutations=lambda: set(),
+            inbox_scan_after_mutations=scan,
+            verify_inbox_watch=lambda _d: (True, "ok"),
+        ),
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AGENT_REASONING_MODE", raising=False)
+
+    def fake_stream_round0(*_a, **_kw):
+        yield AgentToolCallDelta(
+            index=0,
+            tool_call_id="call_s",
+            name="mut_no_inbox",
+            arguments="{}",
+        )
+        yield AgentMessageFinish(finish_reason="tool_calls", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_round0):
+        ev1 = list(
+            iter_agent_chat_stream([{"role": "user", "content": "run"}], None),
+        )
+
+    ac = [e for e in ev1 if e.get("type") == "awaiting_confirmation"]
+    pids = ac[0].get("pending_ids")
+    run_id = str([e for e in ev1 if e.get("type") == "run_start"][0].get("run_id") or "")
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_round0):
+        ev2 = list(
+            iter_agent_resume_stream(
+                run_id,
+                [{"pending_id": pids[0], "confirm": True}],
+            ),
+        )
+
+    air = [e for e in ev2 if e.get("type") == "awaiting_inbox_review"]
+    assert len(air) == 1
+    ws = air[0].get("watches")
+    assert isinstance(ws, list) and len(ws) == 1
+    assert ws[0].get("watch_id") == "watch-scan"
+    assert not any(e.get("type") == "resume_start" for e in ev2)
+
+
+def test_inbox_scan_merges_with_per_tool_watches(monkeypatch) -> None:
+    """Scan can append watches alongside mutation_inbox_watches."""
+    from hof.functions import function
+
+    @function
+    def mut_review() -> dict:
+        return {"approval_status": "pending_review", "ok": True, "id": "exp-1"}
+
+    importlib.reload(importlib.import_module("hof.agent.builtin_tools"))
+
+    def inbox_watches(
+        name: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> list[InboxWatchDescriptor] | None:
+        if result.get("approval_status") == "pending_review":
+            return [
+                InboxWatchDescriptor(
+                    watch_id="watch-a",
+                    record_type="expense",
+                    record_id="exp-1",
+                    label="Per tool",
+                    path="/inbox",
+                ),
+            ]
+        return None
+
+    def scan(
+        _snap: set[str],
+        _batch: list[MutationBatchEntry],
+        already: list[InboxWatchDescriptor],
+    ) -> list[InboxWatchDescriptor]:
+        assert len(already) == 1
+        assert already[0].record_id == "exp-1"
+        return [
+            InboxWatchDescriptor(
+                watch_id="watch-b",
+                record_type="expense",
+                record_id="exp-2",
+                label="From scan",
+                path="/inbox",
+            ),
+        ]
+
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset({"mut_review"}),
+            system_prompt_intro="test ",
+            confirmation_summary_mode="none",
+            inbox_review_summary_mode="none",
+            mutation_inbox_watches={"mut_review": inbox_watches},
+            inbox_snapshot_before_mutations=lambda: set(),
+            inbox_scan_after_mutations=scan,
+            verify_inbox_watch=lambda _d: (True, "ok"),
+        ),
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AGENT_REASONING_MODE", raising=False)
+
+    def fake_stream_round0(*_a, **_kw):
+        yield AgentToolCallDelta(
+            index=0,
+            tool_call_id="call_r",
+            name="mut_review",
+            arguments="{}",
+        )
+        yield AgentMessageFinish(finish_reason="tool_calls", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_round0):
+        ev1 = list(
+            iter_agent_chat_stream([{"role": "user", "content": "run"}], None),
+        )
+
+    pids = [e for e in ev1 if e.get("type") == "awaiting_confirmation"][0].get("pending_ids")
+    run_id = str([e for e in ev1 if e.get("type") == "run_start"][0].get("run_id") or "")
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_round0):
+        ev2 = list(
+            iter_agent_resume_stream(
+                run_id,
+                [{"pending_id": pids[0], "confirm": True}],
+            ),
+        )
+
+    air = [e for e in ev2 if e.get("type") == "awaiting_inbox_review"]
+    ws = air[0].get("watches")
+    assert isinstance(ws, list) and len(ws) == 2
+    ids = {w.get("watch_id") for w in ws}
+    assert ids == {"watch-a", "watch-b"}
+
+
+def test_inbox_scan_exception_still_allows_resume_when_no_watches(monkeypatch) -> None:
+    """If inbox_scan_after_mutations raises, resume continues when no watches accumulated."""
+
+    from hof.functions import function
+
+    @function
+    def mut_plain() -> dict:
+        return {"ok": True}
+
+    importlib.reload(importlib.import_module("hof.agent.builtin_tools"))
+
+    def scan_boom(
+        _snap: set[str],
+        _batch: list[MutationBatchEntry],
+        _already: list[InboxWatchDescriptor],
+    ) -> list[InboxWatchDescriptor]:
+        msg = "scan failed"
+        raise RuntimeError(msg)
+
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset({"mut_plain"}),
+            system_prompt_intro="test ",
+            confirmation_summary_mode="none",
+            inbox_snapshot_before_mutations=lambda: {"pre-existing"},
+            inbox_scan_after_mutations=scan_boom,
+            verify_inbox_watch=lambda _d: (True, "ok"),
+        ),
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AGENT_REASONING_MODE", raising=False)
+
+    def fake_stream_round0(*_a, **_kw):
+        yield AgentToolCallDelta(
+            index=0,
+            tool_call_id="call_p",
+            name="mut_plain",
+            arguments="{}",
+        )
+        yield AgentMessageFinish(finish_reason="tool_calls", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_round0):
+        ev1 = list(
+            iter_agent_chat_stream([{"role": "user", "content": "run"}], None),
+        )
+
+    pids = [e for e in ev1 if e.get("type") == "awaiting_confirmation"][0].get("pending_ids")
+    run_id = str([e for e in ev1 if e.get("type") == "run_start"][0].get("run_id") or "")
+
+    def fake_stream_after(*_a, **_kw):
+        yield AgentContentDelta(text="Done.")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_after):
+        ev2 = list(
+            iter_agent_resume_stream(
+                run_id,
+                [{"pending_id": pids[0], "confirm": True}],
+            ),
+        )
+
+    assert not any(e.get("type") == "awaiting_inbox_review" for e in ev2)
     assert any(e.get("type") == "resume_start" for e in ev2)
 
 

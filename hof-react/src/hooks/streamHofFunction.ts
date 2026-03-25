@@ -67,3 +67,28 @@ export async function streamHofFunction(
     }
   }
 }
+
+/** POST /api/functions/{name} — JSON body; response shape `{ result: T }` (same as TUI). */
+export async function postHofFunction<TResult = unknown>(
+  functionName: string,
+  params: Record<string, unknown>,
+): Promise<TResult> {
+  const token =
+    typeof localStorage !== "undefined" ? localStorage.getItem("hof_token") : null;
+  const res = await fetch(`/api/functions/${functionName}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({ detail: res.statusText }))) as {
+      detail?: string;
+    };
+    throw new Error(typeof err.detail === "string" ? err.detail : res.statusText);
+  }
+  const json = (await res.json()) as { result?: TResult };
+  return json.result as TResult;
+}

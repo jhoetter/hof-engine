@@ -2,11 +2,7 @@
 
 import { CheckCircle2, XCircle } from "lucide-react";
 import { useEffect } from "react";
-import {
-  formatPendingPreviewLine,
-  humanizeToolName,
-  postApplyReviewFromPreview,
-} from "./hofAgentChatModel";
+import { formatPendingPreviewLine, humanizeToolName } from "./hofAgentChatModel";
 import { useHofAgentChat } from "./hofAgentChatContext";
 
 const BTN_BASE =
@@ -64,7 +60,6 @@ export function HofAgentPendingApprovalBar({
         {approvalBarrier.items.map((it) => {
           const title = humanizeToolName(it.name);
           const line = formatPendingPreviewLine(it.preview);
-          const review = postApplyReviewFromPreview(it.preview);
           const d = approvalDecisions[it.pendingId];
           return (
             <li
@@ -78,19 +73,6 @@ export function HofAgentPendingApprovalBar({
                 {line ? (
                   <div className="mt-0.5 text-[11px] leading-snug text-secondary">
                     {line}
-                  </div>
-                ) : null}
-                {review ? (
-                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                    <span className="inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-secondary ring-1 ring-border/80">
-                      {review.label}
-                    </span>
-                    <a
-                      href={review.href}
-                      className="text-[11px] font-medium text-[var(--color-accent)] underline-offset-2 hover:underline"
-                    >
-                      Open
-                    </a>
                   </div>
                 ) : null}
               </div>

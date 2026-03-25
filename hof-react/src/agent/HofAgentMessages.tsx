@@ -35,6 +35,7 @@ export function HofAgentMessages({
     liveBlocks,
     busy,
     approvalBarrier,
+    inboxReviewBarrier,
     approvalDecisions,
     setApprovalDecisions,
     mutationOutcomeByPendingId,
@@ -91,6 +92,7 @@ export function HofAgentMessages({
             <RunBlocksList
               blocks={item.blocks}
               barrier={approvalBarrier}
+              inboxBarrier={inboxReviewBarrier}
               approvalDecisions={approvalDecisions}
               setApprovalDecisions={setApprovalDecisions}
               busy={busy}
@@ -104,6 +106,7 @@ export function HofAgentMessages({
           <RunBlocksList
             blocks={liveBlocks}
             barrier={approvalBarrier}
+            inboxBarrier={inboxReviewBarrier}
             approvalDecisions={approvalDecisions}
             setApprovalDecisions={setApprovalDecisions}
             busy={busy}

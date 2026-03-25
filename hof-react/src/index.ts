@@ -12,6 +12,8 @@ export {
 } from "./agent/hofAgentChatContext";
 export { HofAgentMessages, type HofAgentMessagesProps } from "./agent/HofAgentMessages";
 export { HofAgentPendingApprovalBar } from "./agent/HofAgentPendingApprovalBar";
+export { HofAgentInboxReviewBar } from "./agent/HofAgentInboxReviewBar";
+export { defaultPollInboxReviewWatch } from "./agent/hofAgentChatContext";
 export {
   HofAgentComposer,
   type HofAgentComposerProps,
@@ -35,6 +37,10 @@ export type {
 export { FunctionResultDisplay } from "./agent/FunctionResultDisplay";
 export { useHofTable } from "./hooks/useHofTable";
 export { useHofFunction } from "./hooks/useHofFunction";
-export { streamHofFunction, type HofStreamEvent } from "./hooks/streamHofFunction";
+export {
+  postHofFunction,
+  streamHofFunction,
+  type HofStreamEvent,
+} from "./hooks/streamHofFunction";
 export { useHofFlow } from "./hooks/useHofFlow";
 export { useHofNode } from "./hooks/useHofNode";

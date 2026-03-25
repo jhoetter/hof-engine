@@ -113,6 +113,11 @@ function RowsTableView({
 
 function KvTableView({ data }: { data: Record<string, unknown> }) {
   const keys = Object.keys(data).sort((a, b) => String(a).localeCompare(String(b)));
+  if (keys.length === 0) {
+    return (
+      <p className="font-mono text-[10px] italic text-tertiary">(empty)</p>
+    );
+  }
   return (
     <div className="min-w-0 max-w-full overflow-x-auto">
     <table className="w-full min-w-0 border-collapse border border-border text-left font-mono text-[10px]">
@@ -139,6 +144,25 @@ function KvTableView({ data }: { data: Record<string, unknown> }) {
   );
 }
 
+function isMutationPreviewEnvelope(
+  v: unknown,
+): v is {
+  summary: string;
+  data?: unknown;
+  post_apply_review?: { label?: string; url?: string; path?: string };
+} {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) {
+    return false;
+  }
+  const o = v as Record<string, unknown>;
+  if (typeof o.summary !== "string" || !o.summary.trim()) {
+    return false;
+  }
+  return (
+    "data" in o || "post_apply_review" in o || "status_hint" in o
+  );
+}
+
 export function FunctionResultDisplay({
   value,
 }: {
@@ -150,6 +174,36 @@ export function FunctionResultDisplay({
 
   if (value === null || value === undefined) {
     return null;
+  }
+
+  if (isMutationPreviewEnvelope(value)) {
+    const pr = value.post_apply_review;
+    const prLabel =
+      pr && typeof pr === "object" && typeof pr.label === "string"
+        ? pr.label.trim()
+        : "";
+    const inner = value.data;
+    const showInner =
+      inner != null &&
+      typeof inner === "object" &&
+      !Array.isArray(inner) &&
+      Object.keys(inner as object).length > 0;
+    return shell(
+      <div className="space-y-2">
+        <p className="text-[11px] font-medium leading-snug text-foreground">
+          {value.summary}
+        </p>
+        {showInner ? <FunctionResultDisplay value={inner} /> : null}
+        {prLabel ? (
+          <p className="text-[10px] leading-snug text-tertiary">
+            After apply: <span className="text-secondary">{prLabel}</span>
+            {typeof pr?.path === "string" && pr.path.trim() ? (
+              <span className="text-tertiary"> ({pr.path.trim()})</span>
+            ) : null}
+          </p>
+        ) : null}
+      </div>,
+    );
   }
 
   if (typeof value === "object" && !Array.isArray(value) && value !== null) {

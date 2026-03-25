@@ -146,6 +146,27 @@ describe("applyStreamEvent streaming caret / structured steps", () => {
     }
   });
 
+  it("compactBlocksForHistory drops inbox_review_required (no thread chrome)", () => {
+    const blocks: LiveBlock[] = [
+      {
+        kind: "assistant",
+        id: "a1",
+        text: "Hi",
+        streaming: false,
+        streamPhase: "model",
+      },
+      {
+        kind: "inbox_review_required",
+        id: "in1",
+        run_id: "r1",
+        watches: [],
+      },
+    ];
+    const out = compactBlocksForHistory(blocks);
+    expect(out.some((b) => b.kind === "inbox_review_required")).toBe(false);
+    expect(out.find((b) => b.kind === "assistant")?.id).toBe("a1");
+  });
+
   it("final clears pendingStreamFinalize if assistant_done never arrived", () => {
     let blocks: LiveBlock[] = [];
     blocks = applyStreamEvent(

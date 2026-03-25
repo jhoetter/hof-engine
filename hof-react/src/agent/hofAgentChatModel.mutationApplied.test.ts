@@ -111,4 +111,57 @@ describe("segmentLiveBlocks + mutation_applied", () => {
     }
     expect(segs[0].mutationApplied?.post_apply_review.label).toBe("Manager review");
   });
+
+  it("uses last tool_result per tool_call_id so resume replaces pending row", () => {
+    const blocks: LiveBlock[] = [
+      {
+        kind: "tool_call",
+        id: "c1",
+        name: "create_expense",
+        cli_line: "hof fn create_expense",
+        tool_call_id: "tid_a",
+      },
+      {
+        kind: "mutation_pending",
+        id: "m1",
+        pending_id: "pid-1",
+        name: "create_expense",
+        cli_line: "hof fn create_expense",
+      },
+      {
+        kind: "tool_result",
+        id: "r_pending",
+        name: "create_expense",
+        summary: "wait",
+        pending_confirmation: true,
+        status_code: 202,
+        tool_call_id: "tid_a",
+      },
+      {
+        kind: "assistant",
+        id: "as1",
+        text: "done",
+        streaming: false,
+      },
+      {
+        kind: "tool_result",
+        id: "r_ok",
+        name: "create_expense",
+        summary: "created",
+        ok: true,
+        status_code: 200,
+        tool_call_id: "tid_a",
+      },
+    ];
+    const segs = segmentLiveBlocks(blocks);
+    const tg = segs.find((s) => s.type === "tool_group");
+    expect(tg?.type).toBe("tool_group");
+    if (tg?.type !== "tool_group") {
+      return;
+    }
+    expect(tg.result?.id).toBe("r_ok");
+    expect(tg.result?.pending_confirmation).toBeUndefined();
+    expect(tg.result?.ok).toBe(true);
+    expect(segs.filter((s) => s.type === "single")).toHaveLength(1);
+  });
 });

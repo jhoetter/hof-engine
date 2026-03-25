@@ -81,6 +81,8 @@ export type LiveBlock =
       arguments?: string;
       /** Short technical note from server for the expandable row (not chat prose). */
       internal_rationale?: string;
+      /** Provider tool call id — pairs with {@link tool_result.tool_call_id} (final result after resume). */
+      tool_call_id?: string;
     }
   | {
       kind: "tool_result";
@@ -94,6 +96,8 @@ export type LiveBlock =
       /** From stream: tool runner outcome (HTTP-shaped code for UI only). */
       ok?: boolean;
       status_code?: number;
+      /** Same id as the matching {@link tool_call.tool_call_id} row. */
+      tool_call_id?: string;
     }
   | {
       kind: "mutation_pending";
@@ -186,14 +190,9 @@ export const CHAT_USER_BUBBLE_CLASS =
   "max-w-full rounded-lg bg-hover px-4 py-2.5 text-sm leading-relaxed text-foreground";
 
 /** Same horizontal rail as thinking, tool cards, and assistant text (avoids mixed widths). */
-export const AGENT_CHAT_COLUMN_CLASS =
-  "w-full max-w-[min(100%,42rem)]";
+export const AGENT_CHAT_COLUMN_CLASS = "w-full max-w-[min(100%,42rem)]";
 
-export const CHAT_ASSISTANT_REPLY_BUBBLE_CLASS =
-  `${AGENT_CHAT_COLUMN_CLASS} text-sm leading-relaxed text-foreground`;
-
-export const TOOL_SECTION_LABEL_CLASS =
-  "mb-1 text-[10px] font-medium uppercase tracking-wide text-tertiary";
+export const CHAT_ASSISTANT_REPLY_BUBBLE_CLASS = `${AGENT_CHAT_COLUMN_CLASS} text-sm leading-relaxed text-foreground`;
 
 /** First name (or email local-part) for welcome line; falls back when profile is minimal. */
 /** snake_case API name → readable label */
@@ -239,7 +238,11 @@ export function postApplyReviewFromWire(
 export function postApplyReviewFromPreview(
   preview: unknown,
 ): { href: string; label: string; path?: string } | null {
-  if (preview == null || typeof preview !== "object" || Array.isArray(preview)) {
+  if (
+    preview == null ||
+    typeof preview !== "object" ||
+    Array.isArray(preview)
+  ) {
     return null;
   }
   const o = preview as Record<string, unknown>;
@@ -556,8 +559,7 @@ function assistantRowMatchesAssistantDone(
   b: LiveBlock,
 ): b is Extract<LiveBlock, { kind: "assistant" }> {
   return (
-    b.kind === "assistant" &&
-    Boolean(b.streaming || b.pendingStreamFinalize)
+    b.kind === "assistant" && Boolean(b.streaming || b.pendingStreamFinalize)
   );
 }
 
@@ -772,6 +774,11 @@ export function applyStreamEvent(
     const iraw = ev.internal_rationale;
     const internal_rationale =
       typeof iraw === "string" && iraw.trim() ? iraw.trim() : undefined;
+    const tcidRaw = (ev as { tool_call_id?: unknown }).tool_call_id;
+    const tool_call_id =
+      typeof tcidRaw === "string" && tcidRaw.trim()
+        ? tcidRaw.trim()
+        : undefined;
     const base = dropTrailingEmptyStreamingAssistant(
       withoutThinkingSkeleton(prev),
     );
@@ -785,6 +792,7 @@ export function applyStreamEvent(
         cli_line: cli,
         arguments: args || undefined,
         internal_rationale,
+        ...(tool_call_id ? { tool_call_id } : {}),
       },
     ];
   }
@@ -806,6 +814,11 @@ export function applyStreamEvent(
         : typeof scRaw === "string" && /^\d+$/.test(scRaw.trim())
           ? parseInt(scRaw.trim(), 10)
           : undefined;
+    const tcidRaw = (ev as { tool_call_id?: unknown }).tool_call_id;
+    const tool_call_id =
+      typeof tcidRaw === "string" && tcidRaw.trim()
+        ? tcidRaw.trim()
+        : undefined;
     const ready = finalizeStreamingAssistantBeforeStructuredStep(
       withoutThinkingSkeleton(prev),
     );
@@ -820,6 +833,7 @@ export function applyStreamEvent(
         ...(hasData ? { data } : {}),
         ...(ok !== undefined ? { ok } : {}),
         ...(status_code !== undefined ? { status_code } : {}),
+        ...(tool_call_id ? { tool_call_id } : {}),
       },
     ];
   }
@@ -829,7 +843,9 @@ export function applyStreamEvent(
     const cli_line = typeof ev.cli_line === "string" ? ev.cli_line : "";
     const args = typeof ev.arguments === "string" ? ev.arguments : "";
     const hasPreview = Object.prototype.hasOwnProperty.call(ev, "preview");
-    const preview = hasPreview ? (ev as { preview: unknown }).preview : undefined;
+    const preview = hasPreview
+      ? (ev as { preview: unknown }).preview
+      : undefined;
     const ready = finalizeStreamingAssistantBeforeStructuredStep(
       withoutThinkingSkeleton(prev),
     );
@@ -1085,7 +1101,9 @@ export function dedupeAdjacentDuplicateAssistants(
  * (fetch aborted). Finalizes streaming assistant rows, stamps ``cancelled`` when the
  * model never sent ``assistant_done``, then applies the same compaction as a normal run.
  */
-export function finalizeLiveBlocksAfterUserStop(blocks: LiveBlock[]): LiveBlock[] {
+export function finalizeLiveBlocksAfterUserStop(
+  blocks: LiveBlock[],
+): LiveBlock[] {
   const mapped = blocks.map((b) => {
     if (b.kind !== "assistant") {
       return b;
@@ -1125,6 +1143,9 @@ export function compactBlocksForHistory(blocks: LiveBlock[]): LiveBlock[] {
     if (b.kind === "assistant" && isEphemeralAssistantShell(b)) {
       return false;
     }
+    if (b.kind === "inbox_review_required") {
+      return false;
+    }
     return b.kind !== "thinking_skeleton";
   });
   const deduped = dedupeAdjacentDuplicateAssistants(base);
@@ -1152,7 +1173,28 @@ export function applyStreamEventWithDedupe(
   return dedupeAdjacentDuplicateAssistants(applyStreamEvent(prev, ev, ctx));
 }
 
+/** Last ``tool_result`` per provider ``tool_call_id`` (file order — final row wins after resume). */
+function latestToolResultByWireCallId(
+  blocks: LiveBlock[],
+): Map<string, ToolResultBlock> {
+  const m = new Map<string, ToolResultBlock>();
+  for (const b of blocks) {
+    if (b.kind !== "tool_result") {
+      continue;
+    }
+    const tr = b as ToolResultBlock;
+    const w = tr.tool_call_id?.trim();
+    if (!w) {
+      continue;
+    }
+    m.set(w, tr);
+  }
+  return m;
+}
+
 export function segmentLiveBlocks(blocks: LiveBlock[]): BlockSegment[] {
+  const byWire = latestToolResultByWireCallId(blocks);
+  const mergedToolResultIds = new Set<string>();
   const out: BlockSegment[] = [];
   let i = 0;
   while (i < blocks.length) {
@@ -1167,8 +1209,12 @@ export function segmentLiveBlocks(blocks: LiveBlock[]): BlockSegment[] {
       i += 1;
       continue;
     }
+    if (b.kind === "tool_result" && mergedToolResultIds.has(b.id)) {
+      i += 1;
+      continue;
+    }
     if (b.kind === "tool_call") {
-      const call = b;
+      const call = b as ToolCallBlock;
       i += 1;
       let mutation: MutationPendingBlock | undefined;
       let result: ToolResultBlock | undefined;
@@ -1179,6 +1225,24 @@ export function segmentLiveBlocks(blocks: LiveBlock[]): BlockSegment[] {
       if (i < blocks.length && blocks[i].kind === "tool_result") {
         result = blocks[i] as ToolResultBlock;
         i += 1;
+        while (
+          i < blocks.length &&
+          blocks[i].kind === "tool_result" &&
+          (blocks[i] as ToolResultBlock).name === call.name
+        ) {
+          result = blocks[i] as ToolResultBlock;
+          i += 1;
+        }
+      }
+      const wireId = call.tool_call_id?.trim() ?? "";
+      if (wireId) {
+        const latest = byWire.get(wireId);
+        if (latest) {
+          if (!result || latest.id !== result.id) {
+            mergedToolResultIds.add(latest.id);
+          }
+          result = latest;
+        }
       }
       let mutationApplied: MutationAppliedBlock | undefined;
       if (
@@ -1206,13 +1270,37 @@ export function segmentLiveBlocks(blocks: LiveBlock[]): BlockSegment[] {
   return out;
 }
 
+/** Legacy streams used ``POST /api/functions/<name> …`` for nested JSON; normalize to ``hof fn`` for UI. */
+function cliLineLooksLikeHttpFunctionPost(line: string): boolean {
+  return /^POST\s+\/api\/functions\/\S+/i.test(line.trim());
+}
+
+/**
+ * Single source of truth for pseudo-CLI lines in the assistant (tool card, pending rows, barrier).
+ * Prefer server ``cli_line`` unless it is the old HTTP-style line and ``argumentsJson`` can replace it.
+ */
+export function normalizeAgentCliDisplayLine(
+  name: string,
+  cliLine: string | undefined,
+  argumentsJson: string | undefined,
+): string {
+  const args = argumentsJson?.trim() ?? "";
+  const fallback =
+    name && args
+      ? `hof fn ${name} ${args.length > 220 ? `${args.slice(0, 217)}…` : args}`
+      : name || "(tool)";
+  const raw = cliLine?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  if (cliLineLooksLikeHttpFunctionPost(raw)) {
+    return fallback;
+  }
+  return raw;
+}
+
 export function toolCallCliLine(b: ToolCallBlock): string {
-  return (
-    b.cli_line?.trim() ||
-    (b.name && b.arguments
-      ? `hof fn ${b.name} ${b.arguments.length > 220 ? `${b.arguments.slice(0, 217)}…` : b.arguments}`
-      : b.name || "(tool)")
-  );
+  return normalizeAgentCliDisplayLine(b.name, b.cli_line, b.arguments);
 }
 
 export function toolCallArgsSnippet(b: ToolCallBlock): string | null {
@@ -1262,6 +1350,8 @@ export type ToolResultUiStatus = {
   code: number;
   label: string;
   tone: "success" | "error" | "warning" | "pending";
+  /** Short, user-visible state (Succeeded / Failed / Waiting …). */
+  headline: string;
   /** Extra line when pending_confirmation is easy to confuse with a post-apply review step. */
   detail?: string;
 };
@@ -1290,6 +1380,7 @@ export function toolResultUiStatus(
         code,
         label: "Confirm in chat first",
         tone: "pending",
+        headline: "Waiting for your approval",
         detail: `This is not “${postApplyLabel}” in chat. Use Approve or Reject on the pending tool row first; the run continues once all choices are set. “${postApplyLabel}” is the step after that — open the link when shown.`,
       };
     }
@@ -1297,14 +1388,12 @@ export function toolResultUiStatus(
       code,
       label: "Confirm below to apply",
       tone: "pending",
+      headline: "Waiting for your approval",
       detail:
         "The mutation has not run yet. Approve or reject on the pending tool row; the assistant continues when every pending action has a choice.",
     };
   }
-  if (
-    result.status_code !== undefined &&
-    Number.isFinite(result.status_code)
-  ) {
+  if (result.status_code !== undefined && Number.isFinite(result.status_code)) {
     const code = result.status_code;
     const ok = result.ok;
     if (ok === false || code >= 400) {
@@ -1320,12 +1409,23 @@ export function toolResultUiStatus(
                 : code === 499
                   ? "Rejected"
                   : "Error";
-      return { code, label, tone: "error" };
+      const headline = code === 499 ? "You rejected this action" : "Failed";
+      return { code, label, tone: "error", headline };
     }
     if (ok === true || (code >= 200 && code < 400)) {
-      return { code, label: "OK", tone: "success" };
+      return {
+        code,
+        label: "OK",
+        tone: "success",
+        headline: "Succeeded",
+      };
     }
-    return { code, label: "OK", tone: "success" };
+    return {
+      code,
+      label: "OK",
+      tone: "success",
+      headline: "Succeeded",
+    };
   }
   const data = result.data;
   if (
@@ -1334,13 +1434,64 @@ export function toolResultUiStatus(
     !Array.isArray(data) &&
     "error" in data
   ) {
-    return { code: 502, label: "Tool error", tone: "error" };
+    return {
+      code: 502,
+      label: "Tool error",
+      tone: "error",
+      headline: "Failed",
+    };
   }
   const s = result.summary?.trim() ?? "";
   if (/^error:/i.test(s)) {
-    return { code: 502, label: "Error", tone: "error" };
+    return { code: 502, label: "Error", tone: "error", headline: "Failed" };
   }
-  return { code: 200, label: "OK", tone: "success" };
+  return {
+    code: 200,
+    label: "OK",
+    tone: "success",
+    headline: "Succeeded",
+  };
+}
+
+/** Compact tool row label for the card header (next to the humanized function name). */
+export type ToolAggregateTone = "success" | "error" | "pending" | "running";
+
+export function toolGroupAggregatedStatus(
+  result: ToolResultBlock | undefined,
+  busy: boolean,
+  /** When set, overrides stale ``pending_confirmation`` on the block (persisted approve without updated row). */
+  mutationOutcome?: boolean,
+): { label: string; tone: ToolAggregateTone } {
+  if (mutationOutcome === false) {
+    return { label: "rejected", tone: "error" };
+  }
+  if (mutationOutcome === true) {
+    if (result && !result.pending_confirmation) {
+      const st = toolResultUiStatus(result);
+      if (st.tone === "error") {
+        return { label: "failed", tone: "error" };
+      }
+      return { label: "done", tone: "success" };
+    }
+    return { label: "done", tone: "success" };
+  }
+  if (!result) {
+    if (busy) {
+      return { label: "running", tone: "running" };
+    }
+    return { label: "error", tone: "error" };
+  }
+  if (result.pending_confirmation) {
+    return { label: "pending", tone: "pending" };
+  }
+  const st = toolResultUiStatus(result);
+  if (st.tone === "error") {
+    if (result.status_code === 499) {
+      return { label: "rejected", tone: "error" };
+    }
+    return { label: "failed", tone: "error" };
+  }
+  return { label: "done", tone: "success" };
 }
 
 export function toolGroupSummaryLine(
@@ -1404,7 +1555,9 @@ export function barrierHasRenderablePendingMutations(
       }
     }
   }
-  const segs = segmentLiveBlocks(dropRedundantModelPhaseBeforeAssistant(blocks));
+  const segs = segmentLiveBlocks(
+    dropRedundantModelPhaseBeforeAssistant(blocks),
+  );
   for (const seg of segs) {
     if (seg.type !== "tool_group" || !seg.mutation) {
       continue;
@@ -1430,7 +1583,10 @@ export function barrierMatchesAnyThreadOrLiveBlocks(
     return true;
   }
   for (const item of thread) {
-    if (item.kind === "run" && barrierHasRenderablePendingMutations(barrier, item.blocks)) {
+    if (
+      item.kind === "run" &&
+      barrierHasRenderablePendingMutations(barrier, item.blocks)
+    ) {
       return true;
     }
   }

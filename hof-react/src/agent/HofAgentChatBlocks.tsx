@@ -1,9 +1,12 @@
 "use client";
 
 import {
+  AlertCircle,
+  Ban,
   Braces,
   CheckCircle2,
-  ChevronRight,
+  Clock,
+  Loader2,
   XCircle,
 } from "lucide-react";
 import {
@@ -23,7 +26,6 @@ import { FunctionResultDisplay } from "./FunctionResultDisplay";
 import {
   AGENT_CHAT_COLUMN_CLASS,
   CHAT_ASSISTANT_REPLY_BUBBLE_CLASS,
-  TOOL_SECTION_LABEL_CLASS,
   assistantUiRole,
   barrierMatchesApprovalBlock,
   confirmationFooterFromOutcomes,
@@ -36,16 +38,16 @@ import {
   showProposedActionsLabel,
   toolArgumentsAreEffectivelyEmpty,
   toolCallCliLine,
-  toolResultUiStatus,
+  toolGroupAggregatedStatus,
   mergeAdjacentContentSegments,
   mergeAdjacentReasoningSegments,
+  normalizeAgentCliDisplayLine,
 } from "./hofAgentChatModel";
 import { reasoningPhaseTickingLive } from "./assistantStreamSegments";
 import { useHofAgentChat } from "./hofAgentChatContext";
 import type {
   ApprovalBarrier,
   AssistantStreamSegment,
-  InboxReviewBarrier,
   LiveBlock,
   MutationPendingBlock,
   ToolCallBlock,
@@ -68,7 +70,7 @@ function formatToolJsonForDialog(raw: string): string {
   }
 }
 
-/** One line: `$` + CLI, braces opens JSON dialog. Used inside the tool card body. */
+/** Terminal-style command row (`$` + line); outer shell reads as input without a visible section title. */
 function ToolTerminalCommandRow({
   cliLine,
   argumentsStr,
@@ -87,8 +89,10 @@ function ToolTerminalCommandRow({
   return (
     <>
       <div
-        className={`flex w-full max-h-32 items-stretch overflow-hidden bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)] ${borderBottom ? "border-b border-border" : ""}`}
+        className={`overflow-hidden bg-surface/30 ${borderBottom ? "border-b border-border" : ""}`}
+        aria-label="Tool command"
       >
+        <div className="flex w-full max-h-32 items-stretch overflow-hidden bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)]">
         <div
           className={`flex min-h-0 min-w-0 flex-1 items-center py-2 pl-3 ${showJsonBtn ? "pr-0" : "pr-3"}`}
         >
@@ -118,6 +122,7 @@ function ToolTerminalCommandRow({
             </button>
           </div>
         ) : null}
+        </div>
       </div>
       <dialog
         ref={dialogRef}
@@ -148,32 +153,77 @@ function ToolTerminalCommandRow({
   );
 }
 
-function ToolResultStatusStrip({ result }: { result: ToolResultBlock }) {
-  const st = toolResultUiStatus(result);
-  const colorClass =
-    st.tone === "success"
-      ? "text-[var(--color-success)]"
-      : st.tone === "error"
-        ? "text-[var(--color-destructive)]"
-        : st.tone === "pending"
-          ? "text-[var(--color-accent)]"
-          : "text-secondary";
-  return (
-    <div className="flex flex-col gap-1 bg-surface/30 px-3 py-1.5">
-      <div className="flex items-center justify-between gap-2 font-mono text-[10px]">
-        <span className="text-tertiary">Result</span>
-        <span className={`shrink-0 text-right font-medium tabular-nums ${colorClass}`}>
-          {st.code}{" "}
-          <span className="font-normal opacity-90">{st.label}</span>
-        </span>
-      </div>
-      {st.detail ? (
-        <p className="font-sans text-[10px] font-normal leading-snug text-secondary">
-          {st.detail}
-        </p>
-      ) : null}
-    </div>
-  );
+/** Single glyph for tool lifecycle (replaces chevron + text badge on the card header). */
+function ToolAggregatedStatusGlyph({
+  result,
+  busy,
+  mutationOutcome,
+}: {
+  result: ToolResultBlock | undefined;
+  busy: boolean;
+  mutationOutcome?: boolean;
+}) {
+  const { label } = toolGroupAggregatedStatus(result, busy, mutationOutcome);
+  const base = "size-4 shrink-0";
+  const aria = `Tool status: ${label}`;
+  switch (label) {
+    case "running":
+      return (
+        <Loader2
+          className={`${base} animate-spin text-[var(--color-accent)]`}
+          aria-label={aria}
+          strokeWidth={2}
+        />
+      );
+    case "pending":
+      return (
+        <Clock
+          className={`${base} text-[var(--color-accent)]`}
+          aria-label={aria}
+          strokeWidth={2}
+        />
+      );
+    case "done":
+      return (
+        <CheckCircle2
+          className={`${base} text-[var(--color-success)]`}
+          aria-label={aria}
+          strokeWidth={2}
+        />
+      );
+    case "rejected":
+      return (
+        <Ban
+          className={`${base} text-[var(--color-destructive)]`}
+          aria-label={aria}
+          strokeWidth={2}
+        />
+      );
+    case "failed":
+      return (
+        <XCircle
+          className={`${base} text-[var(--color-destructive)]`}
+          aria-label={aria}
+          strokeWidth={2}
+        />
+      );
+    case "error":
+      return (
+        <AlertCircle
+          className={`${base} text-[var(--color-destructive)]`}
+          aria-label={aria}
+          strokeWidth={2}
+        />
+      );
+    default:
+      return (
+        <AlertCircle
+          className={`${base} text-tertiary`}
+          aria-label={aria}
+          strokeWidth={2}
+        />
+      );
+  }
 }
 
 /** Tool card header: same circle glyphs for “pick” and final status ({@link CheckCircle2} / {@link XCircle}). */
@@ -255,7 +305,10 @@ function ToolMutationCorner({
       {approvalItemsForMutation.map((it) => {
         const d = approvalDecisions[it.pendingId];
         return (
-          <div key={it.pendingId} className="flex flex-wrap items-center justify-end gap-2">
+          <div
+            key={it.pendingId}
+            className="flex flex-wrap items-center justify-end gap-2"
+          >
             <button
               type="button"
               disabled={busy}
@@ -336,41 +389,35 @@ export function ToolGroupCard({
   const title = humanizeToolName(call.name);
   const line = toolCallCliLine(call);
   const cmd = mutation
-    ? mutation.cli_line || mutation.arguments_preview || ""
+    ? normalizeAgentCliDisplayLine(
+        mutation.name,
+        mutation.cli_line,
+        mutation.arguments_preview,
+      )
     : "";
   const cmdDupOfLine = Boolean(cmd.trim()) && cmd.trim() === line.trim();
   const hideGenericResult = Boolean(
     mutation && result && isGenericAwaitingConfirmationSummary(result.summary),
   );
+  const showStructuredData = Boolean(result && result.data !== undefined);
   const showResultBlock = Boolean(
-    result && (result.data !== undefined || !hideGenericResult),
+    result && (showStructuredData || !hideGenericResult),
   );
-  /** Tool output inside the expandable card only. */
+  /** Preview / summary inside the card (no placeholder copy while awaiting approval). */
   const showInnerBody = showResultBlock;
-  const showMutationCmdDup = Boolean(
-    mutation && cmd && !cmdDupOfLine,
-  );
-  const showDetailsFooter =
-    Boolean(result) ||
-    showInnerBody ||
-    showMutationCmdDup;
-
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const showMutationCmdDup = Boolean(mutation && cmd && !cmdDupOfLine);
 
   return (
     <div
       id={anchorId}
       className={`${AGENT_CHAT_COLUMN_CLASS} min-w-0 scroll-mt-4 space-y-2`}
     >
-      <details
-        open={detailsOpen}
-        onToggle={(e) => setDetailsOpen(e.currentTarget.open)}
-        className="group min-w-0 w-full max-w-full overflow-hidden rounded-lg border border-border bg-surface/40 [&_summary::-webkit-details-marker]:hidden"
-      >
+      <details className="group min-w-0 w-full max-w-full overflow-hidden rounded-lg border border-border bg-surface/40 [&_summary::-webkit-details-marker]:hidden">
         <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2.5 px-3 py-2.5 text-[12px] leading-snug transition-colors hover:bg-hover/50">
-          <ChevronRight
-            className={`size-4 shrink-0 text-tertiary transition-transform ${detailsOpen ? "rotate-90" : ""}`}
-            aria-hidden
+          <ToolAggregatedStatusGlyph
+            result={result}
+            busy={busy}
+            mutationOutcome={mutationOutcome}
           />
           <div className="min-w-0 flex-1">
             <span className="font-medium text-foreground">{title}</span>
@@ -390,22 +437,20 @@ export function ToolGroupCard({
           <ToolTerminalCommandRow
             cliLine={line}
             argumentsStr={call.arguments}
-            borderBottom={showDetailsFooter}
+            borderBottom={Boolean(showInnerBody || showMutationCmdDup)}
           />
-          {result ? <ToolResultStatusStrip result={result} /> : null}
           {showInnerBody ? (
-            <div className="min-w-0 max-w-full space-y-3 px-3 pb-2 pt-1.5">
-              {showResultBlock ? (
-                <div className="min-w-0 max-w-full overflow-x-auto">
-                  {result!.data !== undefined ? (
-                    <FunctionResultDisplay value={result!.data} />
-                  ) : (
-                    <p className="whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-secondary">
-                      {result!.summary}
-                    </p>
-                  )}
-                </div>
-              ) : null}
+            <div
+              className="min-w-0 max-w-full overflow-x-auto px-3 py-2"
+              aria-label="Tool output"
+            >
+              {result!.data !== undefined ? (
+                <FunctionResultDisplay value={result!.data} />
+              ) : (
+                <p className="whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-secondary">
+                  {result!.summary}
+                </p>
+              )}
             </div>
           ) : null}
           {showMutationCmdDup ? (
@@ -527,7 +572,6 @@ export function InlineApprovalControls({
 export function RunBlocksList({
   blocks,
   barrier,
-  inboxBarrier,
   approvalDecisions,
   setApprovalDecisions,
   busy,
@@ -535,7 +579,6 @@ export function RunBlocksList({
 }: {
   blocks: LiveBlock[];
   barrier: ApprovalBarrier | null;
-  inboxBarrier: InboxReviewBarrier | null;
   approvalDecisions: Record<string, boolean | null>;
   setApprovalDecisions: Dispatch<
     SetStateAction<Record<string, boolean | null>>
@@ -543,7 +586,6 @@ export function RunBlocksList({
   busy: boolean;
   mutationOutcomeByPendingId: Record<string, boolean | undefined>;
 }) {
-  const { inboxPollWaiting, inboxResumeError } = useHofAgentChat();
   const segments = segmentLiveBlocks(
     dropRedundantModelPhaseBeforeAssistant(blocks),
   );
@@ -652,43 +694,7 @@ export function RunBlocksList({
           );
         }
         if (b.kind === "inbox_review_required") {
-          const activeInbox =
-            inboxBarrier &&
-            inboxBarrier.runId.trim() === b.run_id.trim() &&
-            inboxBarrier.watches.length > 0
-              ? inboxBarrier
-              : null;
-          if (activeInbox) {
-            return (
-              <div
-                key={b.id}
-                className="rounded-md border border-border bg-surface/90 px-2.5 py-2 text-[11px] leading-snug text-secondary"
-                role="status"
-                aria-live="polite"
-              >
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-tertiary">
-                  Waiting for Inbox
-                </p>
-                <p className="mt-1">
-                  Finish the review in Inbox; the assistant continues automatically when
-                  status updates.
-                </p>
-                {inboxPollWaiting ? (
-                  <p className="mt-1 text-tertiary">Checking status…</p>
-                ) : null}
-                {inboxResumeError ? (
-                  <p className="mt-1 text-[var(--color-destructive)]">
-                    {inboxResumeError}
-                  </p>
-                ) : null}
-              </div>
-            );
-          }
-          return (
-            <div key={b.id} className="text-[11px] text-tertiary">
-              <p>Inbox review step completed; assistant continued.</p>
-            </div>
-          );
+          return null;
         }
         return (
           <LiveBlockView
@@ -882,9 +888,7 @@ function ReasoningStreamPeek({
     thinkingEpisodeStartedAtMs,
   );
   const persistedFormatted =
-    reasoningElapsedMs != null
-      ? formatDurationMs(reasoningElapsedMs)
-      : null;
+    reasoningElapsedMs != null ? formatDurationMs(reasoningElapsedMs) : null;
   const effectiveSettled = persistedFormatted ?? settledFormatted;
 
   useEffect(() => {
@@ -1266,14 +1270,18 @@ function AssistantSegmentedBody({
   if (anyReasoningLive) {
     reasoningPhaseWasLiveRef.current = true;
     reasoningPhaseEndedAtRef.current = null;
-  } else if (reasoningPhaseWasLiveRef.current && reasoningPhaseEndedAtRef.current == null) {
+  } else if (
+    reasoningPhaseWasLiveRef.current &&
+    reasoningPhaseEndedAtRef.current == null
+  ) {
     reasoningPhaseEndedAtRef.current = Date.now();
   }
   if (!wireStreaming) {
     reasoningPhaseWasLiveRef.current = false;
   }
   const capturedReasoningElapsedMs =
-    reasoningPhaseEndedAtRef.current != null && thinkingEpisodeStartedAtMs != null
+    reasoningPhaseEndedAtRef.current != null &&
+    thinkingEpisodeStartedAtMs != null
       ? reasoningPhaseEndedAtRef.current - thinkingEpisodeStartedAtMs
       : undefined;
 
@@ -1306,16 +1314,15 @@ function AssistantSegmentedBody({
       if (!s.text.trim()) {
         if (emptyReasoningPulse) {
           children.push(
-            <ReasoningStreamPeek
-              key={`seg-r-${i}`}
-              text=""
-              streaming={true}
-            />,
+            <ReasoningStreamPeek key={`seg-r-${i}`} text="" streaming={true} />,
           );
           continue;
         }
         const nextEmptyReasoning = merged[i + 1];
-        if (nextEmptyReasoning?.kind === "content" && nextEmptyReasoning.text.trim()) {
+        if (
+          nextEmptyReasoning?.kind === "content" &&
+          nextEmptyReasoning.text.trim()
+        ) {
           const nextIsLast = i + 1 === merged.length - 1;
           const contentPulse = showCaret && nextIsLast;
           const elapsedForConsolidated = !wireStreaming
@@ -1452,14 +1459,12 @@ export function LiveBlockView({
     const isModel = b.streamPhase === "model";
     const streamSegs = b.streamSegments?.length ? b.streamSegments : null;
     const anySegText = streamSegs?.some((s) => s.text.trim()) ?? false;
-    const wireStreaming =
-      b.streaming && b.pendingStreamFinalize !== true;
+    const wireStreaming = b.streaming && b.pendingStreamFinalize !== true;
     /** Require an in-flight agent request so hydrated/persisted `streaming: true` does not stick a caret. */
     const streamActive = busy && wireStreaming;
     /** Summary often stays `streaming` on the wire until `assistant_done`; hide the caret once any text exists. */
     const streamCaretActive =
-      streamActive &&
-      !(isSummary && (anySegText || b.text.trim().length > 0));
+      streamActive && !(isSummary && (anySegText || b.text.trim().length > 0));
     const persistedReasoningMs = b.reasoning_elapsed_ms;
 
     if (afterToolResult || isSummary) {
@@ -1761,21 +1766,17 @@ export function LiveBlockView({
       <div
         className={`${AGENT_CHAT_COLUMN_CLASS} flex min-w-0 gap-2.5 pl-0.5 text-[12px] leading-snug`}
       >
-        <span
-          className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[var(--color-accent)] opacity-70"
-          aria-hidden
-        />
+        <span className="mt-0.5 shrink-0">
+          <ToolAggregatedStatusGlyph result={b} busy={false} />
+        </span>
         <div className="min-w-0 flex-1">
           <span className="font-medium text-foreground">{title}</span>
-          <div className="mt-1.5">
-            <ToolResultStatusStrip result={b} />
-          </div>
-          <div className="mt-1">
-            <div className={TOOL_SECTION_LABEL_CLASS}>Output · result</div>
+          <div
+            className="mt-2 min-w-0 max-w-full overflow-x-auto"
+            aria-label="Tool output"
+          >
             {b.data !== undefined ? (
-              <div className="mt-1 min-w-0 max-w-full overflow-x-auto rounded-lg border border-border/60 bg-background/80 px-2 py-2">
-                <FunctionResultDisplay value={b.data} />
-              </div>
+              <FunctionResultDisplay value={b.data} />
             ) : (
               <p className="whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-secondary">
                 {b.summary}
@@ -1793,7 +1794,11 @@ export function LiveBlockView({
   }
   if (b.kind === "mutation_pending") {
     const title = humanizeToolName(b.name);
-    const cmd = b.cli_line || b.arguments_preview || "";
+    const cmd = normalizeAgentCliDisplayLine(
+      b.name,
+      b.cli_line,
+      b.arguments_preview,
+    );
     return (
       <div
         className={`${AGENT_CHAT_COLUMN_CLASS} rounded-xl border border-[color:color-mix(in_srgb,var(--color-accent)_35%,var(--color-border))] bg-[color:color-mix(in_srgb,var(--color-accent)_6%,transparent)] px-3 py-2.5 text-[12px] leading-snug`}
@@ -1801,19 +1806,16 @@ export function LiveBlockView({
         <div className="font-medium text-foreground">
           Awaiting your approval · {title}
         </div>
-        <div className="mt-1">
-          <div className={TOOL_SECTION_LABEL_CLASS}>Confirmation · status</div>
-          <p className="text-[11px] text-secondary">
-            Use <strong>Approve</strong> or <strong>Reject</strong> on the
-            pending tool row; the assistant continues when every pending action
-            has a choice.
-          </p>
-        </div>
         {cmd ? (
-          <div className="mt-2">
-            <div className={TOOL_SECTION_LABEL_CLASS}>Input · CLI</div>
-            <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border/60 bg-background/90 px-2.5 py-2 font-mono text-[10px] text-tertiary">
-              {cmd}
+          <div
+            className="mt-2 overflow-hidden rounded-md border border-border/60 bg-surface/30"
+            aria-label="Tool command"
+          >
+            <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)] px-2.5 py-2 font-mono text-[10px] text-secondary">
+              <span className="text-tertiary select-none" aria-hidden>
+                {"$ "}
+              </span>
+              {cmd.trim()}
             </pre>
           </div>
         ) : null}
@@ -1828,18 +1830,17 @@ export function LiveBlockView({
   }
   if (b.kind === "error") {
     const rate = b.errorCategory === "rate_limit";
-    const title =
-      rate
-        ? "Usage limit"
-        : b.errorCategory === "server" || b.errorCategory === "overloaded"
-          ? "Service temporarily unavailable"
-          : b.errorCategory === "timeout"
-            ? "Request timed out"
-            : b.errorCategory === "auth"
-              ? "Authentication issue"
-              : b.errorCategory === "bad_request"
-                ? "Request not accepted"
-                : "Something went wrong";
+    const title = rate
+      ? "Usage limit"
+      : b.errorCategory === "server" || b.errorCategory === "overloaded"
+        ? "Service temporarily unavailable"
+        : b.errorCategory === "timeout"
+          ? "Request timed out"
+          : b.errorCategory === "auth"
+            ? "Authentication issue"
+            : b.errorCategory === "bad_request"
+              ? "Request not accepted"
+              : "Something went wrong";
     return (
       <div className={`${AGENT_CHAT_COLUMN_CLASS}`}>
         <div

@@ -260,7 +260,8 @@ def format_cli_line(name: str, arguments_json: str, *, max_cli_line_chars: int) 
             parts.append(shlex.quote(str(val)))
     if nested:
         compact = json.dumps(safe, separators=(",", ":"), ensure_ascii=False)
-        line = f"POST /api/functions/{name} {compact}"
+        # Same pseudo-CLI as flat args (UI/TUI); nested payloads are JSON after the function name.
+        line = f"hof fn {name} {compact}"
     else:
         line = " ".join(parts)
     if len(line) > max_cli_line_chars:
@@ -303,6 +304,11 @@ def execute_tool(
     """Execute a tool (read or mutation). Returns (json_string_for_model, summary_for_ui)."""
     meta = registry.get_function(name)
     if meta is None or name not in allowlist:
+        logger.warning(
+            "agent tool skipped (not allowed): name=%s in_allowlist=%s",
+            name,
+            name in allowlist,
+        )
         err = {"error": f"unknown or disallowed function: {name}"}
         raw = json.dumps(err)
         return raw, summarize_tool_json(name, raw)
@@ -312,6 +318,7 @@ def execute_tool(
         if not isinstance(parsed, dict):
             parsed = {}
     except json.JSONDecodeError as exc:
+        logger.warning("agent tool bad JSON args: name=%s error=%s", name, exc)
         err = {"error": f"invalid JSON arguments: {exc}"}
         raw = json.dumps(err)
         return raw, summarize_tool_json(name, raw)
@@ -321,6 +328,11 @@ def execute_tool(
         validated = schema(**parsed)
         kwargs = validated.model_dump(exclude_none=False)
     except ValidationError as exc:
+        logger.warning(
+            "agent tool validation failed: name=%s errors=%s",
+            name,
+            exc.errors(),
+        )
         err = {"error": "validation failed", "detail": exc.errors()}
         raw = json.dumps(err, default=str)
         return raw, summarize_tool_json(name, raw)
@@ -341,8 +353,18 @@ def execute_tool(
         raw = json.dumps(result, default=str)
     except TypeError:
         raw = json.dumps({"result": repr(result)})
-    if len(raw) > max_tool_output_chars:
+    truncated = len(raw) > max_tool_output_chars
+    if truncated:
         raw = raw[: max_tool_output_chars - 24] + "\n…(truncated)"
+    ok, code = tool_result_status_for_ui(raw)
+    logger.info(
+        "agent tool executed: name=%s ok=%s status_code=%s json_chars=%d truncated=%s",
+        name,
+        ok,
+        code,
+        len(raw),
+        truncated,
+    )
     return raw, summarize_tool_json(name, raw)
 
 

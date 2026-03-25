@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 from hof.agent.policy import AgentPolicy, configure_agent
 from hof.agent.tooling import (
     AGENT_TOOL_DESCRIPTION_MAX_CHARS,
     compose_agent_tool_description,
+    format_cli_line,
     format_tool_result_for_model,
     openai_tool_specs,
     structured_agent_tool_for_ui,
@@ -163,3 +166,17 @@ def test_tool_result_status_for_ui_rejected() -> None:
     assert tool_result_status_for_ui(
         '{"rejected":true,"message":"no"}',
     ) == (False, 499)
+
+
+def test_format_cli_line_nested_payload_uses_hof_fn_not_post() -> None:
+    args = json.dumps({"rows": [{"description": "x", "amount": 1.0}]})
+    line = format_cli_line("bulk_create_expenses", args, max_cli_line_chars=800)
+    assert line.startswith("hof fn bulk_create_expenses ")
+    assert "POST /api/functions/" not in line
+    assert '"rows"' in line
+
+
+def test_format_cli_line_flat_args_uses_flags() -> None:
+    line = format_cli_line("list_expenses", '{"page":1}', max_cli_line_chars=200)
+    assert line.startswith("hof fn list_expenses ")
+    assert "--page" in line

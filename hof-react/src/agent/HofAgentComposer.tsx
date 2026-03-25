@@ -749,11 +749,7 @@ export function HofAgentComposer({
               ) : null}
             </button>
           ) : null}
-          {busy ? (
-            <button type="button" onClick={stop} className={sendBtnClass}>
-              Stop
-            </button>
-          ) : approvalBarrier ? (
+          {approvalBarrier ? (
             <button
               type="button"
               onClick={dismissApprovalBarrier}
@@ -768,6 +764,10 @@ export function HofAgentComposer({
               className={sendBtnClass}
             >
               Skip inbox wait
+            </button>
+          ) : busy ? (
+            <button type="button" onClick={stop} className={sendBtnClass}>
+              Stop
             </button>
           ) : (
             <button

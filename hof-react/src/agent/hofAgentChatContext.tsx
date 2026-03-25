@@ -39,8 +39,51 @@ import {
   mergePendingIdLists,
   mutationPendingIdsFromBlocks,
   newId,
+  normalizeAgentCliDisplayLine,
   toolResultAwaitingUserConfirmation,
 } from "./hofAgentChatModel";
+
+type PendingDetailsEntry = {
+  name: string;
+  cli_line: string;
+  arguments_json?: string;
+  preview?: unknown;
+};
+
+function pendingDetailsFromMutationPendingEvent(
+  ev: HofStreamEvent,
+): PendingDetailsEntry {
+  const hasPv = Object.prototype.hasOwnProperty.call(ev, "preview");
+  const argsRaw = (ev as { arguments?: unknown }).arguments;
+  const arguments_json =
+    typeof argsRaw === "string" ? argsRaw : undefined;
+  return {
+    name: typeof ev.name === "string" ? ev.name : "",
+    cli_line:
+      typeof (ev as { cli_line?: unknown }).cli_line === "string"
+        ? (ev as { cli_line: string }).cli_line
+        : "",
+    ...(arguments_json !== undefined ? { arguments_json } : {}),
+    ...(hasPv ? { preview: (ev as { preview: unknown }).preview } : {}),
+  };
+}
+
+function approvalBarrierItemFromDetails(
+  pid: string,
+  det: PendingDetailsEntry | undefined,
+): ApprovalBarrier["items"][number] {
+  const name = det?.name || "mutation";
+  return {
+    pendingId: pid,
+    name,
+    cli_line: normalizeAgentCliDisplayLine(
+      name,
+      det?.cli_line,
+      det?.arguments_json,
+    ),
+    ...(det?.preview !== undefined ? { preview: det.preview } : {}),
+  };
+}
 
 /** Terminal ``processing_status`` for receipt PDF pipeline (matches spreadsheet-app ``_RECEIPT_PROCESSING_TERMINAL``). */
 const RECEIPT_PROCESSING_TERMINAL = new Set(["ready", "needs_review", "failed"]);
@@ -279,9 +322,7 @@ export function HofAgentChatProvider({
   const resumeMergeContinuationRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const liveBlocksRef = useRef<LiveBlock[]>([]);
-  const pendingDetailsRef = useRef(
-    new Map<string, { name: string; cli_line: string; preview?: unknown }>(),
-  );
+  const pendingDetailsRef = useRef(new Map<string, PendingDetailsEntry>());
   const mutationPendingIdsThisRunRef = useRef<string[]>([]);
   const currentAgentRunIdRef = useRef("");
   const assistantStreamPhaseRef = useRef<"model" | "summary" | null>(null);
@@ -565,19 +606,10 @@ export function HofAgentChatProvider({
               const pid =
                 typeof ev.pending_id === "string" ? ev.pending_id : "";
               if (pid) {
-                const hasPv = Object.prototype.hasOwnProperty.call(
-                  ev,
-                  "preview",
+                pendingDetailsRef.current.set(
+                  pid,
+                  pendingDetailsFromMutationPendingEvent(ev),
                 );
-                pendingDetailsRef.current.set(pid, {
-                  name: typeof ev.name === "string" ? ev.name : "",
-                  cli_line: typeof ev.cli_line === "string" ? ev.cli_line : "",
-                  ...(hasPv
-                    ? {
-                        preview: (ev as { preview: unknown }).preview,
-                      }
-                    : {}),
-                });
                 const acc = mutationPendingIdsThisRunRef.current;
                 if (!acc.includes(pid)) {
                   acc.push(pid);
@@ -598,15 +630,12 @@ export function HofAgentChatProvider({
                 mutationPendingIdsThisRunRef.current,
                 mutationPendingIdsFromBlocks(liveBlocksRef.current),
               );
-              const itemsBarrier = pids.map((pid) => {
-                const det = pendingDetailsRef.current.get(pid);
-                return {
-                  pendingId: pid,
-                  name: det?.name || "mutation",
-                  cli_line: det?.cli_line || "",
-                  ...(det?.preview !== undefined ? { preview: det.preview } : {}),
-                };
-              });
+              const itemsBarrier = pids.map((pid) =>
+                approvalBarrierItemFromDetails(
+                  pid,
+                  pendingDetailsRef.current.get(pid),
+                ),
+              );
               setApprovalBarrier({ runId: rid, items: itemsBarrier });
               const dec: Record<string, boolean | null> = {};
               for (const p of pids) {
@@ -674,15 +703,12 @@ export function HofAgentChatProvider({
             },
           ];
           liveBlocksRef.current = doneBlocks;
-          const itemsSynth = synthPids.map((pid) => {
-            const det = pendingDetailsRef.current.get(pid);
-            return {
-              pendingId: pid,
-              name: det?.name || "mutation",
-              cli_line: det?.cli_line || "",
-              ...(det?.preview !== undefined ? { preview: det.preview } : {}),
-            };
-          });
+          const itemsSynth = synthPids.map((pid) =>
+            approvalBarrierItemFromDetails(
+              pid,
+              pendingDetailsRef.current.get(pid),
+            ),
+          );
           setApprovalBarrier({ runId: ridForSynth, items: itemsSynth });
           setApprovalDecisions(
             Object.fromEntries(synthPids.map((p) => [p, null])) as Record<
@@ -810,19 +836,10 @@ export function HofAgentChatProvider({
               const pid =
                 typeof ev.pending_id === "string" ? ev.pending_id : "";
               if (pid) {
-                const hasPv = Object.prototype.hasOwnProperty.call(
-                  ev,
-                  "preview",
+                pendingDetailsRef.current.set(
+                  pid,
+                  pendingDetailsFromMutationPendingEvent(ev),
                 );
-                pendingDetailsRef.current.set(pid, {
-                  name: typeof ev.name === "string" ? ev.name : "",
-                  cli_line: typeof ev.cli_line === "string" ? ev.cli_line : "",
-                  ...(hasPv
-                    ? {
-                        preview: (ev as { preview: unknown }).preview,
-                      }
-                    : {}),
-                });
                 const acc = mutationPendingIdsThisRunRef.current;
                 if (!acc.includes(pid)) {
                   acc.push(pid);
@@ -843,15 +860,12 @@ export function HofAgentChatProvider({
                 mutationPendingIdsThisRunRef.current,
                 mutationPendingIdsFromBlocks(liveBlocksRef.current),
               );
-              const itemsBarrier = pids.map((pid) => {
-                const det = pendingDetailsRef.current.get(pid);
-                return {
-                  pendingId: pid,
-                  name: det?.name || "mutation",
-                  cli_line: det?.cli_line || "",
-                  ...(det?.preview !== undefined ? { preview: det.preview } : {}),
-                };
-              });
+              const itemsBarrier = pids.map((pid) =>
+                approvalBarrierItemFromDetails(
+                  pid,
+                  pendingDetailsRef.current.get(pid),
+                ),
+              );
               setApprovalBarrier({ runId: awRid, items: itemsBarrier });
               const dec: Record<string, boolean | null> = {};
               for (const p of pids) {
@@ -926,15 +940,12 @@ export function HofAgentChatProvider({
           },
         ];
         liveBlocksRef.current = doneBlocks;
-        const itemsSynth = synthPids.map((pid) => {
-          const det = pendingDetailsRef.current.get(pid);
-          return {
-            pendingId: pid,
-            name: det?.name || "mutation",
-            cli_line: det?.cli_line || "",
-            ...(det?.preview !== undefined ? { preview: det.preview } : {}),
-          };
-        });
+        const itemsSynth = synthPids.map((pid) =>
+          approvalBarrierItemFromDetails(
+            pid,
+            pendingDetailsRef.current.get(pid),
+          ),
+        );
         setApprovalBarrier({ runId: ridForSynth, items: itemsSynth });
         setApprovalDecisions(
           Object.fromEntries(synthPids.map((p) => [p, null])) as Record<
@@ -1059,19 +1070,10 @@ export function HofAgentChatProvider({
               const pid =
                 typeof ev.pending_id === "string" ? ev.pending_id : "";
               if (pid) {
-                const hasPv = Object.prototype.hasOwnProperty.call(
-                  ev,
-                  "preview",
+                pendingDetailsRef.current.set(
+                  pid,
+                  pendingDetailsFromMutationPendingEvent(ev),
                 );
-                pendingDetailsRef.current.set(pid, {
-                  name: typeof ev.name === "string" ? ev.name : "",
-                  cli_line: typeof ev.cli_line === "string" ? ev.cli_line : "",
-                  ...(hasPv
-                    ? {
-                        preview: (ev as { preview: unknown }).preview,
-                      }
-                    : {}),
-                });
                 const acc = mutationPendingIdsThisRunRef.current;
                 if (!acc.includes(pid)) {
                   acc.push(pid);
@@ -1092,15 +1094,12 @@ export function HofAgentChatProvider({
                 mutationPendingIdsThisRunRef.current,
                 mutationPendingIdsFromBlocks(liveBlocksRef.current),
               );
-              const itemsBarrier = pids.map((pid) => {
-                const det = pendingDetailsRef.current.get(pid);
-                return {
-                  pendingId: pid,
-                  name: det?.name || "mutation",
-                  cli_line: det?.cli_line || "",
-                  ...(det?.preview !== undefined ? { preview: det.preview } : {}),
-                };
-              });
+              const itemsBarrier = pids.map((pid) =>
+                approvalBarrierItemFromDetails(
+                  pid,
+                  pendingDetailsRef.current.get(pid),
+                ),
+              );
               setApprovalBarrier({ runId: awRid, items: itemsBarrier });
               const dec: Record<string, boolean | null> = {};
               for (const p of pids) {
@@ -1168,15 +1167,12 @@ export function HofAgentChatProvider({
             },
           ];
           liveBlocksRef.current = doneBlocks;
-          const itemsSynth = synthPids.map((pid) => {
-            const det = pendingDetailsRef.current.get(pid);
-            return {
-              pendingId: pid,
-              name: det?.name || "mutation",
-              cli_line: det?.cli_line || "",
-              ...(det?.preview !== undefined ? { preview: det.preview } : {}),
-            };
-          });
+          const itemsSynth = synthPids.map((pid) =>
+            approvalBarrierItemFromDetails(
+              pid,
+              pendingDetailsRef.current.get(pid),
+            ),
+          );
           setApprovalBarrier({ runId: ridForSynth, items: itemsSynth });
           setApprovalDecisions(
             Object.fromEntries(synthPids.map((p) => [p, null])) as Record<
@@ -1443,11 +1439,13 @@ export function HofAgentChatProvider({
   }, []);
 
   const dismissApprovalBarrier = useCallback(() => {
+    abortRef.current?.abort();
     setApprovalBarrier(null);
     setApprovalDecisions({});
   }, []);
 
   const dismissInboxReviewBarrier = useCallback(() => {
+    abortRef.current?.abort();
     setInboxReviewBarrier(null);
     setInboxResumeError(null);
     setInboxPollWaiting(false);

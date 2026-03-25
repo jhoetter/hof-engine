@@ -1319,6 +1319,11 @@ def _run_agent_openai_loop(
 
             if finish_reason == "tool_calls":
                 if not parts:
+                    logger.warning(
+                        "agent_chat tool_calls_missing_deltas run_id=%s round=%d",
+                        run_id,
+                        rounds,
+                    )
                     yield {
                         "type": "error",
                         "detail": "model returned tool_calls but no tool deltas",
@@ -1364,11 +1369,13 @@ def _run_agent_openai_loop(
                     if note:
                         tc_ev["internal_rationale"] = note
                     yield tc_ev
-                    logger.debug(
-                        "agent_chat tool_call run_id=%s round=%d name=%s args_chars=%d mutation=%s",
+                    logger.info(
+                        "agent_chat tool_call run_id=%s round=%d name=%s tool_call_id=%s "
+                        "args_chars=%d mutation=%s",
                         run_id,
                         rounds,
                         name,
+                        tid,
                         len(args),
                         "yes" if name in mutation_allowlist else "no",
                     )
@@ -1435,11 +1442,14 @@ def _run_agent_openai_loop(
                             },
                         )
                         pending_ids.append(pid)
-                        logger.debug(
-                            "agent_chat tool_pending_confirmation run_id=%s name=%s pending_id=%s",
+                        logger.info(
+                            "agent_chat mutation_pending run_id=%s round=%d name=%s "
+                            "pending_id=%s tool_call_id=%s (client should show 202 / confirm)",
                             run_id,
+                            rounds,
                             name,
                             pid,
+                            tid,
                         )
                     else:
                         out_json, summary = execute_tool(
@@ -1448,13 +1458,18 @@ def _run_agent_openai_loop(
                             allowlist,
                             max_tool_output_chars=max_tool_output_chars,
                         )
-                        logger.debug(
-                            "agent_chat tool_done run_id=%s name=%s summary_chars=%d",
+                        ok, status_code = tool_result_status_for_ui(out_json)
+                        logger.info(
+                            "agent_chat tool_result emit run_id=%s round=%d name=%s "
+                            "tool_call_id=%s ok=%s status_code=%s summary_chars=%d",
                             run_id,
+                            rounds,
                             name,
+                            tid,
+                            ok,
+                            status_code,
                             len(summary or ""),
                         )
-                        ok, status_code = tool_result_status_for_ui(out_json)
                         tr_out: dict[str, Any] = {
                             "type": "tool_result",
                             "name": name,
@@ -1515,16 +1530,25 @@ def _run_agent_openai_loop(
                         "run_id": run_id,
                         "pending_ids": pending_ids,
                     }
-                    logger.debug(
-                        "agent_chat awaiting_confirmation run_id=%s pending_ids=%d",
+                    logger.info(
+                        "agent_chat awaiting_confirmation run_id=%s round=%d "
+                        "pending_count=%d pending_ids=%s (stream pauses until resume)",
                         run_id,
+                        rounds,
                         len(pending_ids),
+                        pending_ids,
                     )
                     return
                 continue
 
             text = assistant_text.strip()
             delete_agent_run(run_id)
+            logger.info(
+                "agent_chat final run_id=%s round=%s reply_chars=%d",
+                run_id,
+                rounds,
+                len(text),
+            )
             yield {
                 "type": "final",
                 "reply": text,
@@ -1542,6 +1566,11 @@ def _run_agent_openai_loop(
             )
             return
 
+        logger.warning(
+            "agent_chat max_rounds_exceeded run_id=%s max_rounds=%d",
+            run_id,
+            max_rounds,
+        )
         yield {"type": "error", "detail": f"Stopped after {max_rounds} model turns"}
     except _AgentStreamTurnExhaustedError as wrap:
         logger.exception("agent_openai_loop failed after engine stream retries")
@@ -1654,8 +1683,8 @@ def _run_agent_chat_stream(
     oa_messages: list[dict[str, Any]] = [{"role": "system", "content": system_content}]
     _append_client_messages(oa_messages, messages, att_norm)
 
-    logger.debug(
-        "agent_chat start run_id=%s backend=%s model=%s messages=%d tool_specs=%d",
+    logger.info(
+        "agent_chat start run_id=%s backend=%s model=%s oa_messages=%d tool_specs=%d",
         run_id,
         lm_backend,
         model,
@@ -1691,11 +1720,13 @@ def _run_agent_resume_stream(
 
     rid = (run_id or "").strip()
     if not rid:
+        logger.warning("agent_resume_mutations rejected: missing run_id")
         yield {"type": "error", "detail": "run_id is required"}
         return
 
     run = load_agent_run(rid)
     if not run:
+        logger.warning("agent_resume_mutations rejected: unknown or expired run_id=%s", rid)
         yield {
             "type": "error",
             "detail": "Unknown or expired run_id; start a new chat.",
@@ -1704,6 +1735,7 @@ def _run_agent_resume_stream(
 
     open_ids = [str(x) for x in (run.get("open_pending_ids") or []) if str(x).strip()]
     if not open_ids:
+        logger.warning("agent_resume_mutations rejected: no pending mutations run_id=%s", rid)
         yield {"type": "error", "detail": "No pending mutations for this run."}
         return
 
@@ -1718,6 +1750,12 @@ def _run_agent_resume_stream(
 
     got = {r["pending_id"] for r in res_norm}
     if got != set(open_ids) or len(res_norm) != len(open_ids):
+        logger.warning(
+            "agent_resume_mutations rejected: resolution mismatch run_id=%s open=%s got=%s",
+            rid,
+            open_ids,
+            sorted(got),
+        )
         yield {
             "type": "error",
             "detail": (
@@ -1788,6 +1826,14 @@ def _run_agent_resume_stream(
         )
 
     by_id = {r["pending_id"]: r["confirm"] for r in res_norm}
+    n_confirm = sum(1 for c in by_id.values() if c)
+    logger.info(
+        "agent_resume_mutations begin run_id=%s pending=%d confirm=%d reject=%d",
+        rid,
+        len(open_ids),
+        n_confirm,
+        len(open_ids) - n_confirm,
+    )
     inbox_watches_accum: list[InboxWatchDescriptor] = []
     batch_entries: list[MutationBatchEntry] = []
     inbox_id_snapshot: set[str] = set()
@@ -1824,6 +1870,17 @@ def _run_agent_resume_stream(
                     args,
                     allowlist,
                     max_tool_output_chars=max_tool_output_chars,
+                )
+                _ok, _code = tool_result_status_for_ui(out_json)
+                logger.info(
+                    "agent_resume_mutations confirmed_tool run_id=%s pending_id=%s name=%s "
+                    "tool_call_id=%s ok=%s status_code=%s",
+                    rid,
+                    pid,
+                    fname,
+                    tid,
+                    _ok,
+                    _code,
                 )
                 parsed_args = parsed_args_loop
                 parsed_result = json.loads(out_json) if out_json else {}
@@ -1871,6 +1928,14 @@ def _run_agent_resume_stream(
                     if ws:
                         inbox_watches_accum.extend(ws)
             else:
+                logger.info(
+                    "agent_resume_mutations rejected_tool run_id=%s pending_id=%s name=%s "
+                    "tool_call_id=%s",
+                    rid,
+                    pid,
+                    fname,
+                    tid,
+                )
                 rejected_result = {
                     "rejected": True,
                     "message": "User rejected this action in the assistant.",
@@ -1888,6 +1953,11 @@ def _run_agent_resume_stream(
             _replace_tool_message_content(oa_messages, tid, model_tool_body)
             delete_pending(pid)
     except ValueError as exc:
+        logger.warning(
+            "agent_resume_mutations failed run_id=%s detail=%s",
+            rid,
+            str(exc)[:200],
+        )
         yield {"type": "error", "detail": str(exc)}
         return
 
@@ -1941,7 +2011,7 @@ def _run_agent_resume_stream(
 
     delete_agent_run(rid)
     yield {"type": "resume_start", "run_id": rid, "model": model, "continuation": True}
-    logger.debug(
+    logger.info(
         "agent_chat resume_start run_id=%s model=%s start_round=%d mutations_resolved=%d",
         rid,
         model,

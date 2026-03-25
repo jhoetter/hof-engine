@@ -30,6 +30,9 @@ def configure_logging(*, debug: bool = False, app_name: str = "hof") -> None:
     else:
         _configure_prod_logging(level, app_name)
 
+    # Agent / tool loop (hof.agent.stream, hof.agent.tooling) uses the same level as root.
+    logging.getLogger("hof.agent").setLevel(level)
+
     # Silence noisy third-party loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO if debug else logging.WARNING)

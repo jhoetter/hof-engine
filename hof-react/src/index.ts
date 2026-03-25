@@ -12,8 +12,6 @@ export {
 } from "./agent/hofAgentChatContext";
 export { HofAgentMessages, type HofAgentMessagesProps } from "./agent/HofAgentMessages";
 export { HofAgentPendingApprovalBar } from "./agent/HofAgentPendingApprovalBar";
-/** @deprecated Prefer default inbox UX in {@link HofAgentChat}; see {@link HofAgentInboxReviewBar}. */
-export { HofAgentInboxReviewBar } from "./agent/HofAgentInboxReviewBar";
 export { defaultPollInboxReviewWatch } from "./agent/hofAgentChatContext";
 export {
   HofAgentComposer,

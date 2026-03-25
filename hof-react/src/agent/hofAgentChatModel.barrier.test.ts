@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { barrierMatchesApprovalBlock } from "./hofAgentChatModel";
+import {
+  barrierMatchesAnyThreadOrLiveBlocks,
+  barrierMatchesApprovalBlock,
+  type LiveBlock,
+  type ThreadItem,
+} from "./hofAgentChatModel";
 
 describe("barrierMatchesApprovalBlock", () => {
   const barrier = (runId: string, ids: string[]) => ({
@@ -43,5 +48,62 @@ describe("barrierMatchesApprovalBlock", () => {
     expect(
       barrierMatchesApprovalBlock(barrier("r1", ["a"]), "r2", ["b"]),
     ).toBe(false);
+  });
+});
+
+describe("barrierMatchesAnyThreadOrLiveBlocks", () => {
+  const br = {
+    runId: "r1",
+    items: [{ pendingId: "pid-1", name: "create_expense", cli_line: "" }],
+  };
+
+  it("is true when liveBlocks has matching mutation_pending", () => {
+    const live: LiveBlock[] = [
+      {
+        kind: "mutation_pending",
+        id: "m1",
+        pending_id: "pid-1",
+        name: "create_expense",
+        cli_line: "hof fn create_expense {}",
+      },
+    ];
+    expect(barrierMatchesAnyThreadOrLiveBlocks(br, [], live)).toBe(true);
+  });
+
+  it("is true when a thread run has matching mutation_pending", () => {
+    const thread: ThreadItem[] = [
+      {
+        kind: "run",
+        id: "run1",
+        blocks: [
+          {
+            kind: "mutation_pending",
+            id: "m1",
+            pending_id: "pid-1",
+            name: "create_expense",
+            cli_line: "",
+          } as LiveBlock,
+        ],
+      },
+    ];
+    expect(barrierMatchesAnyThreadOrLiveBlocks(br, thread, [])).toBe(true);
+  });
+
+  it("is false when no block references barrier pending ids", () => {
+    expect(barrierMatchesAnyThreadOrLiveBlocks(br, [], [])).toBe(false);
+    const live: LiveBlock[] = [
+      {
+        kind: "mutation_pending",
+        id: "m1",
+        pending_id: "other",
+        name: "create_expense",
+        cli_line: "",
+      },
+    ];
+    expect(barrierMatchesAnyThreadOrLiveBlocks(br, [], live)).toBe(false);
+  });
+
+  it("is false for null barrier", () => {
+    expect(barrierMatchesAnyThreadOrLiveBlocks(null, [], [])).toBe(false);
   });
 });

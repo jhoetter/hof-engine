@@ -31,7 +31,7 @@ describe("toolResultUiStatus", () => {
       label: "Confirm below to apply",
       tone: "pending",
       detail:
-        "The mutation has not run yet. Approve or reject in Pending actions, then Apply choices.",
+        "The mutation has not run yet. Approve or reject on the pending tool row; the assistant continues when every pending action has a choice.",
     });
   });
 
@@ -53,7 +53,7 @@ describe("toolResultUiStatus", () => {
     expect(st.code).toBe(202);
     expect(st.label).toBe("Confirm in chat first");
     expect(st.detail).toContain("Manager review");
-    expect(st.detail).toContain("Pending actions");
+    expect(st.detail).toContain("pending tool row");
   });
 
   it("infers error from data or summary when stream omits codes", () => {

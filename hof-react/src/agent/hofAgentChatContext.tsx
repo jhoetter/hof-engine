@@ -30,6 +30,7 @@ import type {
 } from "./hofAgentChatModel";
 import {
   applyStreamEventWithDedupe,
+  barrierMatchesAnyThreadOrLiveBlocks,
   collectThreadAttachments,
   compactBlocksForHistory,
   coerceRunId,
@@ -186,6 +187,13 @@ export type HofAgentChatContextValue = {
   send: () => void;
   /** Abort the in-flight ``agent_chat``, ``agent_resume_mutations``, or inbox resume stream. */
   stop: () => void;
+  /**
+   * Clears the mutation-approval gate locally (e.g. stuck UI with no matching tool row).
+   * Does not call the API; the next message starts a fresh turn.
+   */
+  dismissApprovalBarrier: () => void;
+  /** Clears the inbox-review gate and polling state without calling inbox resume. */
+  dismissInboxReviewBarrier: () => void;
   conversationEmpty: boolean;
   /**
    * Wall-clock start of the current “thinking” episode (model round), for live timers.
@@ -195,8 +203,8 @@ export type HofAgentChatContextValue = {
   /** Set when the stream emits ``provider_wait`` (API backoff); cleared when tokens or tools resume. */
   providerWaitNotice: ProviderWaitNotice | null;
   /**
-   * After Approve/Reject on every pending mutation, call to run ``agent_resume_mutations``
-   * (replaces the previous auto-submit timer).
+   * Runs ``agent_resume_mutations`` with current choices. Normally the provider resumes
+   * automatically once every pending id has approve/reject set; this is for manual triggers.
    */
   confirmPendingMutations: () => void;
 };
@@ -261,6 +269,8 @@ export function HofAgentChatProvider({
   const sendingRef = useRef(false);
   const reqIdRef = useRef(0);
   const runResumeRef = useRef<() => Promise<void>>(async () => {});
+  /** Prevents duplicate auto-resume (e.g. React Strict Mode double effect). */
+  const approvalAutoResumeLockRef = useRef(false);
   const runInboxResumeRef = useRef<(b: InboxReviewBarrier) => Promise<void>>(
     async () => {},
   );
@@ -1237,6 +1247,46 @@ export function HofAgentChatProvider({
   runResumeRef.current = runResume;
   runInboxResumeRef.current = runInboxResume;
 
+  useEffect(() => {
+    if (!approvalBarrier?.items.length || busy) {
+      return;
+    }
+    if (barrierMatchesAnyThreadOrLiveBlocks(approvalBarrier, thread, liveBlocks)) {
+      return;
+    }
+    setApprovalBarrier(null);
+    setApprovalDecisions({});
+  }, [approvalBarrier, thread, liveBlocks, busy]);
+
+  useEffect(() => {
+    if (!approvalBarrier?.items.length) {
+      approvalAutoResumeLockRef.current = false;
+      return;
+    }
+    if (busy) {
+      return;
+    }
+    const allChosen = approvalBarrier.items.every(
+      (it) =>
+        approvalDecisions[it.pendingId] === true ||
+        approvalDecisions[it.pendingId] === false,
+    );
+    if (!allChosen) {
+      return;
+    }
+    if (approvalAutoResumeLockRef.current) {
+      return;
+    }
+    approvalAutoResumeLockRef.current = true;
+    void (async () => {
+      try {
+        await runResumeRef.current();
+      } finally {
+        approvalAutoResumeLockRef.current = false;
+      }
+    })();
+  }, [approvalBarrier, approvalDecisions, busy]);
+
   const inboxBarrierPollKey = useMemo(() => {
     if (!inboxReviewBarrier?.runId || !inboxReviewBarrier.watches.length) {
       return "";
@@ -1392,6 +1442,17 @@ export function HofAgentChatProvider({
     abortRef.current?.abort();
   }, []);
 
+  const dismissApprovalBarrier = useCallback(() => {
+    setApprovalBarrier(null);
+    setApprovalDecisions({});
+  }, []);
+
+  const dismissInboxReviewBarrier = useCallback(() => {
+    setInboxReviewBarrier(null);
+    setInboxResumeError(null);
+    setInboxPollWaiting(false);
+  }, []);
+
   const conversationEmpty = thread.length === 0 && liveBlocks.length === 0;
 
   const value = useMemo<HofAgentChatContextValue>(
@@ -1417,6 +1478,8 @@ export function HofAgentChatProvider({
       onPickFiles,
       send,
       stop,
+      dismissApprovalBarrier,
+      dismissInboxReviewBarrier,
       conversationEmpty,
       thinkingEpisodeStartedAtMs,
       providerWaitNotice,
@@ -1440,6 +1503,8 @@ export function HofAgentChatProvider({
       onPickFiles,
       send,
       stop,
+      dismissApprovalBarrier,
+      dismissInboxReviewBarrier,
       conversationEmpty,
       thinkingEpisodeStartedAtMs,
       providerWaitNotice,

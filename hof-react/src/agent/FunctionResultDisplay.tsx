@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 /**
  * Renders @function return values like ``hof fn … --format auto`` / TUI ``render_function_result``
  * (see hof-engine ``hof/cli/result_render.py``): rows+total table, list of row dicts, or key/value dict.
@@ -59,7 +61,7 @@ function RowsTableView({
     );
   }
   return (
-    <div className="space-y-1.5 overflow-x-auto font-mono">
+    <div className="min-w-0 max-w-full space-y-1.5 overflow-x-auto font-mono">
       {allKeys.length > cols.length ? (
         <p className="text-[10px] text-tertiary">
           Showing {cols.length} of {allKeys.length} columns (use{" "}
@@ -67,7 +69,7 @@ function RowsTableView({
           data).
         </p>
       ) : null}
-      <table className="w-max min-w-0 border-collapse border border-border text-left text-[10px]">
+      <table className="w-max max-w-none min-w-0 border-collapse border border-border text-left text-[10px]">
         <thead>
           <tr className="border-b border-border bg-surface/80">
             {cols.map((c) => (
@@ -112,7 +114,8 @@ function RowsTableView({
 function KvTableView({ data }: { data: Record<string, unknown> }) {
   const keys = Object.keys(data).sort((a, b) => String(a).localeCompare(String(b)));
   return (
-    <table className="w-full border-collapse border border-border text-left font-mono text-[10px]">
+    <div className="min-w-0 max-w-full overflow-x-auto">
+    <table className="w-full min-w-0 border-collapse border border-border text-left font-mono text-[10px]">
       <thead>
         <tr className="border-b border-border bg-surface/80">
           <th className="w-[32%] px-2 py-1.5 font-semibold text-foreground">key</th>
@@ -132,6 +135,7 @@ function KvTableView({ data }: { data: Record<string, unknown> }) {
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 
@@ -140,6 +144,10 @@ export function FunctionResultDisplay({
 }: {
   value: unknown;
 }) {
+  const shell = (node: ReactNode) => (
+    <div className="min-w-0 max-w-full">{node}</div>
+  );
+
   if (value === null || value === undefined) {
     return null;
   }
@@ -154,7 +162,7 @@ export function FunctionResultDisplay({
             r !== null && typeof r === "object" && !Array.isArray(r),
         );
         if (dictRows.length === rowsRaw.length) {
-          return <RowsTableView rows={dictRows} total={o.total} />;
+          return shell(<RowsTableView rows={dictRows} total={o.total} />);
         }
       }
     }
@@ -165,18 +173,18 @@ export function FunctionResultDisplay({
     value.length > 0 &&
     value.every((x) => x !== null && typeof x === "object" && !Array.isArray(x))
   ) {
-    return (
-      <RowsTableView rows={value as Record<string, unknown>[]} total={undefined} />
+    return shell(
+      <RowsTableView rows={value as Record<string, unknown>[]} total={undefined} />,
     );
   }
 
   if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    return <KvTableView data={value as Record<string, unknown>} />;
+    return shell(<KvTableView data={value as Record<string, unknown>} />);
   }
 
-  return (
-    <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-snug text-secondary">
+  return shell(
+    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-snug text-secondary">
       {String(value)}
-    </pre>
+    </pre>,
   );
 }

@@ -1290,7 +1290,7 @@ export function toolResultUiStatus(
         code,
         label: "Confirm in chat first",
         tone: "pending",
-        detail: `This is not “${postApplyLabel}” in chat. Use Pending actions (below the message list) to apply or reject the write first. “${postApplyLabel}” is the step after that — open the link in that bar when shown.`,
+        detail: `This is not “${postApplyLabel}” in chat. Use Approve or Reject on the pending tool row first; the run continues once all choices are set. “${postApplyLabel}” is the step after that — open the link when shown.`,
       };
     }
     return {
@@ -1298,7 +1298,7 @@ export function toolResultUiStatus(
       label: "Confirm below to apply",
       tone: "pending",
       detail:
-        "The mutation has not run yet. Approve or reject in Pending actions, then Apply choices.",
+        "The mutation has not run yet. Approve or reject on the pending tool row; the assistant continues when every pending action has a choice.",
     };
   }
   if (
@@ -1379,6 +1379,64 @@ export type ApprovalBarrier = {
   }[];
 };
 
+/**
+ * True if any tool group (or orphan {@link LiveBlock} `mutation_pending`) in these blocks
+ * matches a pending id on the barrier — i.e. the UI can show Approve/Reject on a card.
+ */
+export function barrierHasRenderablePendingMutations(
+  barrier: ApprovalBarrier | null,
+  blocks: LiveBlock[],
+): boolean {
+  if (!barrier?.items.length) {
+    return false;
+  }
+  const wanted = new Set(
+    barrier.items.map((i) => i.pendingId.trim()).filter(Boolean),
+  );
+  if (wanted.size === 0) {
+    return false;
+  }
+  for (const b of blocks) {
+    if (b.kind === "mutation_pending") {
+      const pid = String(b.pending_id ?? "").trim();
+      if (pid && wanted.has(pid)) {
+        return true;
+      }
+    }
+  }
+  const segs = segmentLiveBlocks(dropRedundantModelPhaseBeforeAssistant(blocks));
+  for (const seg of segs) {
+    if (seg.type !== "tool_group" || !seg.mutation) {
+      continue;
+    }
+    const pid = String(seg.mutation.pending_id ?? "").trim();
+    if (pid && wanted.has(pid)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether the thread + live area still contain mutation rows that match the approval barrier.
+ * If not, the barrier is stale (e.g. persisted draft) and should be cleared.
+ */
+export function barrierMatchesAnyThreadOrLiveBlocks(
+  barrier: ApprovalBarrier | null,
+  thread: ThreadItem[],
+  liveBlocks: LiveBlock[],
+): boolean {
+  if (barrierHasRenderablePendingMutations(barrier, liveBlocks)) {
+    return true;
+  }
+  for (const item of thread) {
+    if (item.kind === "run" && barrierHasRenderablePendingMutations(barrier, item.blocks)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function barrierMatchesApprovalBlock(
   barrier: ApprovalBarrier,
   blockRunId: string,
@@ -1414,35 +1472,19 @@ export function barrierMatchesApprovalBlock(
   return true;
 }
 
-/** After resume; `true` = approved, `false` = rejected. `null` = nothing to say (cards show outcome). */
+/**
+ * After resume; outcomes are visible on tool cards — no summary line for mixed or
+ * single-type results. Only the edge case of an empty pending-id list gets a short note.
+ */
 export function confirmationFooterFromOutcomes(
   pendingIds: string[],
-  outcomes: Record<string, boolean | undefined>,
+  _outcomes: Record<string, boolean | undefined>,
 ): string | null {
   const norm = pendingIds.map((p) => p.trim()).filter(Boolean);
   if (norm.length === 0) {
     return "Confirmation completed.";
   }
-  let approved = 0;
-  let rejected = 0;
-  let unknown = 0;
-  for (const pid of norm) {
-    const v = outcomes[pid];
-    if (v === true) {
-      approved += 1;
-    } else if (v === false) {
-      rejected += 1;
-    } else {
-      unknown += 1;
-    }
-  }
-  if (unknown > 0) {
-    return null;
-  }
-  if (rejected === 0 || approved === 0) {
-    return null;
-  }
-  return `Recorded: ${approved} approved, ${rejected} rejected — see cards above.`;
+  return null;
 }
 
 export function assistantUiRole(

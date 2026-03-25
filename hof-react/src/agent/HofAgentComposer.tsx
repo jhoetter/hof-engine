@@ -341,6 +341,9 @@ export function HofAgentComposer({
     busy,
     uploadBusy,
     approvalBarrier,
+    inboxReviewBarrier,
+    dismissApprovalBarrier,
+    dismissInboxReviewBarrier,
     attachmentQueue,
     setAttachmentQueue,
     uploadErr,
@@ -548,7 +551,13 @@ export function HofAgentComposer({
     };
   }, [skillsSelectedTool]);
 
-  const disabled = busy || uploadBusy || Boolean(approvalBarrier);
+  /** Lock input only while a request or upload is in flight — not while waiting on approve/inbox gates. */
+  const inputLocked = busy || uploadBusy;
+  const sendDisabled =
+    inputLocked ||
+    Boolean(approvalBarrier) ||
+    Boolean(inboxReviewBarrier) ||
+    (!input.trim() && attachmentQueue.length === 0);
 
   const onVoiceToggle = () => {
     clearVoiceError();
@@ -633,7 +642,7 @@ export function HofAgentComposer({
                 ? "Preparing voice input…"
                 : "How can I help you?"
         }
-        disabled={disabled}
+        disabled={inputLocked}
         className="min-h-9 min-w-0 w-full resize-none overflow-y-auto rounded-md border-0 bg-transparent px-1 py-0.5 text-sm leading-snug text-foreground shadow-none placeholder:text-secondary outline-none ring-0 transition-[height] focus:outline-none focus:ring-0 disabled:opacity-60 read-only:opacity-100"
         style={{ maxHeight: textareaMaxHeightPx } satisfies CSSProperties}
       />
@@ -655,7 +664,7 @@ export function HofAgentComposer({
         <div ref={attachMenuRef} className="relative shrink-0">
           <button
             type="button"
-            disabled={disabled}
+            disabled={inputLocked}
             className={squareIconBtnClass}
             aria-label="Add to message"
             aria-expanded={attachMenuOpen}
@@ -678,7 +687,7 @@ export function HofAgentComposer({
                 type="button"
                 role="menuitem"
                 className={MENU_ITEM_CLASS}
-                disabled={disabled}
+                disabled={inputLocked}
                 onClick={openAttachPicker}
               >
                 <Paperclip
@@ -692,7 +701,7 @@ export function HofAgentComposer({
                 type="button"
                 role="menuitem"
                 className={MENU_ITEM_CLASS}
-                disabled={disabled}
+                disabled={inputLocked}
                 onClick={openSkillsDialog}
               >
                 <Terminal
@@ -709,7 +718,7 @@ export function HofAgentComposer({
           {showVoiceButton ? (
             <button
               type="button"
-              disabled={disabled || voiceState === "finalizing"}
+              disabled={inputLocked || voiceState === "finalizing"}
               className={`${squareIconBtnClass} relative ${
                 voiceIsLive
                   ? "ring-2 ring-[var(--color-destructive)]/50 bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]"
@@ -740,17 +749,31 @@ export function HofAgentComposer({
               ) : null}
             </button>
           ) : null}
-          {busy && !approvalBarrier ? (
+          {busy ? (
             <button type="button" onClick={stop} className={sendBtnClass}>
               Stop
+            </button>
+          ) : approvalBarrier ? (
+            <button
+              type="button"
+              onClick={dismissApprovalBarrier}
+              className={sendBtnClass}
+            >
+              Cancel approvals
+            </button>
+          ) : inboxReviewBarrier ? (
+            <button
+              type="button"
+              onClick={dismissInboxReviewBarrier}
+              className={sendBtnClass}
+            >
+              Skip inbox wait
             </button>
           ) : (
             <button
               type="button"
               onClick={send}
-              disabled={
-                disabled || (!input.trim() && attachmentQueue.length === 0)
-              }
+              disabled={sendDisabled}
               className={sendBtnClass}
             >
               {uploadBusy ? "Uploading…" : "Send"}

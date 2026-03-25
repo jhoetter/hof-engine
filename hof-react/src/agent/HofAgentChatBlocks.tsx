@@ -182,6 +182,10 @@ const MUTATION_APPROVE_ICON_CLASS =
 const MUTATION_REJECT_ICON_CLASS =
   "size-4 shrink-0 text-[var(--color-destructive)]";
 
+/** Labeled Approve / Reject on the tool card (matches PendingApprovalBar button styling). */
+const INLINE_APPROVAL_CHOICE_BTN_CLASS =
+  "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40";
+
 /** Ghost hit target around the status glyph (no square border — matches static outcome row). */
 const MUTATION_CHOICE_BTN_BASE =
   "inline-flex shrink-0 items-center justify-center rounded-full p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--color-accent)_45%,transparent)] focus-visible:ring-offset-1 focus-visible:ring-offset-background";
@@ -242,7 +246,7 @@ function ToolMutationCorner({
   }
   return (
     <div
-      className="flex shrink-0 flex-col items-end gap-1"
+      className="flex shrink-0 flex-col items-end gap-2"
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -251,18 +255,16 @@ function ToolMutationCorner({
       {approvalItemsForMutation.map((it) => {
         const d = approvalDecisions[it.pendingId];
         return (
-          <div key={it.pendingId} className="flex items-center gap-2">
+          <div key={it.pendingId} className="flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
               disabled={busy}
               title="Approve"
               aria-label={`Approve ${it.name}`}
-              className={`${MUTATION_CHOICE_BTN_BASE} ${
+              className={`${INLINE_APPROVAL_CHOICE_BTN_CLASS} ${
                 d === true
-                  ? "cursor-pointer"
-                  : d === false
-                    ? "opacity-35 hover:bg-[var(--color-success-bg)] hover:opacity-70"
-                    : "hover:bg-[var(--color-success-bg)]"
+                  ? "bg-[var(--color-success-bg)] text-foreground"
+                  : "bg-hover text-secondary hover:bg-hover/80"
               }`}
               onClick={() =>
                 setApprovalDecisions((prev) => ({
@@ -271,23 +273,18 @@ function ToolMutationCorner({
                 }))
               }
             >
-              <CheckCircle2
-                className={MUTATION_APPROVE_ICON_CLASS}
-                strokeWidth={2}
-                aria-hidden
-              />
+              <CheckCircle2 className="size-4" strokeWidth={2} aria-hidden />
+              Approve
             </button>
             <button
               type="button"
               disabled={busy}
               title="Reject"
               aria-label={`Reject ${it.name}`}
-              className={`${MUTATION_CHOICE_BTN_BASE} ${
+              className={`${INLINE_APPROVAL_CHOICE_BTN_CLASS} ${
                 d === false
-                  ? "cursor-pointer"
-                  : d === true
-                    ? "opacity-35 hover:bg-[var(--color-destructive-bg)] hover:opacity-70"
-                    : "hover:bg-[var(--color-destructive-bg)]"
+                  ? "bg-[var(--color-destructive-bg)] text-foreground"
+                  : "bg-hover text-secondary hover:bg-hover/80"
               }`}
               onClick={() =>
                 setApprovalDecisions((prev) => ({
@@ -296,11 +293,8 @@ function ToolMutationCorner({
                 }))
               }
             >
-              <XCircle
-                className={MUTATION_REJECT_ICON_CLASS}
-                strokeWidth={2}
-                aria-hidden
-              />
+              <XCircle className="size-4" strokeWidth={2} aria-hidden />
+              Reject
             </button>
           </div>
         );
@@ -366,14 +360,14 @@ export function ToolGroupCard({
   return (
     <div
       id={anchorId}
-      className={`${AGENT_CHAT_COLUMN_CLASS} scroll-mt-4 space-y-2`}
+      className={`${AGENT_CHAT_COLUMN_CLASS} min-w-0 scroll-mt-4 space-y-2`}
     >
       <details
         open={detailsOpen}
         onToggle={(e) => setDetailsOpen(e.currentTarget.open)}
-        className="group w-full rounded-lg border border-border bg-surface/40 [&_summary::-webkit-details-marker]:hidden"
+        className="group min-w-0 w-full max-w-full overflow-hidden rounded-lg border border-border bg-surface/40 [&_summary::-webkit-details-marker]:hidden"
       >
-        <summary className="flex cursor-pointer list-none items-center gap-2.5 px-3 py-2.5 text-[12px] leading-snug transition-colors hover:bg-hover/50">
+        <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2.5 px-3 py-2.5 text-[12px] leading-snug transition-colors hover:bg-hover/50">
           <ChevronRight
             className={`size-4 shrink-0 text-tertiary transition-transform ${detailsOpen ? "rotate-90" : ""}`}
             aria-hidden
@@ -392,7 +386,7 @@ export function ToolGroupCard({
             />
           ) : null}
         </summary>
-        <div className="border-t border-border/60">
+        <div className="min-w-0 max-w-full border-t border-border/60">
           <ToolTerminalCommandRow
             cliLine={line}
             argumentsStr={call.arguments}
@@ -400,13 +394,13 @@ export function ToolGroupCard({
           />
           {result ? <ToolResultStatusStrip result={result} /> : null}
           {showInnerBody ? (
-            <div className="space-y-3 px-3 pb-2 pt-1.5">
+            <div className="min-w-0 max-w-full space-y-3 px-3 pb-2 pt-1.5">
               {showResultBlock ? (
-                <div>
+                <div className="min-w-0 max-w-full overflow-x-auto">
                   {result!.data !== undefined ? (
                     <FunctionResultDisplay value={result!.data} />
                   ) : (
-                    <p className="whitespace-pre-wrap font-mono text-[11px] leading-snug text-secondary">
+                    <p className="whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-secondary">
                       {result!.summary}
                     </p>
                   )}
@@ -567,12 +561,35 @@ export function RunBlocksList({
       {segments.map((seg, segIdx) => {
         if (seg.type === "tool_group") {
           const pid = seg.mutation?.pending_id?.trim() ?? "";
-          const showApproval = false;
-          const approvalItemsForMutation: {
+          let showApproval = false;
+          let approvalItemsForMutation: {
             pendingId: string;
             name: string;
             cli_line: string;
           }[] = [];
+          if (
+            barrier &&
+            approvalBlock &&
+            seg.mutation &&
+            pid !== "" &&
+            barrierMatchesApprovalBlock(
+              barrier,
+              approvalBlock.run_id,
+              approvalBlock.pending_ids,
+            )
+          ) {
+            const forPid = barrier.items.filter(
+              (it) => it.pendingId.trim() === pid,
+            );
+            if (forPid.length > 0) {
+              showApproval = true;
+              approvalItemsForMutation = forPid.map((it) => ({
+                pendingId: it.pendingId,
+                name: it.name,
+                cli_line: it.cli_line,
+              }));
+            }
+          }
           const anchorId = undefined;
           const mutationOutcome =
             pid !== "" ? mutationOutcomeByPendingId[pid] : undefined;
@@ -1410,19 +1427,7 @@ export function LiveBlockView({
     return null;
   }
   if (b.kind === "continuation_marker") {
-    return (
-      <div
-        className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center gap-3 py-2`}
-        role="separator"
-        aria-label="After your confirmation"
-      >
-        <div className="h-px min-w-0 flex-1 bg-border" />
-        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-tertiary">
-          After confirmation
-        </span>
-        <div className="h-px min-w-0 flex-1 bg-border" />
-      </div>
-    );
+    return null;
   }
   if (b.kind === "phase") {
     if (b.phase === "summary") {
@@ -1754,7 +1759,7 @@ export function LiveBlockView({
     const title = humanizeToolName(b.name);
     return (
       <div
-        className={`${AGENT_CHAT_COLUMN_CLASS} flex gap-2.5 pl-0.5 text-[12px] leading-snug`}
+        className={`${AGENT_CHAT_COLUMN_CLASS} flex min-w-0 gap-2.5 pl-0.5 text-[12px] leading-snug`}
       >
         <span
           className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[var(--color-accent)] opacity-70"
@@ -1768,11 +1773,11 @@ export function LiveBlockView({
           <div className="mt-1">
             <div className={TOOL_SECTION_LABEL_CLASS}>Output · result</div>
             {b.data !== undefined ? (
-              <div className="mt-1 rounded-lg border border-border/60 bg-background/80 px-2 py-2">
+              <div className="mt-1 min-w-0 max-w-full overflow-x-auto rounded-lg border border-border/60 bg-background/80 px-2 py-2">
                 <FunctionResultDisplay value={b.data} />
               </div>
             ) : (
-              <p className="whitespace-pre-wrap font-mono text-[11px] leading-snug text-secondary">
+              <p className="whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-secondary">
                 {b.summary}
               </p>
             )}
@@ -1799,8 +1804,9 @@ export function LiveBlockView({
         <div className="mt-1">
           <div className={TOOL_SECTION_LABEL_CLASS}>Confirmation · status</div>
           <p className="text-[11px] text-secondary">
-            Use the <strong>Pending actions</strong> bar at the bottom of the
-            assistant, then <strong>Apply choices</strong>.
+            Use <strong>Approve</strong> or <strong>Reject</strong> on the
+            pending tool row; the assistant continues when every pending action
+            has a choice.
           </p>
         </div>
         {cmd ? (

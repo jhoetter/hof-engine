@@ -119,7 +119,13 @@ describe("applyStreamEvent streaming caret / structured steps", () => {
     ).toBeNull();
     expect(
       confirmationFooterFromOutcomes(["a", "b"], { a: true, b: false }),
-    ).toContain("approved");
+    ).toBeNull();
+  });
+
+  it("confirmationFooterFromOutcomes notes empty pending-id list only", () => {
+    expect(confirmationFooterFromOutcomes([], { a: true })).toBe(
+      "Confirmation completed.",
+    );
   });
 
   it("compactBlocksForHistory clears streaming flags on flushed assistant rows", () => {

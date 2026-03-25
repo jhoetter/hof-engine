@@ -2,7 +2,6 @@
 
 import { HofAgentComposer } from "./HofAgentComposer";
 import { HofAgentMessages } from "./HofAgentMessages";
-import { HofAgentPendingApprovalBar } from "./HofAgentPendingApprovalBar";
 import { HofAgentProviderWaitBanner } from "./HofAgentProviderWaitBanner";
 import {
   HofAgentChatProvider,
@@ -34,7 +33,6 @@ export function HofAgentChat({
           <HofAgentProviderWaitBanner />
           <HofAgentMessages />
         </div>
-        <HofAgentPendingApprovalBar />
         <div className="shrink-0 border-t border-[var(--color-border)]/60 pt-3">
           <HofAgentComposer />
         </div>

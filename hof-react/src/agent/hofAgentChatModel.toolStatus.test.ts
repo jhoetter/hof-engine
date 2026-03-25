@@ -19,14 +19,41 @@ describe("toolResultUiStatus", () => {
     ).toEqual({ code: 422, label: "Validation error", tone: "error" });
   });
 
-  it("marks pending confirmation", () => {
+  it("marks pending confirmation with apply-first copy", () => {
     expect(
       toolResultUiStatus({
         summary: "wait",
         pending_confirmation: true,
         status_code: 202,
       }),
-    ).toEqual({ code: 202, label: "Awaiting confirmation", tone: "pending" });
+    ).toEqual({
+      code: 202,
+      label: "Confirm below to apply",
+      tone: "pending",
+      detail:
+        "The mutation has not run yet. Approve or reject in Pending actions, then Apply choices.",
+    });
+  });
+
+  it("pending + post_apply_review explains chat vs post-apply step", () => {
+    const st = toolResultUiStatus({
+      summary: "wait",
+      pending_confirmation: true,
+      status_code: 202,
+      data: {
+        summary: "€1.00 · Pending Review",
+        data: { amount: 1, approval_status: "pending_review" },
+        post_apply_review: {
+          label: "Manager review",
+          url: "http://localhost:8001/inbox",
+          path: "/inbox",
+        },
+      },
+    });
+    expect(st.code).toBe(202);
+    expect(st.label).toBe("Confirm in chat first");
+    expect(st.detail).toContain("Manager review");
+    expect(st.detail).toContain("Pending actions");
   });
 
   it("infers error from data or summary when stream omits codes", () => {

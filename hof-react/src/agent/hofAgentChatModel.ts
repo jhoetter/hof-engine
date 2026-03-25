@@ -87,6 +87,25 @@ export type LiveBlock =
       name: string;
       cli_line: string;
       arguments_preview?: string;
+      /** Server-computed preview (JSON) before the mutation runs; same payload as tool placeholder. */
+      preview?: unknown;
+    }
+  | {
+      kind: "mutation_applied";
+      id: string;
+      pending_id: string;
+      name: string;
+      tool_call_id?: string;
+      /** From NDJSON ``mutation_applied`` after the mutation executed (ground-truth review hint). */
+      post_apply_review: {
+        label: string;
+        url?: string;
+        path?: string;
+      };
+    }
+  | {
+      kind: "continuation_marker";
+      id: string;
     }
   | {
       kind: "approval_required";
@@ -158,6 +177,72 @@ export function humanizeToolName(name: string): string {
     .filter(Boolean)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(" ");
+}
+
+/** Parse wire ``post_apply_review`` object (label + optional url/path). */
+export function postApplyReviewFromWire(
+  pr: unknown,
+): { href: string; label: string; path?: string } | null {
+  if (pr == null || typeof pr !== "object" || Array.isArray(pr)) {
+    return null;
+  }
+  const prO = pr as Record<string, unknown>;
+  const label = typeof prO.label === "string" ? prO.label.trim() : "";
+  if (!label) {
+    return null;
+  }
+  const url = typeof prO.url === "string" ? prO.url.trim() : "";
+  const path = typeof prO.path === "string" ? prO.path.trim() : "";
+  if (url) {
+    return { href: url, label, ...(path ? { path } : {}) };
+  }
+  if (path.startsWith("/")) {
+    return { href: path, label, path };
+  }
+  return null;
+}
+
+/**
+ * Post-apply review hint from a mutation **preview** or pending **tool_result.data** envelope
+ * (`post_apply_review`: label + optional url/path).
+ */
+export function postApplyReviewFromPreview(
+  preview: unknown,
+): { href: string; label: string; path?: string } | null {
+  if (preview == null || typeof preview !== "object" || Array.isArray(preview)) {
+    return null;
+  }
+  const o = preview as Record<string, unknown>;
+  return postApplyReviewFromWire(o.post_apply_review);
+}
+
+/** One-line summary for pending-mutation preview in the approval bar (engine `MutationPreviewResult.summary`). */
+export function formatPendingPreviewLine(preview: unknown): string {
+  if (preview == null) {
+    return "";
+  }
+  if (typeof preview === "string") {
+    return preview.length > 140 ? `${preview.slice(0, 137)}…` : preview;
+  }
+  if (typeof preview === "object" && preview !== null) {
+    const o = preview as Record<string, unknown>;
+    const sum = o.summary;
+    if (typeof sum === "string" && sum.trim()) {
+      const t = sum.trim();
+      return t.length > 140 ? `${t.slice(0, 137)}…` : t;
+    }
+    if (typeof o.note === "string" && o.note.trim()) {
+      const n = o.note.trim();
+      return n.length > 140 ? `${n.slice(0, 137)}…` : n;
+    }
+    try {
+      const s = JSON.stringify(preview);
+      return s.length > 160 ? `${s.slice(0, 157)}…` : s;
+    } catch {
+      return "";
+    }
+  }
+  return String(preview);
 }
 
 /** User bubble body: raw ``content`` only (attachments render as chips separately). */
@@ -660,6 +745,8 @@ export function applyStreamEvent(
     const name = typeof ev.name === "string" ? ev.name : "";
     const cli_line = typeof ev.cli_line === "string" ? ev.cli_line : "";
     const args = typeof ev.arguments === "string" ? ev.arguments : "";
+    const hasPreview = Object.prototype.hasOwnProperty.call(ev, "preview");
+    const preview = hasPreview ? (ev as { preview: unknown }).preview : undefined;
     const ready = finalizeStreamingAssistantBeforeStructuredStep(
       withoutThinkingSkeleton(prev),
     );
@@ -672,6 +759,49 @@ export function applyStreamEvent(
         name,
         cli_line,
         arguments_preview: args || undefined,
+        ...(hasPreview ? { preview } : {}),
+      },
+    ];
+  }
+  if (t === "mutation_applied") {
+    const pending_id = typeof ev.pending_id === "string" ? ev.pending_id : "";
+    const name = typeof ev.name === "string" ? ev.name : "";
+    const tidRaw = (ev as { tool_call_id?: unknown }).tool_call_id;
+    const tool_call_id =
+      typeof tidRaw === "string" && tidRaw.trim() ? tidRaw.trim() : undefined;
+    const prRaw = (ev as { post_apply_review?: unknown }).post_apply_review;
+    if (
+      prRaw == null ||
+      typeof prRaw !== "object" ||
+      Array.isArray(prRaw) ||
+      !pending_id ||
+      !name
+    ) {
+      return prev;
+    }
+    const prO = prRaw as Record<string, unknown>;
+    const label = typeof prO.label === "string" ? prO.label.trim() : "";
+    if (!label) {
+      return prev;
+    }
+    const url = typeof prO.url === "string" ? prO.url.trim() : undefined;
+    const path = typeof prO.path === "string" ? prO.path.trim() : undefined;
+    const ready = finalizeStreamingAssistantBeforeStructuredStep(
+      withoutThinkingSkeleton(prev),
+    );
+    return [
+      ...ready,
+      {
+        kind: "mutation_applied",
+        id: newId(),
+        pending_id,
+        name,
+        ...(tool_call_id ? { tool_call_id } : {}),
+        post_apply_review: {
+          label,
+          ...(url ? { url } : {}),
+          ...(path ? { path } : {}),
+        },
       },
     ];
   }
@@ -714,6 +844,10 @@ export type MutationPendingBlock = Extract<
   { kind: "mutation_pending" }
 >;
 export type ToolResultBlock = Extract<LiveBlock, { kind: "tool_result" }>;
+export type MutationAppliedBlock = Extract<
+  LiveBlock,
+  { kind: "mutation_applied" }
+>;
 
 export type BlockSegment =
   | { type: "single"; block: LiveBlock }
@@ -723,6 +857,8 @@ export type BlockSegment =
       call: ToolCallBlock;
       mutation?: MutationPendingBlock;
       result?: ToolResultBlock;
+      /** When ``mutation_applied`` stream event matches this group's ``pending_id`` (same run). */
+      mutationApplied?: MutationAppliedBlock;
     };
 
 /**
@@ -907,12 +1043,23 @@ export function segmentLiveBlocks(blocks: LiveBlock[]): BlockSegment[] {
         result = blocks[i] as ToolResultBlock;
         i += 1;
       }
+      let mutationApplied: MutationAppliedBlock | undefined;
+      if (
+        i < blocks.length &&
+        blocks[i].kind === "mutation_applied" &&
+        mutation &&
+        (blocks[i] as MutationAppliedBlock).pending_id === mutation.pending_id
+      ) {
+        mutationApplied = blocks[i] as MutationAppliedBlock;
+        i += 1;
+      }
       out.push({
         type: "tool_group",
         key: call.id,
         call,
         mutation,
         result,
+        ...(mutationApplied ? { mutationApplied } : {}),
       });
       continue;
     }
@@ -978,7 +1125,18 @@ export type ToolResultUiStatus = {
   code: number;
   label: string;
   tone: "success" | "error" | "warning" | "pending";
+  /** Extra line when pending_confirmation is easy to confuse with a post-apply review step. */
+  detail?: string;
 };
+
+/** Pending mutation `tool_result.data` is a preview envelope; true when a post-apply review step is declared. */
+export function toolResultDataHasPostApplyReview(data: unknown): boolean {
+  return postApplyReviewFromPreview(data) != null;
+}
+
+function _postApplyReviewLabel(data: unknown): string | null {
+  return postApplyReviewFromPreview(data)?.label ?? null;
+}
 
 /** Human-readable HTTP-shaped status for the tool row (stream fields + fallbacks). */
 export function toolResultUiStatus(
@@ -988,10 +1146,22 @@ export function toolResultUiStatus(
   >,
 ): ToolResultUiStatus {
   if (result.pending_confirmation) {
+    const code = result.status_code ?? 202;
+    const postApplyLabel = _postApplyReviewLabel(result.data);
+    if (postApplyLabel) {
+      return {
+        code,
+        label: "Confirm in chat first",
+        tone: "pending",
+        detail: `This is not “${postApplyLabel}” in chat. Use Pending actions (below the message list) to apply or reject the write first. “${postApplyLabel}” is the step after that — open the link in that bar when shown.`,
+      };
+    }
     return {
-      code: result.status_code ?? 202,
-      label: "Awaiting confirmation",
+      code,
+      label: "Confirm below to apply",
       tone: "pending",
+      detail:
+        "The mutation has not run yet. Approve or reject in Pending actions, then Apply choices.",
     };
   }
   if (
@@ -1064,7 +1234,12 @@ export function toolGroupSummaryLine(
 
 export type ApprovalBarrier = {
   runId: string;
-  items: { pendingId: string; name: string; cli_line: string }[];
+  items: {
+    pendingId: string;
+    name: string;
+    cli_line: string;
+    preview?: unknown;
+  }[];
 };
 
 export function barrierMatchesApprovalBlock(
@@ -1082,11 +1257,20 @@ export function barrierMatchesApprovalBlock(
   }
   const ps = new Set(blockPendingIds.map((x) => x.trim()).filter(Boolean));
   const bs = new Set(barrier.items.map((it) => it.pendingId.trim()));
-  if (ps.size !== bs.size) {
-    return false;
+  if (ps.size === bs.size) {
+    for (const p of ps) {
+      if (!bs.has(p)) {
+        return false;
+      }
+    }
+    return true;
   }
-  for (const p of ps) {
-    if (!bs.has(p)) {
+  // Subset case: `approval_required` may still list every mutation from the original
+  // `awaiting_confirmation`, while the live `approvalBarrier` was rebuilt with only
+  // the ids still open (e.g. new `run_start` + merge). Every active barrier id must
+  // appear in this block's pending_ids so we do not attach the wrong run's barrier.
+  for (const b of bs) {
+    if (!ps.has(b)) {
       return false;
     }
   }

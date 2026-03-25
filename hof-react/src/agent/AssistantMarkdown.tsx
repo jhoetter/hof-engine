@@ -4,7 +4,9 @@ import type { Components } from "react-markdown";
 import { useEffect, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { CodeFence } from "./markdown/CodeFence";
 import { InlineCodeWithCopy } from "./markdown/InlineCodeWithCopy";
 import { HLJS_SCOPED_CSS } from "./markdown/hljsTokens";
@@ -145,12 +147,17 @@ export type AssistantMarkdownProps = {
 };
 
 /**
- * Renders assistant Markdown with GFM, syntax highlighting (lowlight / hljs),
- * spurious pipe-only text neutralized so it does not become tables, sortable
- * pipe tables when structurally valid, expand-on-hover for tables, and copy on
- * code blocks.
+ * Renders assistant Markdown with GFM, `remark-math` + KaTeX (`$…$`, `$$…$$`,
+ * or fenced ` ```math `), syntax highlighting (lowlight / hljs), spurious
+ * pipe-only text neutralized so it does not become tables, sortable pipe
+ * tables when structurally valid, expand-on-hover for tables, and copy on code
+ * blocks.
  */
 const HLJS_STYLE_ID = "hof-agent-md-hljs-styles";
+/** Keep in sync with the `katex` dependency version (for CDN stylesheet). */
+const KATEX_CSS_ID = "hof-agent-md-katex-css";
+const KATEX_STYLESHEET_HREF =
+  "https://cdn.jsdelivr.net/npm/katex@0.16.41/dist/katex.min.css";
 
 export function AssistantMarkdown({ source }: AssistantMarkdownProps) {
   const prepared = useMemo(
@@ -171,11 +178,25 @@ export function AssistantMarkdown({ source }: AssistantMarkdownProps) {
     document.head.appendChild(el);
   }, []);
 
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+    if (document.getElementById(KATEX_CSS_ID)) {
+      return;
+    }
+    const link = document.createElement("link");
+    link.id = KATEX_CSS_ID;
+    link.rel = "stylesheet";
+    link.href = KATEX_STYLESHEET_HREF;
+    document.head.appendChild(link);
+  }, []);
+
   return (
-    <div className="hof-agent-md min-w-0 break-words [&_*]:max-w-full">
+    <div className="hof-agent-md min-w-0 break-words [&_*]:max-w-full [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight, rehypeFencedCodeClass]}
+        remarkPlugins={[remarkMath, remarkGfm]}
+        rehypePlugins={[rehypeKatex, rehypeHighlight, rehypeFencedCodeClass]}
         components={mdComponents}
       >
         {prepared}

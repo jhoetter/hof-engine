@@ -2,14 +2,85 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 # (raw attachments from client) -> (normalized list, error message or None)
 NormalizeAttachmentsFn = Callable[[Any], tuple[list[dict[str, str]], str | None]]
 # normalized attachment list -> system prompt fragment
 AttachmentsSystemNoteFn = Callable[[list[dict[str, str]]], str]
+
+
+@dataclass(frozen=True)
+class PostApplyReviewHint:
+    """Human-in-the-loop step after the mutation applies (not the chat confirm gate)."""
+
+    label: str
+    url: str | None = None
+    path: str | None = None
+
+
+@dataclass(frozen=True)
+class MutationPreviewResult:
+    """Structured mutation preview for model + UI (no DB writes)."""
+
+    summary: str
+    data: dict[str, Any] | None = None
+    post_apply_review: PostApplyReviewHint | None = None
+    status_hint: str | None = None
+
+
+# validated mutation arguments -> preview envelope or legacy flat dict (wrapped by stream)
+MutationPreviewFn = Callable[
+    [dict[str, Any]],
+    MutationPreviewResult | dict[str, Any] | None,
+]
+
+# after successful mutation: (tool_name, args, result_row) -> optional post-apply review hint for UI
+MutationPostApplyFn = Callable[
+    [str, dict[str, Any], dict[str, Any]],
+    PostApplyReviewHint | None,
+]
+
+
+def post_apply_review_hint_to_wire(hint: PostApplyReviewHint) -> dict[str, Any]:
+    """Serialize ``PostApplyReviewHint`` for NDJSON ``mutation_applied`` events."""
+    pr: dict[str, Any] = {"label": hint.label}
+    if hint.url is not None:
+        pr["url"] = hint.url
+    if hint.path is not None:
+        pr["path"] = hint.path
+    return pr
+
+
+def mutation_preview_to_wire(result: MutationPreviewResult | dict[str, Any]) -> dict[str, Any]:
+    """Serialize preview for NDJSON stream, tool placeholder, and model JSON (JSON-serializable)."""
+    if isinstance(result, MutationPreviewResult):
+        d: dict[str, Any] = {"summary": result.summary}
+        if result.data is not None:
+            d["data"] = result.data
+        if result.post_apply_review is not None:
+            r = result.post_apply_review
+            pr: dict[str, Any] = {"label": r.label}
+            if r.url is not None:
+                pr["url"] = r.url
+            if r.path is not None:
+                pr["path"] = r.path
+            d["post_apply_review"] = pr
+        if result.status_hint:
+            d["status_hint"] = result.status_hint
+        return d
+    # Legacy: flat dict from older apps — expose as opaque data with a generated summary line
+    raw = dict(result)
+    try:
+        summary = json.dumps(raw, default=str, sort_keys=True)
+    except TypeError:
+        summary = str(raw)
+    if len(summary) > 200:
+        summary = summary[:197] + "…"
+    return {"summary": summary, "data": raw}
 
 # Framework agent tools (read-only); registered after user discovery in ``discover_all``.
 BUILTIN_AGENT_TOOL_NAMES: frozenset[str] = frozenset(
@@ -46,25 +117,36 @@ DEFAULT_SYSTEM_PROMPT_MUTATION_SUFFIX = """
 
 ## Mutation tools (create / update / delete / inbox resolves)
 When you call a mutation tool, execution waits until the user confirms in the app (or via API).
-You will receive a tool result with pending_confirmation — tell the user clearly what will happen
-and that they must use the Approve or Reject controls on that action's card in the assistant.
-Do not ask them to type "yes" as the only way to proceed; the UI is authoritative.
+You will receive a tool result with pending_confirmation. The JSON may include a **preview** object
+(computed from the proposed arguments): it has **summary** (one-line), optional **data** (opaque
+fields you should reason about), and optional **post_apply_review** (label + url/path for a human
+step after the write — not the same as chat confirmation). The UI shows proposed mutations with
+Approve / Reject (and related controls)
+automatically—you do not need to explain that approval mechanism or where to click. Do not ask
+users to type "yes" as the only way to proceed; the UI is authoritative.
 
 Read/list tools run immediately. You may mix reads and mutations in one turn: reads return data
 while mutations wait for confirmation before the assistant continues."""
 
 DEFAULT_CONFIRMATION_SUMMARY_USER_MESSAGE = (
     "The data-changing tools above have NOT run yet — nothing was written to the database. "
-    "Each proposed action is an expandable function row; the user must Approve or Reject there.\n\n"
+    "The user must Approve or Reject each proposed action in the assistant UI (then Apply / confirm "
+    "if shown). Expandable tool rows show technical detail only.\n\n"
     "Reply with 1–3 short sentences in the same language as the user's chat messages "
     "(role user only), "
     "not the language of any attached document or filename. "
-    'Use future or conditional wording only (e.g. "will", "after you approve", "proposed"). '
+    "Use future or conditional wording only (e.g. \"will\", \"after you approve\", \"proposed\"). "
     "Never use past tense as if the mutation already succeeded (do not say you already registered, "
     "created, updated, saved, or completed the action).\n"
     "Briefly remind them what will happen after they approve or reject in that panel. "
     "Do not call tools."
 )
+
+# After pending mutations: optional short assistant message before awaiting_confirmation.
+# - llm_stream: extra model round, token-streamed (legacy).
+# - static: one short fixed hint (no LLM).
+# - none: no assistant text; UI pending bar only (main reply streams after resume).
+ConfirmationSummaryMode = Literal["llm_stream", "static", "none"]
 
 
 @dataclass(frozen=True)
@@ -77,6 +159,7 @@ class AgentPolicy:
     system_prompt_body: str = DEFAULT_SYSTEM_PROMPT_BODY
     system_prompt_mutation_suffix: str = DEFAULT_SYSTEM_PROMPT_MUTATION_SUFFIX
     confirmation_summary_user_message: str = DEFAULT_CONFIRMATION_SUMMARY_USER_MESSAGE
+    confirmation_summary_mode: ConfirmationSummaryMode = "llm_stream"
     # Short hint for streamed tool_call events (UI); keep concise.
     tool_internal_rationale: dict[str, str] = field(default_factory=dict)
     # Merged into OpenAI tool descriptions and hof fn describe.
@@ -85,6 +168,8 @@ class AgentPolicy:
     tool_related_tools: dict[str, list[str]] = field(default_factory=dict)
     normalize_attachments: NormalizeAttachmentsFn | None = None
     attachments_system_note: AttachmentsSystemNoteFn | None = None
+    mutation_preview: dict[str, MutationPreviewFn] = field(default_factory=dict)
+    mutation_post_apply: dict[str, MutationPostApplyFn] = field(default_factory=dict)
 
     def effective_allowlist(self) -> frozenset[str]:
         return frozenset(self.allowlist_read | self.allowlist_mutation | BUILTIN_AGENT_TOOL_NAMES)

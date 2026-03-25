@@ -11,6 +11,7 @@ export {
   type HofAgentChatProviderProps,
 } from "./agent/hofAgentChatContext";
 export { HofAgentMessages, type HofAgentMessagesProps } from "./agent/HofAgentMessages";
+export { HofAgentPendingApprovalBar } from "./agent/HofAgentPendingApprovalBar";
 export {
   HofAgentComposer,
   type HofAgentComposerProps,

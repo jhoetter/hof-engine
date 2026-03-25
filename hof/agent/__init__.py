@@ -11,8 +11,14 @@ from hof.agent.conversation_state import (
 )
 from hof.agent.policy import (
     AgentPolicy,
+    ConfirmationSummaryMode,
+    MutationPostApplyFn,
+    MutationPreviewResult,
+    PostApplyReviewHint,
     configure_agent,
     get_agent_policy,
+    mutation_preview_to_wire,
+    post_apply_review_hint_to_wire,
     try_get_agent_policy,
 )
 from hof.agent.stream import (
@@ -29,6 +35,12 @@ __all__ = [
     "AgentConversationDraftV1",
     "AgentConversationStateV1",
     "AgentPolicy",
+    "ConfirmationSummaryMode",
+    "MutationPostApplyFn",
+    "MutationPreviewResult",
+    "PostApplyReviewHint",
+    "mutation_preview_to_wire",
+    "post_apply_review_hint_to_wire",
     "collect_agent_chat_from_stream",
     "configure_agent",
     "conversation_state_json_size",

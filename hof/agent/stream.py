@@ -13,7 +13,13 @@ from typing import Any
 
 from llm_markdown.providers import ReasoningConfig, ReasoningMode, stream_agent_turn
 
-from hof.agent.policy import AgentPolicy, get_agent_policy
+from hof.agent.policy import (
+    AgentPolicy,
+    MutationPreviewResult,
+    get_agent_policy,
+    mutation_preview_to_wire,
+    post_apply_review_hint_to_wire,
+)
 from hof.agent.state import (
     delete_agent_run,
     delete_pending,
@@ -33,6 +39,35 @@ from hof.agent.tooling import (
 from hof.config import get_config
 
 logger = logging.getLogger(__name__)
+
+
+def _mutation_preview_payload(
+    name: str,
+    arguments_json: str,
+    policy: AgentPolicy,
+) -> dict[str, Any] | None:
+    """Optional app-registered preview envelope for pending mutations; must be JSON-serializable."""
+    fn = policy.mutation_preview.get(name)
+    if fn is None:
+        return None
+    try:
+        parsed = json.loads(arguments_json) if arguments_json else {}
+        if not isinstance(parsed, dict):
+            return None
+        out = fn(parsed)
+        if out is None:
+            return None
+        if isinstance(out, MutationPreviewResult):
+            wire = mutation_preview_to_wire(out)
+        elif isinstance(out, dict):
+            wire = mutation_preview_to_wire(out)
+        else:
+            return None
+        json.dumps(wire, default=str)
+        return wire
+    except Exception:
+        logger.debug("mutation_preview failed for %s", name, exc_info=True)
+        return None
 
 
 def _collapse_agent_round_trace(parts: list[str], *, max_parts: int = 200) -> str:
@@ -130,6 +165,11 @@ def _agent_stream_debug_append(record: dict[str, Any]) -> None:
 
 
 _AGENT_SUMMARY_MAX_TOKENS = 2048
+# Shown when confirmation_summary_mode is static, or as LLM-summary fallback.
+_CONFIRMATION_SUMMARY_STATIC_FALLBACK = (
+    "I've prepared the actions above. Please use Approve or Reject for each item below; "
+    "the assistant continues automatically after you choose."
+)
 _AGENT_COMPLETION_TOKENS_CAP = 128_000
 _AGENT_COMPLETION_TOKENS_FLOOR = 256
 
@@ -526,6 +566,16 @@ def collect_agent_chat_from_stream(
     }
 
 
+def _yield_confirmation_summary_static(
+    rounds: int,
+    text: str,
+) -> Iterator[dict[str, Any]]:
+    """Single non-streamed assistant hint before awaiting_confirmation (no extra LLM round)."""
+    yield {"type": "phase", "round": rounds, "phase": "summary"}
+    yield {"type": "assistant_delta", "text": text}
+    yield {"type": "assistant_done", "finish_reason": "stop"}
+
+
 def _stream_confirmation_summary_for_ui(
     provider: Any,
     model: str,
@@ -569,20 +619,12 @@ def _stream_confirmation_summary_for_ui(
                 last_usage = ev.usage
     except Exception as exc:
         logger.warning("confirmation summary model call failed: %s", exc)
-        fb = (
-            "I've prepared the actions above. Please use Approve or Reject for each item below; "
-            "the assistant continues automatically after you choose."
-        )
-        yield {"type": "assistant_delta", "text": fb}
+        yield {"type": "assistant_delta", "text": _CONFIRMATION_SUMMARY_STATIC_FALLBACK}
         yield {"type": "assistant_done", "finish_reason": "stop"}
         return
 
     if not assistant_text.strip():
-        fb = (
-            "I've prepared the actions above. Please use Approve or Reject for each item below; "
-            "the assistant continues automatically after you choose."
-        )
-        yield {"type": "assistant_delta", "text": fb}
+        yield {"type": "assistant_delta", "text": _CONFIRMATION_SUMMARY_STATIC_FALLBACK}
         finish_reason = finish_reason or "stop"
     done_ev: dict[str, Any] = {
         "type": "assistant_done",
@@ -786,6 +828,7 @@ def _run_agent_openai_loop(
                     )
                     if name in mutation_allowlist:
                         pid = str(uuid.uuid4())
+                        preview = _mutation_preview_payload(name, args, policy)
                         save_pending(
                             pid,
                             {
@@ -795,14 +838,15 @@ def _run_agent_openai_loop(
                                 "arguments_json": args,
                             },
                         )
-                        placeholder = json.dumps(
-                            {
-                                "pending_confirmation": True,
-                                "pending_id": pid,
-                                "function": name,
-                            },
-                        )
-                        yield {
+                        ph_obj: dict[str, Any] = {
+                            "pending_confirmation": True,
+                            "pending_id": pid,
+                            "function": name,
+                        }
+                        if preview is not None:
+                            ph_obj["preview"] = preview
+                        placeholder = json.dumps(ph_obj)
+                        mp_ev: dict[str, Any] = {
                             "type": "mutation_pending",
                             "run_id": run_id,
                             "pending_id": pid,
@@ -811,7 +855,10 @@ def _run_agent_openai_loop(
                             "cli_line": cli,
                             "tool_call_id": tid,
                         }
-                        yield {
+                        if preview is not None:
+                            mp_ev["preview"] = preview
+                        yield mp_ev
+                        tr_pending: dict[str, Any] = {
                             "type": "tool_result",
                             "name": name,
                             "summary": (
@@ -822,6 +869,9 @@ def _run_agent_openai_loop(
                             "status_code": 202,
                             "tool_call_id": tid,
                         }
+                        if preview is not None:
+                            tr_pending["data"] = preview
+                        yield tr_pending
                         oa_messages.append(
                             {
                                 "role": "tool",
@@ -870,15 +920,31 @@ def _run_agent_openai_loop(
                             },
                         )
                 if pending_ids:
-                    yield from _stream_confirmation_summary_for_ui(
-                        provider,
-                        model,
-                        oa_messages,
-                        rounds,
-                        policy.confirmation_summary_user_message,
-                        lm_backend=lm_backend,
-                        reasoning=reasoning,
-                    )
+                    mode = policy.confirmation_summary_mode
+                    if mode == "llm_stream":
+                        yield from _stream_confirmation_summary_for_ui(
+                            provider,
+                            model,
+                            oa_messages,
+                            rounds,
+                            policy.confirmation_summary_user_message,
+                            lm_backend=lm_backend,
+                            reasoning=reasoning,
+                        )
+                    elif mode == "static":
+                        yield from _yield_confirmation_summary_static(
+                            rounds,
+                            _CONFIRMATION_SUMMARY_STATIC_FALLBACK,
+                        )
+                    elif mode != "none":
+                        yield {
+                            "type": "error",
+                            "detail": (
+                                f"invalid confirmation_summary_mode={mode!r} "
+                                "(expected llm_stream, static, or none)"
+                            ),
+                        }
+                        return
                     save_agent_run(
                         run_id,
                         {
@@ -1173,6 +1239,31 @@ def _run_agent_resume_stream(
                     max_tool_output_chars=max_tool_output_chars,
                 )
                 model_tool_body = format_tool_result_for_model(fname, out_json)
+                post_apply_fn = policy.mutation_post_apply.get(fname)
+                if post_apply_fn is not None:
+                    try:
+                        parsed_args = json.loads(args) if args else {}
+                        if not isinstance(parsed_args, dict):
+                            parsed_args = {}
+                        parsed_result = json.loads(out_json) if out_json else {}
+                        if not isinstance(parsed_result, dict):
+                            parsed_result = {}
+                        hint = post_apply_fn(fname, parsed_args, parsed_result)
+                    except Exception:
+                        logger.debug(
+                            "mutation_post_apply failed for %s",
+                            fname,
+                            exc_info=True,
+                        )
+                        hint = None
+                    if hint is not None:
+                        yield {
+                            "type": "mutation_applied",
+                            "pending_id": pid,
+                            "name": fname,
+                            "tool_call_id": tid,
+                            "post_apply_review": post_apply_review_hint_to_wire(hint),
+                        }
             else:
                 out_json = json.dumps(
                     {
@@ -1188,7 +1279,7 @@ def _run_agent_resume_stream(
         return
 
     delete_agent_run(rid)
-    yield {"type": "resume_start", "run_id": rid, "model": model}
+    yield {"type": "resume_start", "run_id": rid, "model": model, "continuation": True}
     logger.debug(
         "agent_chat resume_start run_id=%s model=%s start_round=%d mutations_resolved=%d",
         rid,

@@ -97,6 +97,11 @@ export type HofAgentChatContextValue = {
    * Reset on ``run_start`` / ``resume_start`` / ``phase: model``; cleared when the request ends.
    */
   thinkingEpisodeStartedAtMs: number | null;
+  /**
+   * After Approve/Reject on every pending mutation, call to run ``agent_resume_mutations``
+   * (replaces the previous auto-submit timer).
+   */
+  confirmPendingMutations: () => void;
 };
 
 const HofAgentChatContext = createContext<HofAgentChatContextValue | null>(
@@ -151,11 +156,11 @@ export function HofAgentChatProvider({
   const sendingRef = useRef(false);
   const reqIdRef = useRef(0);
   const runResumeRef = useRef<() => Promise<void>>(async () => {});
-  const autoResumeSentForRunRef = useRef<string | null>(null);
+  const resumeMergeContinuationRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const liveBlocksRef = useRef<LiveBlock[]>([]);
   const pendingDetailsRef = useRef(
-    new Map<string, { name: string; cli_line: string }>(),
+    new Map<string, { name: string; cli_line: string; preview?: unknown }>(),
   );
   const mutationPendingIdsThisRunRef = useRef<string[]>([]);
   const currentAgentRunIdRef = useRef("");
@@ -317,17 +322,45 @@ export function HofAgentChatProvider({
     return out;
   }, []);
 
-  const flushLiveToThread = useCallback((blocks: LiveBlock[]) => {
-    if (blocks.length === 0) {
-      return;
-    }
-    const cleaned = compactBlocksForHistory(blocks);
-    const toStore = cleaned.length > 0 ? cleaned : blocks;
-    setThread((t) => [
-      ...t,
-      { kind: "run", id: newId(), blocks: structuredClone(toStore) },
-    ]);
-  }, []);
+  const flushLiveToThread = useCallback(
+    (
+      blocks: LiveBlock[],
+      options?: { mergeContinuation?: boolean },
+    ) => {
+      if (blocks.length === 0) {
+        return;
+      }
+      const cleaned = compactBlocksForHistory(blocks);
+      const toStore = cleaned.length > 0 ? cleaned : blocks;
+      const mergeContinuation = options?.mergeContinuation === true;
+      setThread((t) => {
+        if (
+          mergeContinuation &&
+          t.length > 0 &&
+          t[t.length - 1].kind === "run"
+        ) {
+          const last = t[t.length - 1];
+          if (last.kind !== "run") {
+            return [
+              ...t,
+              { kind: "run", id: newId(), blocks: structuredClone(toStore) },
+            ];
+          }
+          const merged: LiveBlock[] = [
+            ...last.blocks,
+            { kind: "continuation_marker", id: newId() },
+            ...structuredClone(toStore),
+          ];
+          return [...t.slice(0, -1), { ...last, blocks: merged }];
+        }
+        return [
+          ...t,
+          { kind: "run", id: newId(), blocks: structuredClone(toStore) },
+        ];
+      });
+    },
+    [],
+  );
 
   const runAgent = useCallback(
     async (items: ThreadItem[]) => {
@@ -383,9 +416,18 @@ export function HofAgentChatProvider({
               const pid =
                 typeof ev.pending_id === "string" ? ev.pending_id : "";
               if (pid) {
+                const hasPv = Object.prototype.hasOwnProperty.call(
+                  ev,
+                  "preview",
+                );
                 pendingDetailsRef.current.set(pid, {
                   name: typeof ev.name === "string" ? ev.name : "",
                   cli_line: typeof ev.cli_line === "string" ? ev.cli_line : "",
+                  ...(hasPv
+                    ? {
+                        preview: (ev as { preview: unknown }).preview,
+                      }
+                    : {}),
                 });
                 const acc = mutationPendingIdsThisRunRef.current;
                 if (!acc.includes(pid)) {
@@ -407,11 +449,15 @@ export function HofAgentChatProvider({
                 mutationPendingIdsThisRunRef.current,
                 mutationPendingIdsFromBlocks(liveBlocksRef.current),
               );
-              const itemsBarrier = pids.map((pid) => ({
-                pendingId: pid,
-                name: pendingDetailsRef.current.get(pid)?.name || "mutation",
-                cli_line: pendingDetailsRef.current.get(pid)?.cli_line || "",
-              }));
+              const itemsBarrier = pids.map((pid) => {
+                const det = pendingDetailsRef.current.get(pid);
+                return {
+                  pendingId: pid,
+                  name: det?.name || "mutation",
+                  cli_line: det?.cli_line || "",
+                  ...(det?.preview !== undefined ? { preview: det.preview } : {}),
+                };
+              });
               setApprovalBarrier({ runId: rid, items: itemsBarrier });
               const dec: Record<string, boolean | null> = {};
               for (const p of pids) {
@@ -470,11 +516,15 @@ export function HofAgentChatProvider({
             },
           ];
           liveBlocksRef.current = doneBlocks;
-          const itemsSynth = synthPids.map((pid) => ({
-            pendingId: pid,
-            name: pendingDetailsRef.current.get(pid)?.name || "mutation",
-            cli_line: pendingDetailsRef.current.get(pid)?.cli_line || "",
-          }));
+          const itemsSynth = synthPids.map((pid) => {
+            const det = pendingDetailsRef.current.get(pid);
+            return {
+              pendingId: pid,
+              name: det?.name || "mutation",
+              cli_line: det?.cli_line || "",
+              ...(det?.preview !== undefined ? { preview: det.preview } : {}),
+            };
+          });
           setApprovalBarrier({ runId: ridForSynth, items: itemsSynth });
           setApprovalDecisions(
             Object.fromEntries(synthPids.map((p) => [p, null])) as Record<
@@ -576,7 +626,12 @@ export function HofAgentChatProvider({
             }
             const rtyp = typeof ev.type === "string" ? ev.type : "";
             if (rtyp === "resume_start") {
+              resumeMergeContinuationRef.current =
+                (ev as { continuation?: unknown }).continuation === true;
               assistantStreamPhaseRef.current = null;
+              currentAgentRunIdRef.current = coerceRunId(ev.run_id);
+              pendingDetailsRef.current.clear();
+              mutationPendingIdsThisRunRef.current = [];
               updateThinkingEpisodeStart(Date.now());
             }
             if (rtyp === "phase") {
@@ -588,9 +643,70 @@ export function HofAgentChatProvider({
                 assistantStreamPhaseRef.current = ph;
               }
             }
+            if (rtyp === "mutation_pending") {
+              const pid =
+                typeof ev.pending_id === "string" ? ev.pending_id : "";
+              if (pid) {
+                const hasPv = Object.prototype.hasOwnProperty.call(
+                  ev,
+                  "preview",
+                );
+                pendingDetailsRef.current.set(pid, {
+                  name: typeof ev.name === "string" ? ev.name : "",
+                  cli_line: typeof ev.cli_line === "string" ? ev.cli_line : "",
+                  ...(hasPv
+                    ? {
+                        preview: (ev as { preview: unknown }).preview,
+                      }
+                    : {}),
+                });
+                const acc = mutationPendingIdsThisRunRef.current;
+                if (!acc.includes(pid)) {
+                  acc.push(pid);
+                }
+              }
+            }
+            let evForBlocks: HofStreamEvent = ev;
+            if (rtyp === "awaiting_confirmation") {
+              const awRid =
+                coerceRunId(ev.run_id) || currentAgentRunIdRef.current.trim();
+              const fromEvent = Array.isArray(ev.pending_ids)
+                ? (ev.pending_ids as unknown[])
+                    .map((x) => String(x))
+                    .filter(Boolean)
+                : [];
+              const pids = mergePendingIdLists(
+                fromEvent,
+                mutationPendingIdsThisRunRef.current,
+                mutationPendingIdsFromBlocks(liveBlocksRef.current),
+              );
+              const itemsBarrier = pids.map((pid) => {
+                const det = pendingDetailsRef.current.get(pid);
+                return {
+                  pendingId: pid,
+                  name: det?.name || "mutation",
+                  cli_line: det?.cli_line || "",
+                  ...(det?.preview !== undefined ? { preview: det.preview } : {}),
+                };
+              });
+              setApprovalBarrier({ runId: awRid, items: itemsBarrier });
+              const dec: Record<string, boolean | null> = {};
+              for (const p of pids) {
+                dec[p] = null;
+              }
+              setApprovalDecisions(dec);
+              evForBlocks =
+                pids.length > 0
+                  ? ({
+                      ...ev,
+                      run_id: awRid,
+                      pending_ids: pids,
+                    } as HofStreamEvent)
+                  : ev;
+            }
             setLiveBlocks((prev) => {
-              const rt = typeof ev.type === "string" ? ev.type : "";
-              const next = applyStreamEventWithDedupe(prev, ev, {
+              const rt = typeof evForBlocks.type === "string" ? evForBlocks.type : "";
+              const next = applyStreamEventWithDedupe(prev, evForBlocks, {
                 assistantStreamPhase: assistantStreamPhaseRef.current,
                 thinkingEpisodeStartedAtMs: thinkingEpisodeStartedAtRef.current,
                 ...(rt === "assistant_done"
@@ -613,12 +729,58 @@ export function HofAgentChatProvider({
         }
         return next;
       });
-      setApprovalBarrier(null);
-      setApprovalDecisions({});
-      pendingDetailsRef.current.clear();
-      const doneBlocks = liveBlocksRef.current;
+      let doneBlocks = liveBlocksRef.current;
+      const ridForSynth = currentAgentRunIdRef.current.trim();
+      const hasApprovalBlock = doneBlocks.some(
+        (b) => b.kind === "approval_required",
+      );
+      const synthPids = mergePendingIdLists(
+        mutationPendingIdsFromBlocks(doneBlocks),
+        mutationPendingIdsThisRunRef.current,
+      );
+      if (
+        !hasApprovalBlock &&
+        synthPids.length > 0 &&
+        toolResultAwaitingUserConfirmation(doneBlocks) &&
+        ridForSynth
+      ) {
+        doneBlocks = [
+          ...doneBlocks,
+          {
+            kind: "approval_required",
+            id: newId(),
+            run_id: ridForSynth,
+            pending_ids: synthPids,
+          },
+        ];
+        liveBlocksRef.current = doneBlocks;
+        const itemsSynth = synthPids.map((pid) => {
+          const det = pendingDetailsRef.current.get(pid);
+          return {
+            pendingId: pid,
+            name: det?.name || "mutation",
+            cli_line: det?.cli_line || "",
+            ...(det?.preview !== undefined ? { preview: det.preview } : {}),
+          };
+        });
+        setApprovalBarrier({ runId: ridForSynth, items: itemsSynth });
+        setApprovalDecisions(
+          Object.fromEntries(synthPids.map((p) => [p, null])) as Record<
+            string,
+            boolean | null
+          >,
+        );
+      } else if (!hasApprovalBlock && synthPids.length === 0) {
+        setApprovalBarrier(null);
+        setApprovalDecisions({});
+        pendingDetailsRef.current.clear();
+      }
+      const mergeCont = resumeMergeContinuationRef.current;
+      resumeMergeContinuationRef.current = false;
       if (doneBlocks.length > 0) {
-        flushLiveToThread(structuredClone(doneBlocks));
+        flushLiveToThread(structuredClone(doneBlocks), {
+          mergeContinuation: mergeCont,
+        });
       }
       liveBlocksRef.current = [];
       setLiveBlocks([]);
@@ -667,48 +829,9 @@ export function HofAgentChatProvider({
 
   runResumeRef.current = runResume;
 
-  useEffect(() => {
-    autoResumeSentForRunRef.current = null;
-  }, [approvalDecisions]);
-
-  useEffect(() => {
-    if (!approvalBarrier?.items.length) {
-      return;
-    }
-    const id = window.requestAnimationFrame(() => {
-      document
-        .getElementById("hof-agent-pending-confirmation")
-        ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    });
-    return () => window.cancelAnimationFrame(id);
-  }, [approvalBarrier]);
-
-  useEffect(() => {
-    if (!approvalBarrier) {
-      autoResumeSentForRunRef.current = null;
-      return;
-    }
-    if (busy) {
-      return;
-    }
-    const rid = approvalBarrier.runId;
-    const allChosen = approvalBarrier.items.every(
-      (it) =>
-        approvalDecisions[it.pendingId] === true ||
-        approvalDecisions[it.pendingId] === false,
-    );
-    if (!allChosen) {
-      return;
-    }
-    if (autoResumeSentForRunRef.current === rid) {
-      return;
-    }
-    const t = window.setTimeout(() => {
-      autoResumeSentForRunRef.current = rid;
-      void runResumeRef.current();
-    }, 280);
-    return () => window.clearTimeout(t);
-  }, [approvalBarrier, approvalDecisions, busy]);
+  const confirmPendingMutations = useCallback(() => {
+    void runResumeRef.current();
+  }, []);
 
   const onPickFiles = useCallback(
     async (files: FileList | null) => {
@@ -836,6 +959,7 @@ export function HofAgentChatProvider({
       stop,
       conversationEmpty,
       thinkingEpisodeStartedAtMs,
+      confirmPendingMutations,
     }),
     [
       welcomeName,
@@ -854,6 +978,7 @@ export function HofAgentChatProvider({
       stop,
       conversationEmpty,
       thinkingEpisodeStartedAtMs,
+      confirmPendingMutations,
     ],
   );
 

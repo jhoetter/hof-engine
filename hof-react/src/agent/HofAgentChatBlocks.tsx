@@ -31,6 +31,7 @@ import {
   humanizeToolName,
   inferAssistantUiLane,
   isGenericAwaitingConfirmationSummary,
+  postApplyReviewFromWire,
   postToolAssistantBlockIds,
   segmentLiveBlocks,
   showProposedActionsLabel,
@@ -45,6 +46,7 @@ import type {
   ApprovalBarrier,
   AssistantStreamSegment,
   LiveBlock,
+  MutationAppliedBlock,
   MutationPendingBlock,
   ToolCallBlock,
   ToolResultBlock,
@@ -158,11 +160,19 @@ function ToolResultStatusStrip({ result }: { result: ToolResultBlock }) {
           ? "text-[var(--color-accent)]"
           : "text-secondary";
   return (
-    <div className="flex items-center justify-between gap-2 bg-surface/30 px-3 py-1.5 font-mono text-[10px]">
-      <span className="text-tertiary">Result</span>
-      <span className={`shrink-0 font-medium tabular-nums ${colorClass}`}>
-        {st.code} <span className="font-normal opacity-90">{st.label}</span>
-      </span>
+    <div className="flex flex-col gap-1 bg-surface/30 px-3 py-1.5">
+      <div className="flex items-center justify-between gap-2 font-mono text-[10px]">
+        <span className="text-tertiary">Result</span>
+        <span className={`shrink-0 text-right font-medium tabular-nums ${colorClass}`}>
+          {st.code}{" "}
+          <span className="font-normal opacity-90">{st.label}</span>
+        </span>
+      </div>
+      {st.detail ? (
+        <p className="font-sans text-[10px] font-normal leading-snug text-secondary">
+          {st.detail}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -300,10 +310,45 @@ function ToolMutationCorner({
   );
 }
 
+function PostApplyReviewNotice({
+  mutationApplied,
+  toolTitle,
+}: {
+  mutationApplied: MutationAppliedBlock;
+  toolTitle: string;
+}) {
+  const link = postApplyReviewFromWire(mutationApplied.post_apply_review);
+  return (
+    <div
+      className="rounded-lg border border-border/80 bg-[color:color-mix(in_srgb,var(--color-accent)_6%,transparent)] px-3 py-2 text-[11px] leading-snug"
+      role="status"
+      aria-label={`Post-apply review: ${mutationApplied.post_apply_review.label}`}
+    >
+      <div className="font-medium text-foreground">
+        Next step · {toolTitle}
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <span className="inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-secondary ring-1 ring-border/80">
+          {mutationApplied.post_apply_review.label}
+        </span>
+        {link ? (
+          <a
+            href={link.href}
+            className="text-[11px] font-medium text-[var(--color-accent)] underline-offset-2 hover:underline"
+          >
+            Open
+          </a>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function ToolGroupCard({
   call,
   mutation,
   result,
+  mutationApplied,
   showApproval,
   approvalItemsForMutation,
   approvalDecisions,
@@ -315,6 +360,7 @@ export function ToolGroupCard({
   call: ToolCallBlock;
   mutation?: MutationPendingBlock;
   result?: ToolResultBlock;
+  mutationApplied?: MutationAppliedBlock;
   showApproval: boolean;
   approvalItemsForMutation: {
     pendingId: string;
@@ -344,17 +390,12 @@ export function ToolGroupCard({
   );
   /** Tool output inside the expandable card only. */
   const showInnerBody = showResultBlock;
-  const mutationHintWhenIdle =
-    Boolean(mutation) &&
-    !showApproval &&
-    mutationOutcome === undefined;
   const showMutationCmdDup = Boolean(
     mutation && cmd && !cmdDupOfLine,
   );
   const showDetailsFooter =
     Boolean(result) ||
     showInnerBody ||
-    mutationHintWhenIdle ||
     showMutationCmdDup;
 
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -410,12 +451,6 @@ export function ToolGroupCard({
               ) : null}
             </div>
           ) : null}
-          {mutationHintWhenIdle ? (
-            <div className="px-3 pb-2 text-[10px] text-secondary">
-              No Approve/Reject here — you already chose on another card, or
-              this step is not paused. Inbox review is separate.
-            </div>
-          ) : null}
           {showMutationCmdDup ? (
             <div className="px-3 pb-2">
               <div className="flex items-center overflow-hidden rounded-md border border-border/60 bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)]">
@@ -433,6 +468,12 @@ export function ToolGroupCard({
           ) : null}
         </div>
       </details>
+      {mutationApplied ? (
+        <PostApplyReviewNotice
+          mutationApplied={mutationApplied}
+          toolTitle={title}
+        />
+      ) : null}
     </div>
   );
 }
@@ -558,34 +599,6 @@ export function RunBlocksList({
       (x): x is Extract<LiveBlock, { kind: "approval_required" }> =>
         x.kind === "approval_required",
     );
-  const activeBarrierForRun =
-    approvalBlock &&
-    barrier &&
-    barrierMatchesApprovalBlock(
-      barrier,
-      approvalBlock.run_id,
-      approvalBlock.pending_ids,
-    )
-      ? barrier
-      : null;
-
-  let firstPendingToolKey: string | null = null;
-  if (activeBarrierForRun) {
-    for (const seg of segments) {
-      if (seg.type !== "tool_group" || !seg.mutation) {
-        continue;
-      }
-      const pid = seg.mutation.pending_id.trim();
-      if (
-        pid &&
-        activeBarrierForRun.items.some((it) => it.pendingId.trim() === pid)
-      ) {
-        if (firstPendingToolKey === null) {
-          firstPendingToolKey = seg.key;
-        }
-      }
-    }
-  }
 
   const postToolAssistantIds = postToolAssistantBlockIds(blocks);
 
@@ -594,21 +607,13 @@ export function RunBlocksList({
       {segments.map((seg, segIdx) => {
         if (seg.type === "tool_group") {
           const pid = seg.mutation?.pending_id?.trim() ?? "";
-          const showApproval = Boolean(
-            activeBarrierForRun &&
-            pid &&
-            activeBarrierForRun.items.some((it) => it.pendingId.trim() === pid),
-          );
-          const approvalItemsForMutation =
-            showApproval && activeBarrierForRun
-              ? activeBarrierForRun.items.filter(
-                  (it) => it.pendingId.trim() === pid,
-                )
-              : [];
-          const anchorId =
-            showApproval && seg.key === firstPendingToolKey
-              ? "hof-agent-pending-confirmation"
-              : undefined;
+          const showApproval = false;
+          const approvalItemsForMutation: {
+            pendingId: string;
+            name: string;
+            cli_line: string;
+          }[] = [];
+          const anchorId = undefined;
           const mutationOutcome =
             pid !== "" ? mutationOutcomeByPendingId[pid] : undefined;
           const proposedLabel = showProposedActionsLabel(
@@ -628,6 +633,7 @@ export function RunBlocksList({
                 call={seg.call}
                 mutation={seg.mutation}
                 result={seg.result}
+                mutationApplied={seg.mutationApplied}
                 showApproval={showApproval}
                 approvalItemsForMutation={approvalItemsForMutation}
                 approvalDecisions={approvalDecisions}
@@ -1405,6 +1411,21 @@ export function LiveBlockView({
   if (b.kind === "thinking_skeleton") {
     return null;
   }
+  if (b.kind === "continuation_marker") {
+    return (
+      <div
+        className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center gap-3 py-2`}
+        role="separator"
+        aria-label="After your confirmation"
+      >
+        <div className="h-px min-w-0 flex-1 bg-border" />
+        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-tertiary">
+          After confirmation
+        </span>
+        <div className="h-px min-w-0 flex-1 bg-border" />
+      </div>
+    );
+  }
   if (b.kind === "phase") {
     if (b.phase === "summary") {
       return null;
@@ -1762,6 +1783,14 @@ export function LiveBlockView({
       </div>
     );
   }
+  if (b.kind === "mutation_applied") {
+    const title = humanizeToolName(b.name);
+    return (
+      <div className={`${AGENT_CHAT_COLUMN_CLASS}`}>
+        <PostApplyReviewNotice mutationApplied={b} toolTitle={title} />
+      </div>
+    );
+  }
   if (b.kind === "mutation_pending") {
     const title = humanizeToolName(b.name);
     const cmd = b.cli_line || b.arguments_preview || "";
@@ -1775,8 +1804,8 @@ export function LiveBlockView({
         <div className="mt-1">
           <div className={TOOL_SECTION_LABEL_CLASS}>Confirmation · status</div>
           <p className="text-[11px] text-secondary">
-            When this step is grouped in the tool card above, use Approve or
-            Reject inside that expanded row.
+            Use the <strong>Pending actions</strong> bar at the bottom of the
+            assistant, then <strong>Apply choices</strong>.
           </p>
         </div>
         {cmd ? (

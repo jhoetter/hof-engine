@@ -931,22 +931,29 @@ export function HofAgentChatProvider({
                 setApprovalDecisions({});
               }
             }
-            setLiveBlocks((prev) => {
-              const et =
-                typeof evForBlocks.type === "string"
-                  ? evForBlocks.type
-                  : "";
-              const next = applyStreamEventWithDedupe(prev, evForBlocks, {
-                assistantStreamPhase: assistantStreamPhaseRef.current,
-                thinkingEpisodeStartedAtMs:
-                  thinkingEpisodeStartedAtRef.current,
-                ...(et === "assistant_done"
-                  ? { assistantDoneClockMs: Date.now() }
-                  : {}),
+            if (
+              !(
+                planDraftStreamingActiveRef.current &&
+                typ === "assistant_delta"
+              )
+            ) {
+              setLiveBlocks((prev) => {
+                const et =
+                  typeof evForBlocks.type === "string"
+                    ? evForBlocks.type
+                    : "";
+                const next = applyStreamEventWithDedupe(prev, evForBlocks, {
+                  assistantStreamPhase: assistantStreamPhaseRef.current,
+                  thinkingEpisodeStartedAtMs:
+                    thinkingEpisodeStartedAtRef.current,
+                  ...(et === "assistant_done"
+                    ? { assistantDoneClockMs: Date.now() }
+                    : {}),
+                });
+                liveBlocksRef.current = next;
+                return next;
               });
-              liveBlocksRef.current = next;
-              return next;
-            });
+            }
           },
         });
         if (myId !== reqIdRef.current) {
@@ -1236,20 +1243,27 @@ export function HofAgentChatProvider({
                 setPlanText(planDraftBufferRef.current);
               }
             }
-            setLiveBlocks((prev) => {
-              const et =
-                typeof ev.type === "string" ? ev.type : "";
-              const next = applyStreamEventWithDedupe(prev, ev, {
-                assistantStreamPhase: assistantStreamPhaseRef.current,
-                thinkingEpisodeStartedAtMs:
-                  thinkingEpisodeStartedAtRef.current,
-                ...(et === "assistant_done"
-                  ? { assistantDoneClockMs: Date.now() }
-                  : {}),
+            if (
+              !(
+                planDraftStreamingActiveRef.current &&
+                typ === "assistant_delta"
+              )
+            ) {
+              setLiveBlocks((prev) => {
+                const et =
+                  typeof ev.type === "string" ? ev.type : "";
+                const next = applyStreamEventWithDedupe(prev, ev, {
+                  assistantStreamPhase: assistantStreamPhaseRef.current,
+                  thinkingEpisodeStartedAtMs:
+                    thinkingEpisodeStartedAtRef.current,
+                  ...(et === "assistant_done"
+                    ? { assistantDoneClockMs: Date.now() }
+                    : {}),
+                });
+                liveBlocksRef.current = next;
+                return next;
               });
-              liveBlocksRef.current = next;
-              return next;
-            });
+            }
           },
         });
         if (myId !== reqIdRef.current) {

@@ -80,12 +80,19 @@ export function HofAgentMessages({
     planRunId,
   } = useHofAgentChat();
 
-  const planCardPhase =
+  const planCardPhase:
+    | "generating"
+    | "ready"
+    | "executing"
+    | "done"
+    | null =
     planPhase === "ready" ||
     planPhase === "executing" ||
     planPhase === "done"
       ? planPhase
-      : null;
+      : planPhase === "generating" && planText.trim().length > 0
+        ? "generating"
+        : null;
   const showPlanCard =
     planCardPhase !== null && planText.trim().length > 0;
   const showAnswerSummary = planClarificationSubmittedSummary.length > 0;
@@ -210,7 +217,7 @@ export function HofAgentMessages({
       {showAnswerSummary ? answerSummaryEl : null}
       {planPhase === "clarifying" && planClarificationBarrier
         ? clarificationCardEl
-        : planCardEl}
+        : null}
     </>
   ) : null;
 
@@ -228,26 +235,16 @@ export function HofAgentMessages({
           {answerSummaryEl}
         </>
       )}
+      {planCardEl}
+      {liveBlocksEl}
       {planPhase === "clarifying" && planClarificationBarrier && !hasPlanRunAnchor ? (
-        <>
-          {liveBlocksEl}
-          <div className="pl-1">
-            <HofAgentPlanClarificationCard
-              questions={planClarificationBarrier.questions}
-              busy={busy}
-              onSubmit={submitPlanClarification}
-            />
-          </div>
-        </>
-      ) : (
-        <>
-          {!hasPlanRunAnchor ? planCardEl : null}
-          {liveBlocksEl}
-        </>
-      )}
+        clarificationCardEl
+      ) : null}
       {liveBlocks.length === 0 && busy ? (
         <div className="pl-1">
-          <AgentEarlyThinkingIndicator />
+          <AgentEarlyThinkingIndicator
+            label={planPhase === "generating" ? "Preparing plan" : undefined}
+          />
         </div>
       ) : null}
     </>

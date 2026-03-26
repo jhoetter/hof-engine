@@ -7,7 +7,7 @@ import { parseStructuredPlan } from "./planMarkdownTodos";
 export type HofAgentPlanCardProps = {
   planText: string;
   onPlanTextChange: (next: string) => void;
-  planPhase: "ready" | "executing" | "done";
+  planPhase: "generating" | "ready" | "executing" | "done";
   busy: boolean;
   planTodoDoneIndices: readonly number[];
   onExecutePlan: () => void;
@@ -23,6 +23,7 @@ export function HofAgentPlanCard({
 }: HofAgentPlanCardProps) {
   const [viewRawOpen, setViewRawOpen] = useState(false);
   const parsed = useMemo(() => parseStructuredPlan(planText), [planText]);
+  const generating = planPhase === "generating";
   const executing = planPhase === "executing";
   const completed = planPhase === "done";
 
@@ -51,7 +52,9 @@ export function HofAgentPlanCard({
             <span className="rounded bg-[var(--color-accent)]/10 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-accent)]">
               Plan
             </span>
-            {completed ? (
+            {generating ? (
+              <span className="text-[11px] text-tertiary">Drafting plan</span>
+            ) : completed ? (
               <span className="text-[11px] text-tertiary">Completed</span>
             ) : executing ? (
               <span className="text-[11px] text-tertiary">
@@ -65,7 +68,7 @@ export function HofAgentPlanCard({
           </h3>
         </div>
       </div>
-      {!executing && parsed.description ? (
+      {!executing && !generating && parsed.description ? (
         <p className="mb-3 text-[13px] leading-relaxed text-secondary">
           {parsed.description}
         </p>
@@ -78,11 +81,13 @@ export function HofAgentPlanCard({
         }
       >
         <p className="mb-2 text-[11px] font-medium text-secondary">
-          {completed
-            ? `Progress (${doneCount}/${parsed.todos.length})`
-            : executing
+          {generating
+            ? "Building checklist…"
+            : completed
               ? `Progress (${doneCount}/${parsed.todos.length})`
-              : `${parsed.todos.length} To-do${parsed.todos.length === 1 ? "" : "s"}`}
+              : executing
+                ? `Progress (${doneCount}/${parsed.todos.length})`
+                : `${parsed.todos.length} To-do${parsed.todos.length === 1 ? "" : "s"}`}
         </p>
         {parsed.todos.length > 0 ? (
           <ul className="space-y-2">
@@ -115,7 +120,7 @@ export function HofAgentPlanCard({
           </p>
         )}
       </div>
-      {!executing ? (
+      {!executing && !generating ? (
         <>
           <button
             type="button"

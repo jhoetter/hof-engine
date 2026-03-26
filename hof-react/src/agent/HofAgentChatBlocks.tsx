@@ -813,6 +813,8 @@ export type AgentEarlyThinkingIndicatorProps = {
    * Omit to compute elapsed locally from {@link HofAgentChatContext}.
    */
   liveFormatted?: string | null;
+  /** Shimmer label (default ``Thinking``). Use e.g. ``Preparing plan`` during plan draft. */
+  label?: string;
 };
 
 /**
@@ -821,6 +823,7 @@ export type AgentEarlyThinkingIndicatorProps = {
  */
 export function AgentEarlyThinkingIndicator({
   liveFormatted: liveFormattedFromParent,
+  label = "Thinking",
 }: AgentEarlyThinkingIndicatorProps = {}) {
   useEffect(() => {
     ensureReasoningShimmerKeyframes();
@@ -835,7 +838,7 @@ export function AgentEarlyThinkingIndicator({
     ? internalElapsed.liveFormatted
     : liveFormattedFromParent;
   const ariaThinking =
-    liveFormatted != null ? `Thinking (${liveFormatted})` : "Thinking";
+    liveFormatted != null ? `${label} (${liveFormatted})` : label;
   return (
     <div
       className={`${AGENT_CHAT_COLUMN_CLASS} font-sans`}
@@ -843,7 +846,7 @@ export function AgentEarlyThinkingIndicator({
       aria-live="polite"
       aria-label={ariaThinking}
     >
-      <span className={REASONING_THINKING_SHIMMER_LABEL_CLASS}>Thinking</span>
+      <span className={REASONING_THINKING_SHIMMER_LABEL_CLASS}>{label}</span>
       {liveFormatted != null ? (
         <span className="text-[11px] font-medium text-tertiary">
           {" "}

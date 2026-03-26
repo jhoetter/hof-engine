@@ -176,7 +176,9 @@ class ParameterInfo:
 
     __slots__ = ("name", "type_annotation", "default", "required")
 
-    def __init__(self, *, name: str, type_annotation: Any, default: Any, required: bool):
+    def __init__(
+        self, *, name: str, type_annotation: Any, default: Any, required: bool
+    ):
         self.name = name
         self.type_annotation = type_annotation
         self.default = default
@@ -192,7 +194,9 @@ class ParameterInfo:
             "name": self.name,
             "type": type_name,
             "required": self.required,
-            "default": None if self.default is inspect.Parameter.empty else repr(self.default),
+            "default": (
+                None if self.default is inspect.Parameter.empty else repr(self.default)
+            ),
         }
 
 

@@ -594,7 +594,12 @@ def hof_builtin_calculate(
     when_not_to_use="When you already have enough context to produce a plan — just output the plan directly.",
 )
 def hof_builtin_present_plan_clarification(questions: list) -> dict[str, Any]:
-    """Intercepted by the stream loop; this body is never reached."""
+    """Intercepted by the stream loop; this body is never reached.
+
+    ``questions`` is validated server-side via
+    :class:`~hof.agent.plan_types.PlanClarificationQuestion`.
+    Each element: ``{id, prompt, options: [{id, label}], allow_multiple}``.
+    """
     return {"status": "intercepted"}
 
 

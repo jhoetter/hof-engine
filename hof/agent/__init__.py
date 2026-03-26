@@ -10,6 +10,12 @@ from hof.agent.conversation_state import (
     normalize_conversation_state_for_storage,
     validate_conversation_state,
 )
+from hof.agent.plan_types import (
+    PlanClarificationAnswer,
+    PlanClarificationBarrierV1,
+    PlanClarificationOption,
+    PlanClarificationQuestion,
+)
 from hof.agent.policy import (
     AgentPolicy,
     ConfirmationSummaryMode,
@@ -44,6 +50,10 @@ from hof.agent.stream import (
 from hof.agent.tooling import format_cli_line
 
 __all__ = [
+    "PlanClarificationAnswer",
+    "PlanClarificationBarrierV1",
+    "PlanClarificationOption",
+    "PlanClarificationQuestion",
     "MAX_CONVERSATION_STATE_BYTES",
     "AgentConversationDraftV1",
     "AgentConversationPlanV1",

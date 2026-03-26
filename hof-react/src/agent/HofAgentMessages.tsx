@@ -229,6 +229,7 @@ export function HofAgentMessages({
     planPhase === "clarifying" && planClarificationBarrier ? (
       <div className="pl-1">
         <HofAgentPlanClarificationCard
+          key={planClarificationBarrier.clarificationId}
           questions={planClarificationBarrier.questions}
           busy={busy}
           onSubmit={submitPlanClarification}

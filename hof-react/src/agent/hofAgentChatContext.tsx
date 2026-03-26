@@ -42,16 +42,14 @@ import {
   mergePendingIdLists,
   mutationPendingIdsFromBlocks,
   newId,
+  finalizePlanFromTerminalEvent,
   normalizeAgentCliDisplayLine,
+  parsePlanClarificationBarrierFromTerm,
   PLAN_EXECUTE_USER_MARKER,
   shouldSuppressLiveBlockDuringPlanDiscover,
-  stripLastAssistantBlockForPlan,
   toolResultAwaitingUserConfirmation,
 } from "./hofAgentChatModel";
-import {
-  parseStructuredPlan,
-  preferPlanTaskListBody,
-} from "./planMarkdownTodos";
+import { parseStructuredPlan } from "./planMarkdownTodos";
 import {
   applyPlanTodoWireResolution,
   mergePlanTodoDoneIndices,
@@ -204,6 +202,48 @@ function updateProviderWaitFromStreamType(
   ) {
     setNotice(null);
   }
+}
+
+/**
+ * Shared head of every ``onEvent`` handler: resolve plan-todo wire events and
+ * merge done indices into state.
+ */
+function applyPlanTodoWireHead(
+  ev: HofStreamEvent,
+  planTextRef: { current: string },
+  setPlanTodoDoneIndices: Dispatch<SetStateAction<number[]>>,
+): { evForBlocks: HofStreamEvent; typ: string } {
+  const typ = typeof ev.type === "string" ? ev.type : "";
+  const planTodoWire = applyPlanTodoWireResolution(ev, planTextRef.current);
+  if (planTodoWire.mergeIndices.length > 0) {
+    setPlanTodoDoneIndices((prev) =>
+      mergePlanTodoDoneIndices(prev, planTodoWire.mergeIndices),
+    );
+  }
+  return { evForBlocks: planTodoWire.evForBlocks, typ };
+}
+
+/**
+ * Shared tail of every ``onEvent`` handler: apply the (possibly rewritten) event
+ * to live blocks with deduplication.
+ */
+function applyLiveBlocksTail(
+  evForBlocks: HofStreamEvent,
+  assistantStreamPhaseRef: { current: "model" | "summary" | null },
+  thinkingEpisodeStartedAtRef: { current: number | null },
+  liveBlocksRef: { current: LiveBlock[] },
+  setLiveBlocks: Dispatch<SetStateAction<LiveBlock[]>>,
+): void {
+  setLiveBlocks((prev) => {
+    const et = typeof evForBlocks.type === "string" ? evForBlocks.type : "";
+    const next = applyStreamEventWithDedupe(prev, evForBlocks, {
+      assistantStreamPhase: assistantStreamPhaseRef.current,
+      thinkingEpisodeStartedAtMs: thinkingEpisodeStartedAtRef.current,
+      ...(et === "assistant_done" ? { assistantDoneClockMs: Date.now() } : {}),
+    });
+    liveBlocksRef.current = next;
+    return next;
+  });
 }
 
 export type HofAgentChatProps = {
@@ -409,6 +449,10 @@ export function HofAgentChatProvider({
   const currentAgentRunIdRef = useRef("");
   const assistantStreamPhaseRef = useRef<"model" | "summary" | null>(null);
   const skipNextPersistRef = useRef(true);
+  /** Stores the last terminal stream event (final/error/awaiting_*). Typed as
+   *  ``any`` because terminal events carry dynamic keys (mode, reply, questions, etc.)
+   *  that vary by terminal type; TS 5.9 narrows ``Record<string, unknown>`` to ``never``
+   *  through the truthiness + typeof chains used below. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lastTerminalStreamEventRef = useRef<any>(null);
 
@@ -809,17 +853,12 @@ export function HofAgentChatProvider({
             if (myId !== reqIdRef.current) {
               return;
             }
-            const typ = typeof ev.type === "string" ? ev.type : "";
-            const planTodoWire = applyPlanTodoWireResolution(
+            const { evForBlocks: evfb, typ } = applyPlanTodoWireHead(
               ev,
-              planTextRef.current,
+              planTextRef,
+              setPlanTodoDoneIndices,
             );
-            let evForBlocks: HofStreamEvent = planTodoWire.evForBlocks;
-            if (planTodoWire.mergeIndices.length > 0) {
-              setPlanTodoDoneIndices((prev) =>
-                mergePlanTodoDoneIndices(prev, planTodoWire.mergeIndices),
-              );
-            }
+            let evForBlocks = evfb;
             if (
               typ === "final" ||
               typ === "awaiting_confirmation" ||
@@ -933,28 +972,18 @@ export function HofAgentChatProvider({
                 setApprovalDecisions({});
               }
             }
-            /** Only after clarification resume: stream plan into the card and hide reasoning under it. Initial plan_discover shows thinking/tools in ``liveBlocks`` first. */
             const suppressPlanDiscoverBlocks =
               planDraftStreamingActiveRef.current &&
               effectiveMode !== "plan_execute" &&
               shouldSuppressLiveBlockDuringPlanDiscover(evForBlocks);
             if (!suppressPlanDiscoverBlocks) {
-              setLiveBlocks((prev) => {
-                const et =
-                  typeof evForBlocks.type === "string"
-                    ? evForBlocks.type
-                    : "";
-                const next = applyStreamEventWithDedupe(prev, evForBlocks, {
-                  assistantStreamPhase: assistantStreamPhaseRef.current,
-                  thinkingEpisodeStartedAtMs:
-                    thinkingEpisodeStartedAtRef.current,
-                  ...(et === "assistant_done"
-                    ? { assistantDoneClockMs: Date.now() }
-                    : {}),
-                });
-                liveBlocksRef.current = next;
-                return next;
-              });
+              applyLiveBlocksTail(
+                evForBlocks,
+                assistantStreamPhaseRef,
+                thinkingEpisodeStartedAtRef,
+                liveBlocksRef,
+                setLiveBlocks,
+              );
             }
           },
         });
@@ -1011,18 +1040,17 @@ export function HofAgentChatProvider({
           termMode === "plan" &&
           effectiveMode === "plan"
         ) {
-          const replyRaw = term?.reply;
-          const reply =
-            typeof replyRaw === "string" ? replyRaw.trim() : "";
-          const planRid = newId();
-          setPlanRunId(planRid);
-          const toFlush = stripLastAssistantBlockForPlan(doneBlocks);
-          if (toFlush.length > 0) {
-            flushLiveToThread(structuredClone(toFlush), {
-              presetRunId: planRid,
+          const pf = finalizePlanFromTerminalEvent(
+            term as Record<string, unknown>,
+            doneBlocks,
+          );
+          setPlanRunId(pf.planRunId);
+          if (pf.blocksToFlush.length > 0) {
+            flushLiveToThread(structuredClone(pf.blocksToFlush), {
+              presetRunId: pf.planRunId,
             });
           }
-          setPlanText(preferPlanTaskListBody(reply));
+          setPlanText(pf.planText);
           setPlanPhase("ready");
           setPlanClarificationBarrier(null);
         } else if (
@@ -1032,48 +1060,10 @@ export function HofAgentChatProvider({
           flushLiveToThread(structuredClone(doneBlocks));
         }
         if (termTyp === "awaiting_plan_clarification" && term) {
-          const rid = coerceRunId(term.run_id);
-          const clarificationId = String(term.clarification_id ?? "").trim();
-          const qs = term.questions;
-          const questions: PlanClarificationQuestion[] = [];
-          if (Array.isArray(qs)) {
-            for (const raw of qs) {
-              if (raw && typeof raw === "object") {
-                const o = raw as Record<string, unknown>;
-                const id = String(o.id ?? "").trim();
-                const prompt = String(o.prompt ?? "").trim();
-                const optsRaw = o.options;
-                const options: { id: string; label: string }[] = [];
-                if (Array.isArray(optsRaw)) {
-                  for (const op of optsRaw) {
-                    if (op && typeof op === "object") {
-                      const ox = op as Record<string, unknown>;
-                      const oid = String(ox.id ?? "").trim();
-                      const lab = String(ox.label ?? "").trim();
-                      if (oid && lab) {
-                        options.push({ id: oid, label: lab });
-                      }
-                    }
-                  }
-                }
-                if (id && prompt && options.length >= 2) {
-                  questions.push({
-                    id,
-                    prompt,
-                    options,
-                    allow_multiple: Boolean(o.allow_multiple),
-                  });
-                }
-              }
-            }
-          }
-          if (rid && clarificationId && questions.length > 0) {
+          const barrier = parsePlanClarificationBarrierFromTerm(term);
+          if (barrier) {
             setPlanClarificationSubmittedSummary([]);
-            setPlanClarificationBarrier({
-              runId: rid,
-              clarificationId,
-              questions,
-            });
+            setPlanClarificationBarrier(barrier);
             setPlanPhase("clarifying");
           }
           if (doneBlocks.length > 0) {
@@ -1193,17 +1183,11 @@ export function HofAgentChatProvider({
             if (myId !== reqIdRef.current) {
               return;
             }
-            const typ = typeof ev.type === "string" ? ev.type : "";
-            const planTodoWire = applyPlanTodoWireResolution(
+            const { evForBlocks, typ } = applyPlanTodoWireHead(
               ev,
-              planTextRef.current,
+              planTextRef,
+              setPlanTodoDoneIndices,
             );
-            let evForBlocks: HofStreamEvent = planTodoWire.evForBlocks;
-            if (planTodoWire.mergeIndices.length > 0) {
-              setPlanTodoDoneIndices((prev) =>
-                mergePlanTodoDoneIndices(prev, planTodoWire.mergeIndices),
-              );
-            }
             if (
               typ === "final" ||
               typ === "awaiting_plan_clarification" ||
@@ -1247,20 +1231,13 @@ export function HofAgentChatProvider({
               planDraftStreamingActiveRef.current &&
               shouldSuppressLiveBlockDuringPlanDiscover(evForBlocks);
             if (!suppressPlanResumeBlocks) {
-              setLiveBlocks((prev) => {
-                const et =
-                  typeof evForBlocks.type === "string" ? evForBlocks.type : "";
-                const next = applyStreamEventWithDedupe(prev, evForBlocks, {
-                  assistantStreamPhase: assistantStreamPhaseRef.current,
-                  thinkingEpisodeStartedAtMs:
-                    thinkingEpisodeStartedAtRef.current,
-                  ...(et === "assistant_done"
-                    ? { assistantDoneClockMs: Date.now() }
-                    : {}),
-                });
-                liveBlocksRef.current = next;
-                return next;
-              });
+              applyLiveBlocksTail(
+                evForBlocks,
+                assistantStreamPhaseRef,
+                thinkingEpisodeStartedAtRef,
+                liveBlocksRef,
+                setLiveBlocks,
+              );
             }
           },
         });
@@ -1274,65 +1251,24 @@ export function HofAgentChatProvider({
           term && typeof term.mode === "string" ? String(term.mode) : "";
         const doneBlocks = liveBlocksRef.current;
         if (termTyp === "final" && termMode === "plan" && term) {
-          const replyRaw = term.reply;
-          const reply =
-            typeof replyRaw === "string" ? replyRaw.trim() : "";
-          const planRid = newId();
-          setPlanRunId(planRid);
-          const toFlush = stripLastAssistantBlockForPlan(doneBlocks);
-          if (toFlush.length > 0) {
-            flushLiveToThread(structuredClone(toFlush), {
-              presetRunId: planRid,
+          const pf = finalizePlanFromTerminalEvent(
+            term as Record<string, unknown>,
+            doneBlocks,
+          );
+          setPlanRunId(pf.planRunId);
+          if (pf.blocksToFlush.length > 0) {
+            flushLiveToThread(structuredClone(pf.blocksToFlush), {
+              presetRunId: pf.planRunId,
             });
           }
-          setPlanText(preferPlanTaskListBody(reply));
+          setPlanText(pf.planText);
           setPlanPhase("ready");
           setPlanClarificationBarrier(null);
         } else if (termTyp === "awaiting_plan_clarification" && term) {
-          const rid = coerceRunId(term.run_id);
-          const clarificationId = String(
-            term.clarification_id ?? "",
-          ).trim();
-          const qs = term.questions;
-          const questions: PlanClarificationQuestion[] = [];
-          if (Array.isArray(qs)) {
-            for (const raw of qs) {
-              if (raw && typeof raw === "object") {
-                const o = raw as Record<string, unknown>;
-                const id = String(o.id ?? "").trim();
-                const prompt = String(o.prompt ?? "").trim();
-                const optsRaw = o.options;
-                const options: { id: string; label: string }[] = [];
-                if (Array.isArray(optsRaw)) {
-                  for (const op of optsRaw) {
-                    if (op && typeof op === "object") {
-                      const ox = op as Record<string, unknown>;
-                      const oid = String(ox.id ?? "").trim();
-                      const lab = String(ox.label ?? "").trim();
-                      if (oid && lab) {
-                        options.push({ id: oid, label: lab });
-                      }
-                    }
-                  }
-                }
-                if (id && prompt && options.length >= 2) {
-                  questions.push({
-                    id,
-                    prompt,
-                    options,
-                    allow_multiple: Boolean(o.allow_multiple),
-                  });
-                }
-              }
-            }
-          }
-          if (rid && clarificationId && questions.length > 0) {
+          const barrier = parsePlanClarificationBarrierFromTerm(term);
+          if (barrier) {
             setPlanClarificationSubmittedSummary([]);
-            setPlanClarificationBarrier({
-              runId: rid,
-              clarificationId,
-              questions,
-            });
+            setPlanClarificationBarrier(barrier);
             setPlanPhase("clarifying");
           }
           if (doneBlocks.length > 0) {
@@ -1442,17 +1378,12 @@ export function HofAgentChatProvider({
           if (myId !== reqIdRef.current) {
             return;
           }
-          const rtyp = typeof ev.type === "string" ? ev.type : "";
-          const planTodoWire = applyPlanTodoWireResolution(
+          const { evForBlocks: evfb, typ: rtyp } = applyPlanTodoWireHead(
             ev,
-            planTextRef.current,
+            planTextRef,
+            setPlanTodoDoneIndices,
           );
-          let evForBlocks: HofStreamEvent = planTodoWire.evForBlocks;
-          if (planTodoWire.mergeIndices.length > 0) {
-            setPlanTodoDoneIndices((prev) =>
-              mergePlanTodoDoneIndices(prev, planTodoWire.mergeIndices),
-            );
-          }
+          let evForBlocks = evfb;
           if (
             rtyp === "final" ||
             rtyp === "awaiting_confirmation" ||
@@ -1540,19 +1471,13 @@ export function HofAgentChatProvider({
               setApprovalDecisions({});
             }
           }
-          setLiveBlocks((prev) => {
-            const rt =
-              typeof evForBlocks.type === "string" ? evForBlocks.type : "";
-            const next = applyStreamEventWithDedupe(prev, evForBlocks, {
-              assistantStreamPhase: assistantStreamPhaseRef.current,
-              thinkingEpisodeStartedAtMs: thinkingEpisodeStartedAtRef.current,
-              ...(rt === "assistant_done"
-                ? { assistantDoneClockMs: Date.now() }
-                : {}),
-            });
-            liveBlocksRef.current = next;
-            return next;
-          });
+          applyLiveBlocksTail(
+            evForBlocks,
+            assistantStreamPhaseRef,
+            thinkingEpisodeStartedAtRef,
+            liveBlocksRef,
+            setLiveBlocks,
+          );
         },
       });
       if (myId !== reqIdRef.current) {
@@ -1698,17 +1623,12 @@ export function HofAgentChatProvider({
             if (myId !== reqIdRef.current) {
               return;
             }
-            const rtyp = typeof ev.type === "string" ? ev.type : "";
-            const planTodoWire = applyPlanTodoWireResolution(
+            const { evForBlocks: evfb, typ: rtyp } = applyPlanTodoWireHead(
               ev,
-              planTextRef.current,
+              planTextRef,
+              setPlanTodoDoneIndices,
             );
-            let evForBlocks: HofStreamEvent = planTodoWire.evForBlocks;
-            if (planTodoWire.mergeIndices.length > 0) {
-              setPlanTodoDoneIndices((prev) =>
-                mergePlanTodoDoneIndices(prev, planTodoWire.mergeIndices),
-              );
-            }
+            let evForBlocks = evfb;
             if (
               rtyp === "final" ||
               rtyp === "awaiting_confirmation" ||
@@ -1802,19 +1722,13 @@ export function HofAgentChatProvider({
                 setApprovalDecisions({});
               }
             }
-            setLiveBlocks((prev) => {
-              const rt =
-                typeof evForBlocks.type === "string" ? evForBlocks.type : "";
-              const next = applyStreamEventWithDedupe(prev, evForBlocks, {
-                assistantStreamPhase: assistantStreamPhaseRef.current,
-                thinkingEpisodeStartedAtMs: thinkingEpisodeStartedAtRef.current,
-                ...(rt === "assistant_done"
-                  ? { assistantDoneClockMs: Date.now() }
-                  : {}),
-              });
-              liveBlocksRef.current = next;
-              return next;
-            });
+            applyLiveBlocksTail(
+              evForBlocks,
+              assistantStreamPhaseRef,
+              thinkingEpisodeStartedAtRef,
+              liveBlocksRef,
+              setLiveBlocks,
+            );
           },
         });
         if (myId !== reqIdRef.current) {

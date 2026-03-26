@@ -659,6 +659,51 @@ def _resolve_agent_max_completion_tokens() -> int:
     return 16_384
 
 
+class _ProviderSetupError(Exception):
+    """Raised by :func:`_resolve_provider` when the provider cannot be created."""
+
+    __slots__ = ("detail",)
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
+def _resolve_provider(lm_backend: str, model: str) -> Any:
+    """Instantiate the LLM provider for *lm_backend* and *model*.
+
+    Raises :class:`_ProviderSetupError` with a user-facing message on failure.
+    Callers in generator entrypoints catch this and ``yield`` the error event.
+    """
+    max_tokens = _resolve_agent_max_completion_tokens()
+    if lm_backend == "anthropic":
+        api_key = _resolve_anthropic_api_key()
+        if not api_key:
+            raise _ProviderSetupError(
+                "Missing ANTHROPIC_API_KEY (required when AGENT_LLM_BACKEND=anthropic)"
+            )
+        try:
+            from llm_markdown.providers import AnthropicProvider
+        except ImportError:
+            raise _ProviderSetupError(
+                "Install llm-markdown with the anthropic extra (llm-markdown[anthropic])"
+            )
+        return AnthropicProvider(api_key=api_key, model=model, max_tokens=max_tokens)
+    else:
+        api_key = _resolve_openai_api_key()
+        if not api_key:
+            raise _ProviderSetupError(
+                "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)"
+            )
+        try:
+            from llm_markdown.providers import OpenAIProvider
+        except ImportError:
+            raise _ProviderSetupError(
+                "Install llm-markdown with the openai extra (llm-markdown[openai])"
+            )
+        return OpenAIProvider(api_key=api_key, model=model, max_tokens=max_tokens)
+
+
 def default_normalize_attachments(raw: Any) -> tuple[list[dict[str, str]], str | None]:
     """Accept ``[{object_key, filename?, content_type?}]`` without extra validation."""
     if raw is None:
@@ -706,6 +751,12 @@ def _build_system_prompt(policy: AgentPolicy, *, attachment_note: str) -> str:
     if attachment_note.strip():
         text += "\n\n## User file attachments\n" + attachment_note.strip()
     return text
+
+
+def _build_discover_tools(policy: AgentPolicy) -> tuple[frozenset[str], list[dict[str, Any]]]:
+    """Allowlist and OpenAI tool specs for plan-discover mode (read-only + builtins)."""
+    allowlist = frozenset(policy.allowlist_read | BUILTIN_AGENT_TOOL_NAMES)
+    return allowlist, openai_tool_specs(allowlist)
 
 
 _AGENT_CHAT_PLAN_MODE_SUFFIX = (
@@ -1418,112 +1469,18 @@ def _replace_tool_message_content(
 def _parse_and_validate_plan_clarification_questions(
     arguments_json: str,
 ) -> tuple[list[dict[str, Any]] | None, str | None]:
-    try:
-        parsed = json.loads(arguments_json or "{}")
-    except json.JSONDecodeError as exc:
-        return None, f"invalid JSON: {exc}"
-    if not isinstance(parsed, dict):
-        return None, "arguments must be a JSON object"
-    raw_q = parsed.get("questions")
-    if isinstance(raw_q, str):
-        try:
-            raw_q = json.loads(raw_q)
-        except json.JSONDecodeError:
-            pass
-    if not isinstance(raw_q, list) or len(raw_q) < 1:
-        return None, "questions must be a non-empty array"
-    out: list[dict[str, Any]] = []
-    for i, q in enumerate(raw_q):
-        if not isinstance(q, dict):
-            return None, f"questions[{i}] must be an object"
-        qid = str(q.get("id") or "").strip()
-        prompt = str(q.get("prompt") or "").strip()
-        if not qid or not prompt:
-            return None, f"questions[{i}]: id and prompt are required"
-        opts = q.get("options")
-        if not isinstance(opts, list) or len(opts) < 2:
-            return None, f"questions[{i}]: at least two options required"
-        if len(opts) > 5:
-            return None, f"questions[{i}]: at most 5 options allowed (2-4 concrete + 'other')"
-        norm_opts: list[dict[str, str]] = []
-        seen_o: set[str] = set()
-        has_other = False
-        for j, o in enumerate(opts):
-            if not isinstance(o, dict):
-                return None, f"questions[{i}].options[{j}] must be object"
-            oid = str(o.get("id") or "").strip()
-            label = str(o.get("label") or "").strip()
-            if not oid or not label:
-                return None, f"questions[{i}].options[{j}]: id and label required"
-            if oid in seen_o:
-                return None, f"duplicate option id {oid!r}"
-            seen_o.add(oid)
-            norm_opts.append({"id": oid, "label": label})
-            if "other" in oid.lower():
-                has_other = True
-        if not has_other:
-            norm_opts.append({"id": f"q{i}_other", "label": "Andere / eigene Angabe"})
-        am = q.get("allow_multiple")
-        allow_multiple = bool(am) if am is not None else False
-        out.append(
-            {
-                "id": qid,
-                "prompt": prompt,
-                "options": norm_opts,
-                "allow_multiple": allow_multiple,
-            },
-        )
-    return out, None
+    from hof.agent.plan_types import parse_plan_clarification_questions
+
+    return parse_plan_clarification_questions(arguments_json)
 
 
 def _validate_clarification_answers(
     questions: list[dict[str, Any]],
     answers: list[Any],
 ) -> tuple[dict[str, list[str]] | None, dict[str, str], str | None]:
-    if not isinstance(answers, list):
-        return None, {}, "answers must be a list"
-    qmap = {str(q["id"]): q for q in questions}
-    out: dict[str, list[str]] = {}
-    other_text_by_qid: dict[str, str] = {}
-    for i, a in enumerate(answers):
-        if not isinstance(a, dict):
-            return None, {}, f"answers[{i}] must be object"
-        qid = str(a.get("question_id") or a.get("questionId") or "").strip()
-        sel = a.get("selected_option_ids") or a.get("selectedOptionIds")
-        if not qid or qid not in qmap:
-            return None, {}, f"unknown question_id: {qid!r}"
-        if not isinstance(sel, list):
-            return None, {}, f"selected_option_ids must be array for {qid!r}"
-        oids = [str(x).strip() for x in sel if str(x).strip()]
-        allowed = {o["id"] for o in qmap[qid]["options"]}
-        for oid in oids:
-            if oid not in allowed:
-                return None, {}, f"invalid option id {oid!r} for question {qid!r}"
-        if not qmap[qid]["allow_multiple"] and len(oids) > 1:
-            return None, {}, f"question {qid!r} allows only one option"
-        if len(oids) < 1:
-            return None, {}, f"question {qid!r} requires at least one selected option"
-        raw_other = a.get("other_text") or a.get("otherText")
-        other_t = str(raw_other).strip() if raw_other is not None else ""
-        has_other_option = any("other" in oid.lower() for oid in oids)
-        if has_other_option and not other_t:
-            return (
-                None,
-                {},
-                f"question {qid!r}: other_text is required when an Other option is selected",
-            )
-        if other_t and not has_other_option:
-            return (
-                None,
-                {},
-                f"question {qid!r}: other_text is only allowed when an Other option is selected",
-            )
-        if other_t:
-            other_text_by_qid[qid] = other_t
-        out[qid] = oids
-    if set(out.keys()) != set(qmap.keys()):
-        return None, {}, "each question must be answered exactly once"
-    return out, other_text_by_qid, None
+    from hof.agent.plan_types import validate_plan_clarification_answers
+
+    return validate_plan_clarification_answers(questions, answers)
 
 
 def _clarification_answer_summary_for_model(
@@ -1976,7 +1933,10 @@ def _run_agent_openai_loop(
                                             "done_indices": idxs,
                                         }
                             except (json.JSONDecodeError, TypeError):
-                                pass
+                                logger.warning(
+                                    "plan_todo_update: failed to parse tool output: %s",
+                                    out_json[:200],
+                                )
                 if plan_clarify_halt is not None:
                     store_extras = (
                         plan_resume_final_extras
@@ -2160,48 +2120,11 @@ def _run_agent_chat_stream(
         yield {"type": "error", "detail": str(exc)}
         return
 
-    if lm_backend == "anthropic":
-        api_key = _resolve_anthropic_api_key()
-        if not api_key:
-            yield {
-                "type": "error",
-                "detail": "Missing ANTHROPIC_API_KEY (required when AGENT_LLM_BACKEND=anthropic)",
-            }
-            return
-        try:
-            from llm_markdown.providers import AnthropicProvider
-        except ImportError:
-            yield {
-                "type": "error",
-                "detail": "Install llm-markdown with the anthropic extra (llm-markdown[anthropic])",
-            }
-            return
-        provider = AnthropicProvider(
-            api_key=api_key,
-            model=model,
-            max_tokens=_resolve_agent_max_completion_tokens(),
-        )
-    else:
-        api_key = _resolve_openai_api_key()
-        if not api_key:
-            yield {
-                "type": "error",
-                "detail": "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)",
-            }
-            return
-        try:
-            from llm_markdown.providers import OpenAIProvider
-        except ImportError:
-            yield {
-                "type": "error",
-                "detail": "Install llm-markdown with the openai extra (llm-markdown[openai])",
-            }
-            return
-        provider = OpenAIProvider(
-            api_key=api_key,
-            model=model,
-            max_tokens=_resolve_agent_max_completion_tokens(),
-        )
+    try:
+        provider = _resolve_provider(lm_backend, model)
+    except _ProviderSetupError as exc:
+        yield {"type": "error", "detail": exc.detail}
+        return
 
     run_id = str(uuid.uuid4())
     yield {"type": "run_start", "run_id": run_id, "model": model}
@@ -2219,8 +2142,7 @@ def _run_agent_chat_stream(
         final_extras: dict[str, Any] | None = {"mode": "plan"}
     elif chat_mode == "plan_discover":
         system_content = _AGENT_CHAT_PLAN_DISCOVER_PREFIX + system_content + _AGENT_CHAT_PLAN_DISCOVER_SUFFIX
-        discover_allowlist = frozenset(policy.allowlist_read | BUILTIN_AGENT_TOOL_NAMES)
-        loop_tools = openai_tool_specs(discover_allowlist)
+        discover_allowlist, loop_tools = _build_discover_tools(policy)
         final_extras = {"mode": "plan"}
         plan_resume_final_extras = {"mode": "plan"}
     elif chat_mode == "plan_execute":
@@ -2349,48 +2271,11 @@ def _run_agent_resume_stream(
     allowlist = policy.effective_allowlist()
     tools = openai_tool_specs(allowlist)
 
-    if lm_backend == "anthropic":
-        api_key = _resolve_anthropic_api_key()
-        if not api_key:
-            yield {
-                "type": "error",
-                "detail": "Missing ANTHROPIC_API_KEY (required to resume this run)",
-            }
-            return
-        try:
-            from llm_markdown.providers import AnthropicProvider
-        except ImportError:
-            yield {
-                "type": "error",
-                "detail": "Install llm-markdown with the anthropic extra (llm-markdown[anthropic])",
-            }
-            return
-        provider = AnthropicProvider(
-            api_key=api_key,
-            model=model,
-            max_tokens=_resolve_agent_max_completion_tokens(),
-        )
-    else:
-        api_key = _resolve_openai_api_key()
-        if not api_key:
-            yield {
-                "type": "error",
-                "detail": "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)",
-            }
-            return
-        try:
-            from llm_markdown.providers import OpenAIProvider
-        except ImportError:
-            yield {
-                "type": "error",
-                "detail": "Install llm-markdown with the openai extra (llm-markdown[openai])",
-            }
-            return
-        provider = OpenAIProvider(
-            api_key=api_key,
-            model=model,
-            max_tokens=_resolve_agent_max_completion_tokens(),
-        )
+    try:
+        provider = _resolve_provider(lm_backend, model)
+    except _ProviderSetupError as exc:
+        yield {"type": "error", "detail": exc.detail}
+        return
 
     by_id = {r["pending_id"]: r["confirm"] for r in res_norm}
     n_confirm = sum(1 for c in by_id.values() if c)
@@ -2696,51 +2581,13 @@ def _run_agent_resume_plan_clarification_stream(
     else:
         plan_resume_final_extras = {"mode": "plan"}
 
-    discover_allowlist = frozenset(policy.allowlist_read | BUILTIN_AGENT_TOOL_NAMES)
-    tools = openai_tool_specs(discover_allowlist)
+    discover_allowlist, tools = _build_discover_tools(policy)
 
-    if lm_backend == "anthropic":
-        api_key = _resolve_anthropic_api_key()
-        if not api_key:
-            yield {
-                "type": "error",
-                "detail": "Missing ANTHROPIC_API_KEY (required to resume this run)",
-            }
-            return
-        try:
-            from llm_markdown.providers import AnthropicProvider
-        except ImportError:
-            yield {
-                "type": "error",
-                "detail": "Install llm-markdown with the anthropic extra (llm-markdown[anthropic])",
-            }
-            return
-        provider = AnthropicProvider(
-            api_key=api_key,
-            model=model,
-            max_tokens=_resolve_agent_max_completion_tokens(),
-        )
-    else:
-        api_key = _resolve_openai_api_key()
-        if not api_key:
-            yield {
-                "type": "error",
-                "detail": "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)",
-            }
-            return
-        try:
-            from llm_markdown.providers import OpenAIProvider
-        except ImportError:
-            yield {
-                "type": "error",
-                "detail": "Install llm-markdown with the openai extra (llm-markdown[openai])",
-            }
-            return
-        provider = OpenAIProvider(
-            api_key=api_key,
-            model=model,
-            max_tokens=_resolve_agent_max_completion_tokens(),
-        )
+    try:
+        provider = _resolve_provider(lm_backend, model)
+    except _ProviderSetupError as exc:
+        yield {"type": "error", "detail": exc.detail}
+        return
 
     summary = _clarification_answer_summary_for_model(
         qnorm, sel_map, other_text_map
@@ -2945,48 +2792,11 @@ def _run_agent_resume_inbox_stream(
     allowlist = policy.effective_allowlist()
     tools = openai_tool_specs(allowlist)
 
-    if lm_backend == "anthropic":
-        api_key = _resolve_anthropic_api_key()
-        if not api_key:
-            yield {
-                "type": "error",
-                "detail": "Missing ANTHROPIC_API_KEY (required to resume this run)",
-            }
-            return
-        try:
-            from llm_markdown.providers import AnthropicProvider
-        except ImportError:
-            yield {
-                "type": "error",
-                "detail": "Install llm-markdown with the anthropic extra (llm-markdown[anthropic])",
-            }
-            return
-        provider = AnthropicProvider(
-            api_key=api_key,
-            model=model,
-            max_tokens=_resolve_agent_max_completion_tokens(),
-        )
-    else:
-        api_key = _resolve_openai_api_key()
-        if not api_key:
-            yield {
-                "type": "error",
-                "detail": "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)",
-            }
-            return
-        try:
-            from llm_markdown.providers import OpenAIProvider
-        except ImportError:
-            yield {
-                "type": "error",
-                "detail": "Install llm-markdown with the openai extra (llm-markdown[openai])",
-            }
-            return
-        provider = OpenAIProvider(
-            api_key=api_key,
-            model=model,
-            max_tokens=_resolve_agent_max_completion_tokens(),
-        )
+    try:
+        provider = _resolve_provider(lm_backend, model)
+    except _ProviderSetupError as exc:
+        yield {"type": "error", "detail": exc.detail}
+        return
 
     combined = "Inbox review completed:\n" + "\n".join(summary_lines)
 

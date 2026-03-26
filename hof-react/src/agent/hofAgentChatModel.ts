@@ -1,5 +1,11 @@
 import type { HofStreamEvent } from "../hooks/streamHofFunction";
 import type { AssistantStreamSegment } from "./assistantStreamSegments";
+import type { PlanClarificationQuestion } from "./conversationTypes";
+import { preferPlanTaskListBody } from "./planMarkdownTodos";
+import {
+  PLAN_TODO_UPDATE_EVENT_TYPE,
+  type PlanTodoUpdateEvent,
+} from "./planTodoStream";
 import {
   appendAssistantStreamSegmentChunk,
   mergeAdjacentContentSegments,
@@ -519,6 +525,62 @@ export function coerceRunId(value: unknown): string {
     return String(value);
   }
   return "";
+}
+
+/**
+ * Parse a ``awaiting_plan_clarification`` terminal stream event into a typed barrier,
+ * or return ``null`` if the event is malformed.
+ */
+export function parsePlanClarificationBarrierFromTerm(
+  term: unknown,
+): {
+  runId: string;
+  clarificationId: string;
+  questions: PlanClarificationQuestion[];
+} | null {
+  if (!term || typeof term !== "object") {
+    return null;
+  }
+  const t = term as Record<string, unknown>;
+  const runId = coerceRunId(t.run_id);
+  const clarificationId = String(t.clarification_id ?? "").trim();
+  const qs = t.questions;
+  const questions: PlanClarificationQuestion[] = [];
+  if (Array.isArray(qs)) {
+    for (const raw of qs) {
+      if (raw && typeof raw === "object") {
+        const o = raw as Record<string, unknown>;
+        const id = String(o.id ?? "").trim();
+        const prompt = String(o.prompt ?? "").trim();
+        const optsRaw = o.options;
+        const options: { id: string; label: string }[] = [];
+        if (Array.isArray(optsRaw)) {
+          for (const op of optsRaw) {
+            if (op && typeof op === "object") {
+              const ox = op as Record<string, unknown>;
+              const oid = String(ox.id ?? "").trim();
+              const lab = String(ox.label ?? "").trim();
+              if (oid && lab) {
+                options.push({ id: oid, label: lab });
+              }
+            }
+          }
+        }
+        if (id && prompt && options.length >= 2) {
+          questions.push({
+            id,
+            prompt,
+            options,
+            allow_multiple: Boolean(o.allow_multiple),
+          });
+        }
+      }
+    }
+  }
+  if (!runId || !clarificationId || questions.length === 0) {
+    return null;
+  }
+  return { runId, clarificationId, questions };
 }
 
 export function toolResultAwaitingUserConfirmation(
@@ -1193,8 +1255,8 @@ export function applyStreamEvent(
       },
     ];
   }
-  if (t === "plan_todo_update") {
-    const di = (ev as { done_indices?: unknown }).done_indices;
+  if (t === PLAN_TODO_UPDATE_EVENT_TYPE) {
+    const di = (ev as PlanTodoUpdateEvent).done_indices;
     const raw = Array.isArray(di)
       ? di
           .map((x) => Number(x))
@@ -1331,6 +1393,29 @@ export function stripLastAssistantBlockForPlan(blocks: LiveBlock[]): LiveBlock[]
     return blocks.slice(0, -1);
   }
   return blocks;
+}
+
+/**
+ * Extract plan-ready data from a ``final`` terminal event with ``mode: "plan"``.
+ * Returns the generated plan run ID, parsed plan text, and blocks to flush to the thread.
+ */
+export function finalizePlanFromTerminalEvent(
+  term: Record<string, unknown>,
+  doneBlocks: LiveBlock[],
+): {
+  planRunId: string;
+  planText: string;
+  blocksToFlush: LiveBlock[];
+} {
+  const replyRaw = term.reply;
+  const reply = typeof replyRaw === "string" ? replyRaw.trim() : "";
+  const planRunId = newId();
+  const blocksToFlush = stripLastAssistantBlockForPlan(doneBlocks);
+  return {
+    planRunId,
+    planText: preferPlanTaskListBody(reply),
+    blocksToFlush,
+  };
 }
 
 export function isEphemeralAssistantShell(b: LiveBlock): boolean {

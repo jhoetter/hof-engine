@@ -39,6 +39,8 @@ class AgentConversationPlanV1(BaseModel):
         default=None,
         alias="clarificationBarrier",
     )
+    """Typed at runtime via :class:`~hof.agent.plan_types.PlanClarificationBarrierV1`;
+    kept as ``dict`` here for backwards-compatible persistence (extra fields allowed)."""
     plan_todo_done_indices: list[int] = Field(
         default_factory=list,
         alias="planTodoDoneIndices",

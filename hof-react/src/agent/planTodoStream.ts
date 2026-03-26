@@ -17,6 +17,11 @@ import {
 
 export const PLAN_TODO_UPDATE_EVENT_TYPE = "plan_todo_update" as const;
 
+export type PlanTodoUpdateEvent = HofStreamEvent & {
+  type: typeof PLAN_TODO_UPDATE_EVENT_TYPE;
+  done_indices: unknown[];
+};
+
 export type PlanTodoWireResolution = {
   /** Pass to `applyStreamEventWithDedupe` (normalized `done_indices` when applicable). */
   event: HofStreamEvent;
@@ -40,7 +45,7 @@ export function resolvePlanTodoUpdateWireEvent(
     return null;
   }
   const n = parseStructuredPlan(planMarkdown.trim()).todos.length;
-  const di = (ev as { done_indices?: unknown }).done_indices;
+  const di = (ev as PlanTodoUpdateEvent).done_indices;
   if (!Array.isArray(di) || n <= 0) {
     return {
       event: ev,

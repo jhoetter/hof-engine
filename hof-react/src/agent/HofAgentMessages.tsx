@@ -28,6 +28,35 @@ export type HofAgentMessagesProps = {
   emptyStateFooter?: ReactNode;
 };
 
+/** Where to insert plan / clarification chrome: anchored to the discovery run (or run before ``[plan:execute]``). */
+function findPlanRunAnchorIndex(
+  thread: readonly ThreadItem[],
+  planRunId: string | null,
+): number {
+  if (planRunId != null) {
+    const idx = thread.findIndex(
+      (it) => it.kind === "run" && it.id === planRunId,
+    );
+    if (idx >= 0) {
+      return idx;
+    }
+  }
+  const executeMarkerIdx = thread.findIndex(
+    (it) =>
+      it.kind === "user" &&
+      it.content.trim() === PLAN_EXECUTE_USER_MARKER,
+  );
+  if (executeMarkerIdx > 0) {
+    for (let i = executeMarkerIdx - 1; i >= 0; i--) {
+      const it = thread[i];
+      if (it?.kind === "run") {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
 function HofAgentAnswerSummaryCard({
   rows,
 }: {
@@ -36,7 +65,12 @@ function HofAgentAnswerSummaryCard({
   return (
     <div className="pl-1">
       <div className="rounded-lg border border-border bg-surface p-3 shadow-sm">
-        <p className="mb-2 text-[11px] font-medium text-secondary">Answer</p>
+        <p className="mb-2 text-[11px] font-medium text-secondary">
+          Your choices
+        </p>
+        <p className="mb-3 text-[11px] leading-snug text-tertiary">
+          What you selected in the questionnaire before the plan was drafted.
+        </p>
         <ul className="space-y-3">
           {rows.map((row, i) => (
             <li key={i}>
@@ -78,6 +112,7 @@ export function HofAgentMessages({
     planTodoDoneIndices,
     executePlan,
     planRunId,
+    agentMode,
   } = useHofAgentChat();
 
   const planCardPhase:
@@ -111,12 +146,7 @@ export function HofAgentMessages({
       </div>
     ) : null;
 
-  const planRunAnchorIdx =
-    planRunId != null
-      ? thread.findIndex(
-          (it) => it.kind === "run" && it.id === planRunId,
-        )
-      : -1;
+  const planRunAnchorIdx = findPlanRunAnchorIndex(thread, planRunId);
   const hasPlanRunAnchor = planRunAnchorIdx >= 0;
 
   const renderThreadItems = (items: readonly ThreadItem[]) =>
@@ -125,13 +155,7 @@ export function HofAgentMessages({
         const hasAtt = Boolean(item.attachments?.length);
         const displayBody = userMessageDisplayText(item.content, hasAtt);
         if (item.content.trim() === PLAN_EXECUTE_USER_MARKER) {
-          return (
-            <div key={item.id} className="flex justify-center py-1">
-              <span className="rounded-full border border-border bg-surface px-3 py-1 text-[11px] font-medium text-secondary">
-                Plan execution started
-              </span>
-            </div>
-          );
+          return null;
         }
         return (
           <div key={item.id} className="flex justify-end">
@@ -217,7 +241,7 @@ export function HofAgentMessages({
       {showAnswerSummary ? answerSummaryEl : null}
       {planPhase === "clarifying" && planClarificationBarrier
         ? clarificationCardEl
-        : null}
+        : planCardEl}
     </>
   ) : null;
 
@@ -225,25 +249,34 @@ export function HofAgentMessages({
     <>
       {hasPlanRunAnchor ? (
         <>
-          {renderThreadItems(thread.slice(0, planRunAnchorIdx))}
+          {renderThreadItems(thread.slice(0, planRunAnchorIdx + 1))}
           {inlineChromeEl}
-          {renderThreadItems(thread.slice(planRunAnchorIdx))}
+          {renderThreadItems(thread.slice(planRunAnchorIdx + 1))}
         </>
       ) : (
         <>
           {renderThreadItems(thread)}
           {answerSummaryEl}
+          {planCardEl}
+          {planPhase === "clarifying" && planClarificationBarrier
+            ? clarificationCardEl
+            : null}
         </>
       )}
-      {planCardEl}
       {liveBlocksEl}
-      {planPhase === "clarifying" && planClarificationBarrier && !hasPlanRunAnchor ? (
-        clarificationCardEl
-      ) : null}
       {liveBlocks.length === 0 && busy ? (
         <div className="pl-1">
           <AgentEarlyThinkingIndicator
-            label={planPhase === "generating" ? "Preparing plan" : undefined}
+            label={
+              planPhase === "generating"
+                ? "Preparing plan"
+                : agentMode === "plan" &&
+                    planPhase == null &&
+                    !planClarificationBarrier &&
+                    thread.length <= 1
+                  ? "Generating questions"
+                  : undefined
+            }
           />
         </div>
       ) : null}

@@ -149,6 +149,15 @@ export type LiveBlock =
       retryable?: boolean;
       technicalDetail?: string;
       httpStatus?: number;
+    }
+  /**
+   * One or more plan checklist items completed during ``plan_execute`` (from ``plan_todo_update``).
+   * ``done_indices`` is the delta for this row (new indices vs prior ``plan_step_progress`` blocks).
+   */
+  | {
+      kind: "plan_step_progress";
+      id: string;
+      done_indices: number[];
     };
 
 export type ThreadItem =
@@ -193,6 +202,36 @@ export const CHAT_USER_BUBBLE_CLASS =
 
 /** Thread marker when the user runs an approved plan (compact UI; plan body is sent as `plan_text`). */
 export const PLAN_EXECUTE_USER_MARKER = "[plan:execute]";
+
+/**
+ * While drafting a plan **after clarification** (``agent_resume_plan_clarification``), tokens are
+ * routed into the plan card — suppress these wire events for ``liveBlocks`` so reasoning does not
+ * render under the plan. Initial ``plan_discover`` does not use this; thinking and tools stay in
+ * ``liveBlocks``. Tool rows and other structured events still apply when suppression is on.
+ */
+export function shouldSuppressLiveBlockDuringPlanDiscover(
+  ev: HofStreamEvent,
+): boolean {
+  const typ = typeof ev.type === "string" ? ev.type : "";
+  if (
+    typ === "assistant_delta" ||
+    typ === "reasoning_delta" ||
+    typ === "segment_start"
+  ) {
+    return true;
+  }
+  if (typ === "assistant_done") {
+    return true;
+  }
+  if (typ === "phase") {
+    const ph =
+      typeof (ev as { phase?: unknown }).phase === "string"
+        ? String((ev as { phase: string }).phase)
+        : "";
+    return ph === "model" || ph === "inbox_review_summary";
+  }
+  return false;
+}
 
 /** Same horizontal rail as thinking, tool cards, and assistant text (avoids mixed widths). */
 export const AGENT_CHAT_COLUMN_CLASS = "w-full max-w-[min(100%,42rem)]";
@@ -710,6 +749,30 @@ function dropTrailingEmptyStreamingAssistant(blocks: LiveBlock[]): LiveBlock[] {
 }
 
 /** Model moved on to tools / approval — prose is complete even if `assistant_done` is not here yet. */
+function unionPlanProgressDoneIndices(blocks: LiveBlock[]): Set<number> {
+  const s = new Set<number>();
+  for (const b of blocks) {
+    if (b.kind === "plan_step_progress") {
+      for (const x of b.done_indices) {
+        s.add(x);
+      }
+    }
+  }
+  return s;
+}
+
+/** New indices in ``incoming`` vs prior ``plan_step_progress`` rows (handles cumulative or delta wire payloads). */
+function deltaPlanTodoIndicesForBlock(
+  prev: LiveBlock[],
+  incoming: number[],
+): number[] {
+  const seen = unionPlanProgressDoneIndices(prev);
+  return incoming
+    .map((x) => Number(x))
+    .filter((n) => Number.isFinite(n) && n >= 0 && !seen.has(n))
+    .sort((a, b) => a - b);
+}
+
 function finalizeStreamingAssistantBeforeStructuredStep(
   blocks: LiveBlock[],
 ): LiveBlock[] {
@@ -1127,6 +1190,29 @@ export function applyStreamEvent(
         id: newId(),
         run_id: parsed.runId,
         watches: parsed.watches,
+      },
+    ];
+  }
+  if (t === "plan_todo_update") {
+    const di = (ev as { done_indices?: unknown }).done_indices;
+    const raw = Array.isArray(di)
+      ? di
+          .map((x) => Number(x))
+          .filter((n) => Number.isFinite(n) && n >= 0)
+      : [];
+    const delta = deltaPlanTodoIndicesForBlock(prev, raw);
+    if (delta.length === 0) {
+      return prev;
+    }
+    const ready = finalizeStreamingAssistantBeforeStructuredStep(
+      withoutThinkingSkeleton(prev),
+    );
+    return [
+      ...ready,
+      {
+        kind: "plan_step_progress",
+        id: newId(),
+        done_indices: delta,
       },
     ];
   }

@@ -44,6 +44,7 @@ import {
   newId,
   normalizeAgentCliDisplayLine,
   PLAN_EXECUTE_USER_MARKER,
+  shouldSuppressLiveBlockDuringPlanDiscover,
   stripLastAssistantBlockForPlan,
   toolResultAwaitingUserConfirmation,
 } from "./hofAgentChatModel";
@@ -761,13 +762,10 @@ export function HofAgentChatProvider({
       liveBlocksRef.current = [];
       setLiveBlocks([]);
       currentAgentRunIdRef.current = "";
+      planDraftStreamingActiveRef.current = false;
       if (effectiveMode === "plan") {
-        planDraftStreamingActiveRef.current = true;
         planDraftBufferRef.current = "";
         setPlanText("");
-        setPlanPhase("generating");
-      } else {
-        planDraftStreamingActiveRef.current = false;
       }
       const msgs = threadToApiMessages(items);
       const attachments = collectThreadAttachments(items);
@@ -845,6 +843,7 @@ export function HofAgentChatProvider({
             }
             if (
               planDraftStreamingActiveRef.current &&
+              effectiveMode !== "plan_execute" &&
               typ === "assistant_delta"
             ) {
               const chunk =
@@ -931,12 +930,12 @@ export function HofAgentChatProvider({
                 setApprovalDecisions({});
               }
             }
-            if (
-              !(
-                planDraftStreamingActiveRef.current &&
-                typ === "assistant_delta"
-              )
-            ) {
+            /** Only after clarification resume: stream plan into the card and hide reasoning under it. Initial plan_discover shows thinking/tools in ``liveBlocks`` first. */
+            const suppressPlanDiscoverBlocks =
+              planDraftStreamingActiveRef.current &&
+              effectiveMode !== "plan_execute" &&
+              shouldSuppressLiveBlockDuringPlanDiscover(evForBlocks);
+            if (!suppressPlanDiscoverBlocks) {
               setLiveBlocks((prev) => {
                 const et =
                   typeof evForBlocks.type === "string"
@@ -1023,7 +1022,10 @@ export function HofAgentChatProvider({
           setPlanText(preferPlanTaskListBody(reply));
           setPlanPhase("ready");
           setPlanClarificationBarrier(null);
-        } else if (doneBlocks.length > 0) {
+        } else if (
+          doneBlocks.length > 0 &&
+          termTyp !== "awaiting_plan_clarification"
+        ) {
           flushLiveToThread(structuredClone(doneBlocks));
         }
         if (termTyp === "awaiting_plan_clarification" && term) {
@@ -1077,9 +1079,9 @@ export function HofAgentChatProvider({
         }
         liveBlocksRef.current = [];
         setLiveBlocks([]);
-        if (effectiveMode === "plan") {
+        if (effectiveMode === "plan" && termTyp === "error") {
           setPlanPhase((prev) => {
-            if (prev === "generating" && termTyp === "error") {
+            if (prev === "generating" || prev === null) {
               return null;
             }
             return prev;
@@ -1243,12 +1245,10 @@ export function HofAgentChatProvider({
                 setPlanText(planDraftBufferRef.current);
               }
             }
-            if (
-              !(
-                planDraftStreamingActiveRef.current &&
-                typ === "assistant_delta"
-              )
-            ) {
+            const suppressPlanResumeBlocks =
+              planDraftStreamingActiveRef.current &&
+              shouldSuppressLiveBlockDuringPlanDiscover(ev);
+            if (!suppressPlanResumeBlocks) {
               setLiveBlocks((prev) => {
                 const et =
                   typeof ev.type === "string" ? ev.type : "";

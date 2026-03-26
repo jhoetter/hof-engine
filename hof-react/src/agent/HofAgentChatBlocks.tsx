@@ -14,6 +14,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type Dispatch,
@@ -59,6 +60,7 @@ import {
   formatDurationMs,
   useThinkingEpisodeElapsed,
 } from "./thinkingDuration";
+import { parseStructuredPlan } from "./planMarkdownTodos";
 
 function formatToolJsonForDialog(raw: string): string {
   const t = raw.trim();
@@ -1392,14 +1394,10 @@ function AssistantSegmentedBody({
       children.push(
         <div
           key={`seg-c-${i}`}
-          className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center gap-1.5 py-0.5`}
+          className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center py-0.5`}
           aria-busy="true"
           aria-label={emptyLabel || "Assistant is drafting"}
         >
-          <span
-            className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
-            aria-hidden
-          />
           <span className="inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
         </div>,
       );
@@ -1417,6 +1415,43 @@ function AssistantSegmentedBody({
 
   return (
     <div className={`${AGENT_CHAT_COLUMN_CLASS} space-y-3`}>{children}</div>
+  );
+}
+
+/** Inline plan checklist completion during execution — one compact row (tool-card style). */
+function PlanStepProgressRow({
+  block,
+}: {
+  block: Extract<LiveBlock, { kind: "plan_step_progress" }>;
+}) {
+  const { planText } = useHofAgentChat();
+  const labels = useMemo(() => {
+    const parsed = parseStructuredPlan(planText);
+    return block.done_indices.map((idx) => {
+      const t = parsed.todos.find((x) => x.index === idx);
+      return t?.label.trim() ?? `Step ${idx + 1}`;
+    });
+  }, [planText, block.done_indices]);
+  if (block.done_indices.length === 0) {
+    return null;
+  }
+  return (
+    <div className={`${AGENT_CHAT_COLUMN_CLASS} min-w-0 pl-1`}>
+      <div
+        className="flex min-w-0 items-center gap-2.5 rounded-lg border border-border bg-surface/40 px-3 py-2 text-[12px] leading-snug"
+        role="status"
+        aria-live="polite"
+      >
+        <CheckCircle2
+          className="size-4 shrink-0 text-[var(--color-success)]"
+          strokeWidth={2}
+          aria-hidden
+        />
+        <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+          {labels.join(" · ")}
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -1438,6 +1473,9 @@ export function LiveBlockView({
   }
   if (b.kind === "continuation_marker") {
     return null;
+  }
+  if (b.kind === "plan_step_progress") {
+    return <PlanStepProgressRow block={b} />;
   }
   if (b.kind === "phase") {
     if (b.phase === "summary") {
@@ -1495,14 +1533,10 @@ export function LiveBlockView({
           if (!hasStreamText) {
             return (
               <div
-                className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center gap-1.5 py-0.5`}
+                className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center py-0.5`}
                 aria-busy="true"
                 aria-label="Assistant is drafting"
               >
-                <span
-                  className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
-                  aria-hidden
-                />
                 <span className="inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
               </div>
             );

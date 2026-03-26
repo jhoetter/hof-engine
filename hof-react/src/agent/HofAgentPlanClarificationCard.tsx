@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import {
+  useCallback,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+  type ReactElement,
+} from "react";
 import type { PlanClarificationQuestion } from "./conversationTypes";
 
 function optionIdLooksOther(optionId: string): boolean {
@@ -33,7 +39,7 @@ export function HofAgentPlanClarificationCard({
   busy,
   onSubmit,
   onSkip,
-}: HofAgentPlanClarificationCardProps) {
+}: HofAgentPlanClarificationCardProps): ReactElement | null {
   const initial = useMemo(() => {
     const m = new Map<string, Set<string>>();
     for (const q of questions) {
@@ -72,15 +78,20 @@ export function HofAgentPlanClarificationCard({
     [],
   );
 
+  const totalPages = Math.max(1, questions.length);
+  const safePage = Math.min(page, Math.max(0, questions.length - 1));
+  const q = questions[safePage];
+  const showPager = questions.length > 1;
+
   const allAnswered = useMemo(() => {
-    for (const q of questions) {
-      const s = selected.get(q.id);
+    for (const qu of questions) {
+      const s = selected.get(qu.id);
       if (!s || s.size < 1) {
         return false;
       }
       const hasOtherSelected = [...s].some((oid) => optionIdLooksOther(oid));
       if (hasOtherSelected) {
-        const t = (otherTexts[q.id] ?? "").trim();
+        const t = (otherTexts[qu.id] ?? "").trim();
         if (!t) {
           return false;
         }
@@ -89,16 +100,34 @@ export function HofAgentPlanClarificationCard({
     return questions.length > 0;
   }, [questions, selected, otherTexts]);
 
+  const currentQuestionAnswered = useMemo(() => {
+    if (!q) {
+      return false;
+    }
+    const s = selected.get(q.id);
+    if (!s || s.size < 1) {
+      return false;
+    }
+    const hasOtherSelected = [...s].some((oid) => optionIdLooksOther(oid));
+    if (hasOtherSelected) {
+      const t = (otherTexts[q.id] ?? "").trim();
+      if (!t) {
+        return false;
+      }
+    }
+    return true;
+  }, [q, selected, otherTexts]);
+
   const handleSubmit = () => {
     if (!allAnswered || busy) {
       return;
     }
-    const answers: PlanClarificationAnswerWire[] = questions.map((q) => {
-      const sel = Array.from(selected.get(q.id) ?? []);
+    const answers: PlanClarificationAnswerWire[] = questions.map((qu) => {
+      const sel = Array.from(selected.get(qu.id) ?? []);
       const hasOtherSelected = sel.some((oid) => optionIdLooksOther(oid));
-      const ot = (otherTexts[q.id] ?? "").trim();
+      const ot = (otherTexts[qu.id] ?? "").trim();
       const base: PlanClarificationAnswerWire = {
-        question_id: q.id,
+        question_id: qu.id,
         selected_option_ids: sel,
       };
       if (hasOtherSelected && ot) {
@@ -109,10 +138,42 @@ export function HofAgentPlanClarificationCard({
     onSubmit(answers);
   };
 
-  const totalPages = Math.max(1, questions.length);
-  const safePage = Math.min(page, questions.length - 1);
-  const q = questions[safePage];
-  const showPager = questions.length > 1;
+  const onContinue = () => {
+    if (busy) {
+      return;
+    }
+    if (safePage < questions.length - 1) {
+      if (!currentQuestionAnswered) {
+        return;
+      }
+      setPage((p) => Math.min(questions.length - 1, p + 1));
+      return;
+    }
+    handleSubmit();
+  };
+
+  const continueDisabled =
+    busy ||
+    (safePage < questions.length - 1
+      ? !currentQuestionAnswered
+      : !allAnswered);
+
+  const continueLabel =
+    safePage >= questions.length - 1 ? "Finish" : "Continue";
+
+  const onFieldsetKeyDown = (e: KeyboardEvent<HTMLFieldSetElement>) => {
+    if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey) {
+      return;
+    }
+    const t = e.target as HTMLElement;
+    if (t.tagName === "TEXTAREA") {
+      return;
+    }
+    e.preventDefault();
+    if (!continueDisabled) {
+      onContinue();
+    }
+  };
 
   if (!q) {
     return null;
@@ -139,7 +200,10 @@ export function HofAgentPlanClarificationCard({
           <span className="text-[11px] text-tertiary">1 of 1</span>
         )}
       </div>
-      <fieldset className="space-y-3 border-0 p-0">
+      <fieldset
+        className="space-y-3 border-0 p-0"
+        onKeyDown={onFieldsetKeyDown}
+      >
         <legend className="mb-2 text-sm font-medium text-foreground">
           {questions.length > 1 ? `${safePage + 1}. ` : ""}
           {q.prompt}
@@ -203,49 +267,41 @@ export function HofAgentPlanClarificationCard({
           </div>
         ) : null}
       </fieldset>
-      {showPager ? (
-        <div className="mt-3 flex justify-between gap-2">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+        {showPager ? (
           <button
             type="button"
             disabled={busy || safePage <= 0}
             onClick={() => setPage((p) => Math.max(0, p - 1))}
-            className="rounded-md border border-border px-2 py-1 text-[12px] text-secondary disabled:opacity-40"
+            className="rounded-md border border-border px-3 py-1.5 text-[12px] text-secondary disabled:opacity-40"
           >
-            Previous
+            Back
           </button>
-          <button
-            type="button"
-            disabled={busy || safePage >= questions.length - 1}
-            onClick={() =>
-              setPage((p) => Math.min(questions.length - 1, p + 1))
-            }
-            className="rounded-md border border-border px-2 py-1 text-[12px] text-secondary disabled:opacity-40"
-          >
-            Next
-          </button>
-        </div>
-      ) : null}
-      <div className="mt-4 flex items-center justify-between gap-2 border-t border-border pt-3">
-        {onSkip ? (
-          <button
-            type="button"
-            onClick={onSkip}
-            disabled={busy}
-            className="rounded-md px-2 py-1.5 text-[13px] text-secondary hover:text-foreground disabled:opacity-40"
-          >
-            Skip
-          </button>
+        ) : onSkip ? (
+          <span />
         ) : (
           <span />
         )}
-        <button
-          type="button"
-          onClick={handleSubmit}
-          disabled={busy || !allAnswered}
-          className="rounded-md bg-foreground px-4 py-1.5 text-[13px] font-medium text-background transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Continue
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {onSkip ? (
+            <button
+              type="button"
+              onClick={onSkip}
+              disabled={busy}
+              className="rounded-md px-2 py-1.5 text-[13px] text-secondary hover:text-foreground disabled:opacity-40"
+            >
+              Skip
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onContinue}
+            disabled={continueDisabled}
+            className="rounded-md bg-foreground px-4 py-1.5 text-[13px] font-medium text-background transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {continueLabel}
+          </button>
+        </div>
       </div>
     </div>
   );

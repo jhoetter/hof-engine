@@ -112,7 +112,7 @@ export function HofAgentMessages({
     planTodoDoneIndices,
     executePlan,
     planRunId,
-    agentMode,
+    streamingReasoningLabel,
   } = useHofAgentChat();
 
   const planCardPhase:
@@ -267,16 +267,7 @@ export function HofAgentMessages({
       {liveBlocks.length === 0 && busy ? (
         <div className="pl-1">
           <AgentEarlyThinkingIndicator
-            label={
-              planPhase === "generating"
-                ? "Preparing plan"
-                : agentMode === "plan" &&
-                    planPhase == null &&
-                    !planClarificationBarrier &&
-                    thread.length <= 1
-                  ? "Generating questions"
-                  : undefined
-            }
+            label={streamingReasoningLabel ?? undefined}
           />
         </div>
       ) : null}

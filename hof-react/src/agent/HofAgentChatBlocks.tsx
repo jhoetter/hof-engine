@@ -887,7 +887,8 @@ function ReasoningStreamPeek({
     left: number;
     width: number;
   } | null>(null);
-  const { thinkingEpisodeStartedAtMs } = useHofAgentChat();
+  const { thinkingEpisodeStartedAtMs, streamingReasoningLabel } =
+    useHofAgentChat();
   const { liveFormatted, settledFormatted } = useThinkingEpisodeElapsed(
     streaming,
     thinkingEpisodeStartedAtMs,
@@ -1039,13 +1040,15 @@ function ReasoningStreamPeek({
     ? REASONING_THINKING_SHIMMER_LABEL_CLASS
     : "text-[11px] font-medium text-tertiary";
 
+  const streamingThinkingWord = streamingReasoningLabel ?? "Thinking";
+
   const bodyClass =
     "font-sans text-[12px] leading-relaxed break-words whitespace-pre-wrap text-secondary";
 
   const popoverReasoningAria = streaming
     ? liveFormatted != null
-      ? `Reasoning in progress, ${liveFormatted}`
-      : "Reasoning in progress"
+      ? `${streamingThinkingWord} in progress, ${liveFormatted}`
+      : `${streamingThinkingWord} in progress`
     : effectiveSettled != null
       ? `Completed reasoning after ${effectiveSettled}`
       : "Completed reasoning";
@@ -1085,10 +1088,12 @@ function ReasoningStreamPeek({
             <>
               {liveFormatted != null ? (
                 <p className="text-[11px] text-tertiary">
-                  Thinking ({liveFormatted})
+                  {streamingThinkingWord} ({liveFormatted})
                 </p>
               ) : (
-                <p className="text-[11px] text-tertiary">Thinking…</p>
+                <p className="text-[11px] text-tertiary">
+                  {streamingThinkingWord}…
+                </p>
               )}
               {"\u200b"}
             </>
@@ -1132,7 +1137,9 @@ function ReasoningStreamPeek({
           >
             {streaming ? (
               <>
-                <span className={thinkingLabelClass}>Thinking</span>
+                <span className={thinkingLabelClass}>
+                  {streamingThinkingWord}
+                </span>
                 {liveFormatted != null ? (
                   <span className="text-[11px] font-medium text-tertiary">
                     ({liveFormatted})
@@ -1418,39 +1425,47 @@ function AssistantSegmentedBody({
   );
 }
 
-/** Inline plan checklist completion during execution — one compact row (tool-card style). */
+/** Inline plan checklist completion — one tool-style badge per completed to-do (never one blob for many). */
 function PlanStepProgressRow({
   block,
 }: {
   block: Extract<LiveBlock, { kind: "plan_step_progress" }>;
 }) {
   const { planText } = useHofAgentChat();
-  const labels = useMemo(() => {
+  const entries = useMemo(() => {
     const parsed = parseStructuredPlan(planText);
     return block.done_indices.map((idx) => {
       const t = parsed.todos.find((x) => x.index === idx);
-      return t?.label.trim() ?? `Step ${idx + 1}`;
+      return {
+        idx,
+        label: t?.label.trim() ?? `Step ${idx + 1}`,
+      };
     });
   }, [planText, block.done_indices]);
-  if (block.done_indices.length === 0) {
+  if (entries.length === 0) {
     return null;
   }
   return (
-    <div className={`${AGENT_CHAT_COLUMN_CLASS} min-w-0 pl-1`}>
-      <div
-        className="flex min-w-0 items-center gap-2.5 rounded-lg border border-border bg-surface/40 px-3 py-2 text-[12px] leading-snug"
-        role="status"
-        aria-live="polite"
-      >
-        <CheckCircle2
-          className="size-4 shrink-0 text-[var(--color-success)]"
-          strokeWidth={2}
-          aria-hidden
-        />
-        <span className="min-w-0 flex-1 truncate font-medium text-foreground">
-          {labels.join(" · ")}
-        </span>
-      </div>
+    <div
+      className={`${AGENT_CHAT_COLUMN_CLASS} min-w-0 space-y-1.5 pl-1`}
+      role="status"
+      aria-live="polite"
+    >
+      {entries.map(({ idx, label }) => (
+        <div
+          key={`${block.id}-todo-${idx}`}
+          className="flex min-w-0 items-center gap-2.5 rounded-lg border border-border bg-surface/40 px-3 py-2 text-[12px] leading-snug"
+        >
+          <CheckCircle2
+            className="size-4 shrink-0 text-[var(--color-accent)]"
+            strokeWidth={2}
+            aria-hidden
+          />
+          <span className="min-w-0 flex-1 truncate font-medium text-secondary line-through">
+            {label}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

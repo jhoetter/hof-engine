@@ -1969,6 +1969,8 @@ def _run_agent_openai_loop(
                                         except (TypeError, ValueError):
                                             continue
                                     if idxs:
+                                        # Wire contract + client normalization: hof-react
+                                        # docs/plan-todo-contract.md
                                         yield {
                                             "type": "plan_todo_update",
                                             "done_indices": idxs,

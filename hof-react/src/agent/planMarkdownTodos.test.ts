@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  normalizePlanTodoWireIndices,
   parseStructuredPlan,
   preferPlanTaskListBody,
   sliceMarkdownFromFirstTaskListLine,
@@ -52,5 +53,25 @@ describe("parseStructuredPlan", () => {
     expect(p.description).toBe("Extend the admin portal.");
     expect(p.todos).toHaveLength(2);
     expect(p.todos[0]!.label).toBe("Step one");
+  });
+});
+
+describe("normalizePlanTodoWireIndices", () => {
+  it("maps 1..n (human steps) to 0..n-1 for a full set", () => {
+    expect(normalizePlanTodoWireIndices([1, 2, 3, 4, 5], 5)).toEqual([
+      0, 1, 2, 3, 4,
+    ]);
+  });
+
+  it("maps consecutive 1..k prefix to 0..k-1 during streaming", () => {
+    expect(normalizePlanTodoWireIndices([1, 2, 3], 5)).toEqual([0, 1, 2]);
+  });
+
+  it("keeps 0-based indices when 0 is present", () => {
+    expect(normalizePlanTodoWireIndices([0, 1], 5)).toEqual([0, 1]);
+  });
+
+  it("maps a single out-of-range 1-based index (e.g. 5 for 5 items)", () => {
+    expect(normalizePlanTodoWireIndices([5], 5)).toEqual([4]);
   });
 });

@@ -59,9 +59,17 @@ export {
   parseStructuredPlan,
   preferPlanTaskListBody,
   sliceMarkdownFromFirstTaskListLine,
+  normalizePlanTodoWireIndices,
   type ParsedPlanTodo,
   type StructuredPlan,
 } from "./agent/planMarkdownTodos";
+export {
+  applyPlanTodoWireResolution,
+  mergePlanTodoDoneIndices,
+  PLAN_TODO_UPDATE_EVENT_TYPE,
+  resolvePlanTodoUpdateWireEvent,
+  type PlanTodoWireResolution,
+} from "./agent/planTodoStream";
 export { FunctionResultDisplay } from "./agent/FunctionResultDisplay";
 export { useHofTable } from "./hooks/useHofTable";
 export { useHofFunction } from "./hooks/useHofFunction";

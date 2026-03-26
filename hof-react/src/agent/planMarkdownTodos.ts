@@ -129,3 +129,53 @@ export function parsePlanMarkdownTodos(markdown: string): ParsedPlanTodo[] {
   }
   return out;
 }
+
+/**
+ * Map wire ``done_indices`` to 0-based checklist indices used by {@link parsePlanMarkdownTodos}.
+ * Models often send human step numbers ``1..n`` instead of ``0..n-1``, which would otherwise
+ * never match the plan card during streaming (stuck at "0 of N").
+ */
+export function normalizePlanTodoWireIndices(
+  raw: readonly number[],
+  todoCount: number,
+): number[] {
+  if (todoCount <= 0 || raw.length === 0) {
+    return [];
+  }
+  const nums = raw
+    .map((x) => Number(x))
+    .filter((x) => Number.isFinite(x));
+  if (nums.length === 0) {
+    return [];
+  }
+  const uniq = [...new Set(nums)];
+  const hasZero = uniq.some((x) => x === 0);
+  const max = Math.max(...uniq);
+  const min = Math.min(...uniq);
+  const maxUi = todoCount - 1;
+  let useOneBased = false;
+  if (!hasZero && min >= 1) {
+    if (max > maxUi) {
+      useOneBased = true;
+    } else if (
+      max === todoCount &&
+      uniq.length === todoCount &&
+      min === 1
+    ) {
+      useOneBased = true;
+    } else if (min === 1) {
+      const sorted = [...uniq].sort((a, b) => a - b);
+      const consecutiveFromOne =
+        sorted.length > 0 &&
+        sorted[sorted.length - 1] === sorted.length &&
+        sorted.every((x, i) => x === i + 1);
+      if (consecutiveFromOne) {
+        useOneBased = true;
+      }
+    }
+  }
+  const mapped = uniq.map((x) => (useOneBased ? x - 1 : x));
+  return [...new Set(mapped.map((x) => Math.max(0, Math.min(maxUi, x))))].sort(
+    (a, b) => a - b,
+  );
+}

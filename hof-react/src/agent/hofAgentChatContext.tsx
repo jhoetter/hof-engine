@@ -53,6 +53,10 @@ import {
   preferPlanTaskListBody,
 } from "./planMarkdownTodos";
 import {
+  applyPlanTodoWireResolution,
+  mergePlanTodoDoneIndices,
+} from "./planTodoStream";
+import {
   AssistantMarkdownLinkProvider,
   type AssistantMarkdownLinkClickHandler,
 } from "./assistantMarkdownLinkContext";
@@ -320,6 +324,11 @@ export type HofAgentChatContextValue = {
   dismissPlanClarificationBarrier: () => void;
   planTodoDoneIndices: readonly number[];
   executePlan: () => void;
+  /**
+   * While the run is busy, optional label for the streaming reasoning shimmer
+   * (replaces default ``Thinking``), e.g. ``Generating questions`` or ``Preparing plan``.
+   */
+  streamingReasoningLabel: string | null;
 };
 
 const HofAgentChatContext = createContext<HofAgentChatContextValue | null>(
@@ -801,6 +810,16 @@ export function HofAgentChatProvider({
               return;
             }
             const typ = typeof ev.type === "string" ? ev.type : "";
+            const planTodoWire = applyPlanTodoWireResolution(
+              ev,
+              planTextRef.current,
+            );
+            let evForBlocks: HofStreamEvent = planTodoWire.evForBlocks;
+            if (planTodoWire.mergeIndices.length > 0) {
+              setPlanTodoDoneIndices((prev) =>
+                mergePlanTodoDoneIndices(prev, planTodoWire.mergeIndices),
+              );
+            }
             if (
               typ === "final" ||
               typ === "awaiting_confirmation" ||
@@ -809,21 +828,6 @@ export function HofAgentChatProvider({
               typ === "error"
             ) {
               lastTerminalStreamEventRef.current = ev;
-            }
-            if (typ === "plan_todo_update") {
-              const di = (ev as { done_indices?: unknown }).done_indices;
-              if (Array.isArray(di)) {
-                setPlanTodoDoneIndices((prev) => {
-                  const s = new Set(prev);
-                  for (const x of di) {
-                    const n = Number(x);
-                    if (Number.isFinite(n)) {
-                      s.add(n);
-                    }
-                  }
-                  return Array.from(s).sort((a, b) => a - b);
-                });
-              }
             }
             if (typ === "run_start") {
               assistantStreamPhaseRef.current = null;
@@ -886,7 +890,6 @@ export function HofAgentChatProvider({
                 }
               }
             }
-            let evForBlocks: HofStreamEvent = ev;
             if (typ === "awaiting_confirmation") {
               const rid =
                 coerceRunId(ev.run_id) || currentAgentRunIdRef.current.trim();
@@ -1191,6 +1194,16 @@ export function HofAgentChatProvider({
               return;
             }
             const typ = typeof ev.type === "string" ? ev.type : "";
+            const planTodoWire = applyPlanTodoWireResolution(
+              ev,
+              planTextRef.current,
+            );
+            let evForBlocks: HofStreamEvent = planTodoWire.evForBlocks;
+            if (planTodoWire.mergeIndices.length > 0) {
+              setPlanTodoDoneIndices((prev) =>
+                mergePlanTodoDoneIndices(prev, planTodoWire.mergeIndices),
+              );
+            }
             if (
               typ === "final" ||
               typ === "awaiting_plan_clarification" ||
@@ -1198,21 +1211,6 @@ export function HofAgentChatProvider({
             ) {
               lastTerminalStreamEventRef.current = ev;
               planDraftStreamingActiveRef.current = false;
-            }
-            if (typ === "plan_todo_update") {
-              const di = (ev as { done_indices?: unknown }).done_indices;
-              if (Array.isArray(di)) {
-                setPlanTodoDoneIndices((prev) => {
-                  const s = new Set(prev);
-                  for (const x of di) {
-                    const n = Number(x);
-                    if (Number.isFinite(n)) {
-                      s.add(n);
-                    }
-                  }
-                  return Array.from(s).sort((a, b) => a - b);
-                });
-              }
             }
             updateProviderWaitFromStreamType(typ, ev, setProviderWaitNotice);
             if (typ === "phase") {
@@ -1247,12 +1245,12 @@ export function HofAgentChatProvider({
             }
             const suppressPlanResumeBlocks =
               planDraftStreamingActiveRef.current &&
-              shouldSuppressLiveBlockDuringPlanDiscover(ev);
+              shouldSuppressLiveBlockDuringPlanDiscover(evForBlocks);
             if (!suppressPlanResumeBlocks) {
               setLiveBlocks((prev) => {
                 const et =
-                  typeof ev.type === "string" ? ev.type : "";
-                const next = applyStreamEventWithDedupe(prev, ev, {
+                  typeof evForBlocks.type === "string" ? evForBlocks.type : "";
+                const next = applyStreamEventWithDedupe(prev, evForBlocks, {
                   assistantStreamPhase: assistantStreamPhaseRef.current,
                   thinkingEpisodeStartedAtMs:
                     thinkingEpisodeStartedAtRef.current,
@@ -1445,6 +1443,16 @@ export function HofAgentChatProvider({
             return;
           }
           const rtyp = typeof ev.type === "string" ? ev.type : "";
+          const planTodoWire = applyPlanTodoWireResolution(
+            ev,
+            planTextRef.current,
+          );
+          let evForBlocks: HofStreamEvent = planTodoWire.evForBlocks;
+          if (planTodoWire.mergeIndices.length > 0) {
+            setPlanTodoDoneIndices((prev) =>
+              mergePlanTodoDoneIndices(prev, planTodoWire.mergeIndices),
+            );
+          }
           if (
             rtyp === "final" ||
             rtyp === "awaiting_confirmation" ||
@@ -1453,21 +1461,6 @@ export function HofAgentChatProvider({
             rtyp === "error"
           ) {
             lastTerminalStreamEventRef.current = ev;
-          }
-          if (rtyp === "plan_todo_update") {
-            const di = (ev as { done_indices?: unknown }).done_indices;
-            if (Array.isArray(di)) {
-              setPlanTodoDoneIndices((prev) => {
-                const s = new Set(prev);
-                for (const x of di) {
-                  const n = Number(x);
-                  if (Number.isFinite(n)) {
-                    s.add(n);
-                  }
-                }
-                return Array.from(s).sort((a, b) => a - b);
-              });
-            }
           }
           if (rtyp === "resume_start") {
             resumeMergeContinuationRef.current =
@@ -1504,7 +1497,6 @@ export function HofAgentChatProvider({
               }
             }
           }
-          let evForBlocks: HofStreamEvent = ev;
           if (rtyp === "awaiting_confirmation") {
             const awRid =
               coerceRunId(ev.run_id) || currentAgentRunIdRef.current.trim();
@@ -1707,6 +1699,16 @@ export function HofAgentChatProvider({
               return;
             }
             const rtyp = typeof ev.type === "string" ? ev.type : "";
+            const planTodoWire = applyPlanTodoWireResolution(
+              ev,
+              planTextRef.current,
+            );
+            let evForBlocks: HofStreamEvent = planTodoWire.evForBlocks;
+            if (planTodoWire.mergeIndices.length > 0) {
+              setPlanTodoDoneIndices((prev) =>
+                mergePlanTodoDoneIndices(prev, planTodoWire.mergeIndices),
+              );
+            }
             if (
               rtyp === "final" ||
               rtyp === "awaiting_confirmation" ||
@@ -1715,21 +1717,6 @@ export function HofAgentChatProvider({
               rtyp === "error"
             ) {
               lastTerminalStreamEventRef.current = ev;
-            }
-            if (rtyp === "plan_todo_update") {
-              const di = (ev as { done_indices?: unknown }).done_indices;
-              if (Array.isArray(di)) {
-                setPlanTodoDoneIndices((prev) => {
-                  const s = new Set(prev);
-                  for (const x of di) {
-                    const n = Number(x);
-                    if (Number.isFinite(n)) {
-                      s.add(n);
-                    }
-                  }
-                  return Array.from(s).sort((a, b) => a - b);
-                });
-              }
             }
             if (rtyp === "error") {
               const detail =
@@ -1772,7 +1759,6 @@ export function HofAgentChatProvider({
                 }
               }
             }
-            let evForBlocks: HofStreamEvent = ev;
             if (rtyp === "awaiting_confirmation") {
               const awRid =
                 coerceRunId(ev.run_id) || currentAgentRunIdRef.current.trim();
@@ -2154,6 +2140,23 @@ export function HofAgentChatProvider({
 
   const conversationEmpty = thread.length === 0 && liveBlocks.length === 0;
 
+  const streamingReasoningLabel = useMemo(() => {
+    if (!busy) {
+      return null;
+    }
+    if (planPhase === "generating") {
+      return "Preparing plan";
+    }
+    if (
+      agentMode === "plan" &&
+      planPhase == null &&
+      !planClarificationBarrier
+    ) {
+      return "Generating questions";
+    }
+    return null;
+  }, [busy, agentMode, planPhase, planClarificationBarrier]);
+
   const value = useMemo<HofAgentChatContextValue>(
     () => ({
       welcomeName,
@@ -2195,6 +2198,7 @@ export function HofAgentChatProvider({
       dismissPlanClarificationBarrier,
       planTodoDoneIndices,
       executePlan,
+      streamingReasoningLabel,
     }),
     [
       welcomeName,
@@ -2230,6 +2234,7 @@ export function HofAgentChatProvider({
       dismissPlanClarificationBarrier,
       planTodoDoneIndices,
       executePlan,
+      streamingReasoningLabel,
     ],
   );
 

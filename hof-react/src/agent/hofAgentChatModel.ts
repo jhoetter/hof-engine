@@ -191,6 +191,9 @@ export function newId(): string {
 export const CHAT_USER_BUBBLE_CLASS =
   "max-w-full rounded-lg bg-hover px-4 py-2.5 text-sm leading-relaxed text-foreground";
 
+/** Thread marker when the user runs an approved plan (compact UI; plan body is sent as `plan_text`). */
+export const PLAN_EXECUTE_USER_MARKER = "[plan:execute]";
+
 /** Same horizontal rail as thinking, tool cards, and assistant text (avoids mixed widths). */
 export const AGENT_CHAT_COLUMN_CLASS = "w-full max-w-[min(100%,42rem)]";
 
@@ -336,7 +339,11 @@ export function toolRowContextFromArguments(
   if (typeof ds === "string" && /^\d+$/.test(ds.trim())) {
     return `#${ds.trim()}`;
   }
-  if (fn.startsWith("get_") || fn.startsWith("update_") || fn.startsWith("delete_")) {
+  if (
+    fn.startsWith("get_") ||
+    fn.startsWith("update_") ||
+    fn.startsWith("delete_")
+  ) {
     const id = _toolTitleIdSnippet(o.id, 12);
     if (id) {
       return id.length > 10 ? `id ${id}` : id;
@@ -946,6 +953,9 @@ export function applyStreamEvent(
     ];
   }
   if (t === "tool_call") {
+    if ((ev as { internal?: unknown }).internal === true) {
+      return prev;
+    }
     const name = typeof ev.name === "string" ? ev.name : "";
     const args = typeof ev.arguments === "string" ? ev.arguments : "";
     const cli = typeof ev.cli_line === "string" ? ev.cli_line : "";
@@ -979,6 +989,9 @@ export function applyStreamEvent(
     ];
   }
   if (t === "tool_result") {
+    if ((ev as { internal?: unknown }).internal === true) {
+      return prev;
+    }
     const name = typeof ev.name === "string" ? ev.name : "";
     const summary = typeof ev.summary === "string" ? ev.summary : "";
     const hasData = Object.prototype.hasOwnProperty.call(ev, "data");
@@ -1217,6 +1230,21 @@ export function dropRedundantModelPhaseBeforeAssistant(
     out.push(b);
   }
   return out;
+}
+
+/**
+ * Remove the trailing assistant block before persisting a plan_discover run to the thread.
+ * The same prose is shown in the plan card from `final.reply`, so it must not duplicate inline.
+ */
+export function stripLastAssistantBlockForPlan(blocks: LiveBlock[]): LiveBlock[] {
+  if (blocks.length === 0) {
+    return blocks;
+  }
+  const last = blocks[blocks.length - 1]!;
+  if (last.kind === "assistant") {
+    return blocks.slice(0, -1);
+  }
+  return blocks;
 }
 
 export function isEphemeralAssistantShell(b: LiveBlock): boolean {

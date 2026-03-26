@@ -47,6 +47,9 @@ from hof.config import get_config
 
 logger = logging.getLogger(__name__)
 
+_HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION = "hof_builtin_present_plan_clarification"
+_HOF_BUILTIN_UPDATE_PLAN_TODO_STATE = "hof_builtin_update_plan_todo_state"
+
 
 def _provider_wait_wire(ev: Any) -> dict[str, Any] | None:
     """Map llm-markdown :class:`~llm_markdown.agent_stream.AgentRateLimitWait` to NDJSON."""
@@ -451,6 +454,18 @@ def _resolve_agent_model() -> str:
     return "gpt-4o-mini"
 
 
+def _resolve_agent_model_for_chat_mode(chat_mode: str) -> str:
+    """Use ``PLAN_AGENT`` for ``plan`` / ``plan_discover`` when set; else default agent model.
+
+    ``plan_execute`` always uses the default agent model so execution matches normal chat.
+    """
+    if chat_mode in ("plan", "plan_discover"):
+        plan_m = os.environ.get("PLAN_AGENT", "").strip()
+        if plan_m:
+            return plan_m
+    return _resolve_agent_model()
+
+
 def _anthropic_stream_turn_extras(
     lm_backend: str,
     reasoning: ReasoningConfig,
@@ -465,33 +480,70 @@ def _anthropic_stream_turn_extras(
     return {"output_config": {"effort": "high"}}
 
 
-def _resolve_anthropic_thinking_kw() -> dict[str, Any] | None:
-    """``thinking=...`` for Anthropic Messages API (native mode only).
+def _anthropic_adaptive_thinking_supported_for_model_id(model_id: str) -> bool:
+    """Whether Anthropic Messages API accepts ``thinking`` with ``type: adaptive`` for this model.
 
-    ``AGENT_ANTHROPIC_THINKING``:
+    Some ids (Haiku, Sonnet 4.5-class) return 400 ``adaptive thinking is not supported on this model``.
+    """
+    m = (model_id or "").strip().lower()
+    if not m or "haiku" in m:
+        return False
+    if "sonnet-4-5" in m or "sonnet_4_5" in m:
+        return False
+    return True
 
-    - unset / empty → ``{"type": "adaptive"}`` (Sonnet/Opus 4.6)
+
+def _coerce_anthropic_thinking_kw_for_model(
+    model_id: str,
+    kw: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Drop unsupported ``adaptive`` thinking so the provider does not 400."""
+    if kw is None:
+        return None
+    if kw.get("type") != "adaptive":
+        return kw
+    if _anthropic_adaptive_thinking_supported_for_model_id(model_id):
+        return kw
+    logger.info(
+        "anthropic thinking: omitting adaptive for model_id=%s (not supported by API)",
+        model_id,
+    )
+    return None
+
+
+def _anthropic_thinking_from_env_raw(raw: str, env_name: str) -> dict[str, Any] | None:
+    """Parse ``thinking=...`` for Anthropic Messages API (native mode only).
+
+    - unset / empty → ``{"type": "adaptive"}`` (Sonnet/Opus 4.6-class default)
     - ``adaptive`` → same
     - ``off`` / ``false`` / ``0`` / ``no`` → omit thinking (no ``AgentReasoningDelta`` from API)
     - otherwise parsed as JSON object (e.g. extended thinking with ``budget_tokens``)
     """
-    raw = os.environ.get("AGENT_ANTHROPIC_THINKING", "").strip()
-    if not raw:
+    stripped = (raw or "").strip()
+    if not stripped:
         return {"type": "adaptive"}
-    low = raw.lower()
+    low = stripped.lower()
     if low in ("off", "false", "0", "no"):
         return None
     if low == "adaptive":
         return {"type": "adaptive"}
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(stripped)
     except json.JSONDecodeError as exc:
-        msg = f"AGENT_ANTHROPIC_THINKING must be adaptive, off, or valid JSON object: {exc}"
+        msg = f"{env_name} must be adaptive, off, or valid JSON object: {exc}"
         raise ValueError(msg) from exc
     if not isinstance(parsed, dict):
-        msg = "AGENT_ANTHROPIC_THINKING JSON must be an object"
+        msg = f"{env_name} JSON must be an object"
         raise ValueError(msg)
     return parsed
+
+
+def _resolve_anthropic_thinking_kw() -> dict[str, Any] | None:
+    """``AGENT_ANTHROPIC_THINKING`` → thinking kw for Anthropic."""
+    return _anthropic_thinking_from_env_raw(
+        os.environ.get("AGENT_ANTHROPIC_THINKING", ""),
+        "AGENT_ANTHROPIC_THINKING",
+    )
 
 
 def _resolve_agent_reasoning_config(backend: str | None = None) -> ReasoningConfig:
@@ -553,6 +605,39 @@ def _resolve_agent_reasoning_config(backend: str | None = None) -> ReasoningConf
     merged_openai: dict[str, Any] = {"reasoning_effort": "high"}
     merged_openai.update(extras)
     return ReasoningConfig.native(openai_extras=merged_openai)
+
+
+def _resolve_agent_reasoning_config_for_chat_mode(
+    lm_backend: str,
+    chat_mode: str,
+    model_id: str,
+) -> ReasoningConfig:
+    """Like :func:`_resolve_agent_reasoning_config` but honor ``PLAN_AGENT_ANTHROPIC_THINKING``.
+
+    When ``PLAN_AGENT`` is set and the chat is ``plan`` or ``plan_discover`` on Anthropic, use
+    ``PLAN_AGENT_ANTHROPIC_THINKING`` if non-empty so Sonnet can use adaptive thinking while
+    ``AGENT_ANTHROPIC_THINKING=off`` keeps Haiku happy for instant chat.
+
+    ``model_id`` is the resolved model for this request (``PLAN_AGENT`` or ``AGENT_MODEL``); adaptive
+    thinking is omitted when the id is known not to support it (e.g. ``claude-sonnet-4-5``).
+
+    ``plan_execute`` uses the default agent model and default reasoning config (no plan-only override).
+    """
+    base = _resolve_agent_reasoning_config(lm_backend)
+    if chat_mode not in ("plan", "plan_discover"):
+        return base
+    if lm_backend != "anthropic":
+        return base
+    if not os.environ.get("PLAN_AGENT", "").strip():
+        return base
+    override_raw = os.environ.get("PLAN_AGENT_ANTHROPIC_THINKING", "").strip()
+    if not override_raw:
+        return base
+    if base.mode is not ReasoningMode.NATIVE:
+        return base
+    kw = _anthropic_thinking_from_env_raw(override_raw, "PLAN_AGENT_ANTHROPIC_THINKING")
+    kw = _coerce_anthropic_thinking_kw_for_model(model_id, kw)
+    return ReasoningConfig.native(anthropic_thinking=kw)
 
 
 def _resolve_agent_max_completion_tokens() -> int:
@@ -621,6 +706,105 @@ def _build_system_prompt(policy: AgentPolicy, *, attachment_note: str) -> str:
     if attachment_note.strip():
         text += "\n\n## User file attachments\n" + attachment_note.strip()
     return text
+
+
+_AGENT_CHAT_PLAN_MODE_SUFFIX = (
+    "\n\n## Plan mode (planning only)\n"
+    "The user asked for a plan before any execution. Respond with a clear markdown plan. "
+    "Use `- [ ]` checkboxes for concrete actionable steps. "
+    "Do not call tools and do not state that work is already done—planning only.\n"
+)
+
+_AGENT_CHAT_PLAN_EXECUTE_SUFFIX = (
+    "\n\n## Approved plan execution\n"
+    "The user approved the plan. Execute it step by step using tools when needed.\n"
+    "**Checklist is the source of truth.** Map your work to the `- [ ]` lines in the approved plan "
+    "(0-based index from top to bottom).\n\n"
+    "**Reasoning / thinking (before tools):** In every turn, briefly state **which step(s)** you "
+    "are on (index + short label), **which steps are already complete**, and **what is next**. "
+    "Do not only describe tools — tie progress to the plan checklist.\n\n"
+    "**MANDATORY (UI progress):** Call `hof_builtin_update_plan_todo_state` whenever "
+    "checklist progress changes — **not** only at the end. After each substantive step that "
+    "completes a checklist row, call with **cumulative** `done_indices`.\n"
+    "- Pass `done_indices` as a JSON array of integers: the **0-based indices** of every checklist "
+    "row that is **complete so far** (same top-to-bottom order as the `- [ ]` lines in "
+    "the approved plan below). Example: after finishing the first two tasks, call with "
+    "`{\"done_indices\": [0, 1]}`; after the third, `{\"done_indices\": [0, 1, 2]}`.\n"
+    "- Call the tool **multiple times per turn** if you complete several steps in one round.\n"
+    "- Do not rely on editing markdown checkboxes — only this tool updates the UI.\n"
+    "Also briefly note progress in your visible replies.\n"
+)
+
+_AGENT_CHAT_PLAN_DISCOVER_PREFIX = (
+    "# \u26a0\ufe0f MODE: PLAN DISCOVERY (overrides ALL other instructions)\n\n"
+    "You are in plan discovery mode. Your goal is to produce a plan the user can review and "
+    "execute.\n\n"
+    "## DEFAULT: ASK FIRST (use this in >90% of real requests)\n\n"
+    "Most user requests are **ambiguous** about scope, method, parameters, legal/accounting rules, "
+    "or preferences. **Default to (A):** call `hof_builtin_present_plan_clarification` after "
+    "light research, then STOP.\n\n"
+    "Only skip clarification **(B)** when the task is trivially unambiguous and fully specified. "
+    "If you are unsure, **always choose (A)**.\n\n"
+    "Before choosing (B), check whether anything could still be ambiguous: scope; which records "
+    "or entities apply; method or parameters; time windows; policy or compliance constraints; "
+    "defaults vs explicit user preferences; destructive vs non-destructive scope. If any of "
+    "these are not fixed by the user\u2019s message, use (A).\n\n"
+    "**When in doubt, ASK.** One extra clarification round is better than a wrong plan.\n\n"
+    "## DECISION RULE (follow this EXACTLY)\n\n"
+    "After researching with tools, choose **one** of two actions:\n\n"
+    "**(A) Clarification needed** (default) \u2192 call `hof_builtin_present_plan_clarification` "
+    "and STOP. Do NOT write any assistant text. Do NOT output a plan.\n\n"
+    "**(B) Enough context** (rare) \u2192 output the structured plan as your final reply.\n\n"
+    "There is NO option C. **NEVER write questions, requests for information, or open-ended "
+    "requests for more detail in assistant text** \u2014 use the tool for (A).\n\n"
+    "## Plan format (final reply, option B only)\n\n"
+    "Your final reply must follow this exact shape:\n"
+    "- Line 1: `# ` + short title (3\u20138 words)\n"
+    "- Blank line\n"
+    "- 1\u20132 sentences describing the approach (no data, no questions)\n"
+    "- Blank line\n"
+    "- `- [ ]` task lines (one concrete action per line)\n\n"
+    "The description must be a **statement of intent**, not a question or request.\n\n"
+    "## Rules\n\n"
+    "- **NEVER** ask questions in assistant text (use tool for option A)\n"
+    "- **NEVER** write data summaries from tool output in the final reply (no row counts, totals, "
+    "or tables)\n"
+    "- **NEVER** call mutation tools\n"
+    "- Keep intermediate assistant text (before tool calls) very short\n\n"
+    "## Workflow\n\n"
+    "1. **Research** \u2014 call read-only tools to understand the data\n"
+    "2. **Decide** \u2014 (A) need clarification? \u2192 call tool, STOP. "
+    "(B) enough context? \u2192 step 3\n"
+    "3. **Output plan** \u2014 reply with the structured plan\n\n"
+    "## Clarification tool format (option A)\n\n"
+    "Call `hof_builtin_present_plan_clarification` with:\n"
+    "- Each question: `id`, `prompt`, `options` (2\u20134 choices + ALWAYS one with "
+    "`id` containing \"other\" and `label` \"Andere / eigene Angabe\"), `allow_multiple`.\n"
+    "- After the tool call, STOP. No text after.\n\n"
+    "## WRONG vs CORRECT (shape only)\n\n"
+    "\u274c Any question or multiple-choice in assistant prose \u2192 use the clarification tool "
+    "(A), not text.\n"
+    "\u274c Final reply that repeats tool-derived numbers or lists \u2192 forbidden.\n"
+    "\u274c Final reply without `- [ ]` lines \u2192 broken.\n\n"
+    "\u2705 Final reply: `# Title`, short intent statement, then `- [ ]` lines only.\n\n"
+    "---\n\n"
+)
+
+_AGENT_CHAT_PLAN_DISCOVER_SUFFIX = (
+    "\n\n## CRITICAL REMINDER \u2014 plan discovery mode\n"
+    "**Prefer (A).** Unless the request is trivially specific, call "
+    "`hof_builtin_present_plan_clarification`, then STOP (no assistant text).\n"
+    "Only (B) if unambiguous: reply with `# Title` + description + `- [ ]` lines.\n"
+    "NEVER put questions or data dumps in assistant text.\n"
+)
+
+
+def _normalize_agent_chat_mode(mode: str | None) -> str:
+    """Return ``instant``, ``plan``, ``plan_discover``, or ``plan_execute``."""
+    raw = (mode or "").strip().lower().replace("-", "_")
+    if raw in ("plan", "plan_discover", "plan_execute"):
+        return raw
+    return "instant"
 
 
 def _append_client_messages(
@@ -746,6 +930,26 @@ def collect_agent_chat_from_stream(
                     ),
                 },
             )
+        elif t == "awaiting_plan_clarification":
+            legacy.append(
+                {
+                    "type": "thinking",
+                    "detail": (
+                        "Waiting for plan clarification answers "
+                        "(agent_resume_plan_clarification stream)."
+                    ),
+                },
+            )
+            return {
+                "awaiting_plan_clarification": True,
+                "run_id": str(ev.get("run_id") or ""),
+                "clarification_id": str(ev.get("clarification_id") or ""),
+                "questions": ev.get("questions") if isinstance(ev.get("questions"), list) else [],
+                "reply": "",
+                "events": legacy,
+                "tool_rounds_used": rounds,
+                "model": model_out,
+            }
         elif t == "resume_start":
             legacy.append({"type": "thinking", "detail": "Continuing after confirmation…"})
         elif t == "final":
@@ -1138,6 +1342,7 @@ def _yield_awaiting_inbox_review_barrier(
     max_tool_output_chars: int,
     max_cli_line_chars: int,
     chained_from_inbox_resume: bool = False,
+    agent_chat_mode: str = "instant",
 ) -> Iterator[dict[str, Any]]:
     """Persist run, emit ``awaiting_inbox_review``, debug + log.
 
@@ -1167,6 +1372,7 @@ def _yield_awaiting_inbox_review_barrier(
             "rounds": start_round,
             "open_inbox_watches": wires,
             "inbox_pending_baseline_ids": baseline_ids,
+            "agent_chat_mode": agent_chat_mode,
         },
         inbox_ttl,
     )
@@ -1206,6 +1412,135 @@ def _replace_tool_message_content(
     raise ValueError(msg)
 
 
+def _parse_and_validate_plan_clarification_questions(
+    arguments_json: str,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    try:
+        parsed = json.loads(arguments_json or "{}")
+    except json.JSONDecodeError as exc:
+        return None, f"invalid JSON: {exc}"
+    if not isinstance(parsed, dict):
+        return None, "arguments must be a JSON object"
+    raw_q = parsed.get("questions")
+    if isinstance(raw_q, str):
+        try:
+            raw_q = json.loads(raw_q)
+        except json.JSONDecodeError:
+            pass
+    if not isinstance(raw_q, list) or len(raw_q) < 1:
+        return None, "questions must be a non-empty array"
+    out: list[dict[str, Any]] = []
+    for i, q in enumerate(raw_q):
+        if not isinstance(q, dict):
+            return None, f"questions[{i}] must be an object"
+        qid = str(q.get("id") or "").strip()
+        prompt = str(q.get("prompt") or "").strip()
+        if not qid or not prompt:
+            return None, f"questions[{i}]: id and prompt are required"
+        opts = q.get("options")
+        if not isinstance(opts, list) or len(opts) < 2:
+            return None, f"questions[{i}]: at least two options required"
+        if len(opts) > 5:
+            return None, f"questions[{i}]: at most 5 options allowed (2-4 concrete + 'other')"
+        norm_opts: list[dict[str, str]] = []
+        seen_o: set[str] = set()
+        has_other = False
+        for j, o in enumerate(opts):
+            if not isinstance(o, dict):
+                return None, f"questions[{i}].options[{j}] must be object"
+            oid = str(o.get("id") or "").strip()
+            label = str(o.get("label") or "").strip()
+            if not oid or not label:
+                return None, f"questions[{i}].options[{j}]: id and label required"
+            if oid in seen_o:
+                return None, f"duplicate option id {oid!r}"
+            seen_o.add(oid)
+            norm_opts.append({"id": oid, "label": label})
+            if "other" in oid.lower():
+                has_other = True
+        if not has_other:
+            norm_opts.append({"id": f"q{i}_other", "label": "Andere / eigene Angabe"})
+        am = q.get("allow_multiple")
+        allow_multiple = bool(am) if am is not None else False
+        out.append(
+            {
+                "id": qid,
+                "prompt": prompt,
+                "options": norm_opts,
+                "allow_multiple": allow_multiple,
+            },
+        )
+    return out, None
+
+
+def _validate_clarification_answers(
+    questions: list[dict[str, Any]],
+    answers: list[Any],
+) -> tuple[dict[str, list[str]] | None, dict[str, str], str | None]:
+    if not isinstance(answers, list):
+        return None, {}, "answers must be a list"
+    qmap = {str(q["id"]): q for q in questions}
+    out: dict[str, list[str]] = {}
+    other_text_by_qid: dict[str, str] = {}
+    for i, a in enumerate(answers):
+        if not isinstance(a, dict):
+            return None, {}, f"answers[{i}] must be object"
+        qid = str(a.get("question_id") or a.get("questionId") or "").strip()
+        sel = a.get("selected_option_ids") or a.get("selectedOptionIds")
+        if not qid or qid not in qmap:
+            return None, {}, f"unknown question_id: {qid!r}"
+        if not isinstance(sel, list):
+            return None, {}, f"selected_option_ids must be array for {qid!r}"
+        oids = [str(x).strip() for x in sel if str(x).strip()]
+        allowed = {o["id"] for o in qmap[qid]["options"]}
+        for oid in oids:
+            if oid not in allowed:
+                return None, {}, f"invalid option id {oid!r} for question {qid!r}"
+        if not qmap[qid]["allow_multiple"] and len(oids) > 1:
+            return None, {}, f"question {qid!r} allows only one option"
+        if len(oids) < 1:
+            return None, {}, f"question {qid!r} requires at least one selected option"
+        raw_other = a.get("other_text") or a.get("otherText")
+        other_t = str(raw_other).strip() if raw_other is not None else ""
+        has_other_option = any("other" in oid.lower() for oid in oids)
+        if has_other_option and not other_t:
+            return (
+                None,
+                {},
+                f"question {qid!r}: other_text is required when an Other option is selected",
+            )
+        if other_t and not has_other_option:
+            return (
+                None,
+                {},
+                f"question {qid!r}: other_text is only allowed when an Other option is selected",
+            )
+        if other_t:
+            other_text_by_qid[qid] = other_t
+        out[qid] = oids
+    if set(out.keys()) != set(qmap.keys()):
+        return None, {}, "each question must be answered exactly once"
+    return out, other_text_by_qid, None
+
+
+def _clarification_answer_summary_for_model(
+    questions: list[dict[str, Any]],
+    selections: dict[str, list[str]],
+    other_text_by_qid: dict[str, str],
+) -> str:
+    lines: list[str] = []
+    for q in questions:
+        qid = str(q["id"])
+        labels_by_id = {o["id"]: o["label"] for o in q["options"]}
+        chosen = selections.get(qid, [])
+        pretty = ", ".join(labels_by_id[oid] for oid in chosen)
+        extra = other_text_by_qid.get(qid, "").strip()
+        if extra:
+            pretty = f"{pretty}\nOther: {extra}"
+        lines.append(f"{q['prompt']}\nSelected: {pretty}")
+    return "User clarification answers:\n" + "\n\n".join(lines)
+
+
 def _run_agent_openai_loop(
     provider: Any,
     model: str,
@@ -1221,6 +1556,9 @@ def _run_agent_openai_loop(
     max_rounds: int,
     max_tool_output_chars: int,
     max_cli_line_chars: int,
+    final_extras: dict[str, Any] | None = None,
+    agent_chat_mode: str = "instant",
+    plan_resume_final_extras: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Run model ↔ tools until final reply, error, or halt for mutation confirmation."""
     rounds = start_round
@@ -1249,13 +1587,15 @@ def _run_agent_openai_loop(
             reasoning_chars = 0
             trace_parts: list[str] = []
 
+            st_tools = tools if len(tools) > 0 else None
+            st_tool_choice = "auto" if st_tools is not None else None
             for ev in _iter_stream_agent_turn_with_engine_retries(
                 provider,
                 lm_backend,
                 oa_messages,
                 model=model,
-                tools=tools,
-                tool_choice="auto",
+                tools=st_tools,
+                tool_choice=st_tool_choice,
                 max_tokens=_resolve_agent_max_completion_tokens(),
                 reasoning=reasoning,
                 **_anthropic_stream_turn_extras(lm_backend, reasoning),
@@ -1338,6 +1678,43 @@ def _run_agent_openai_loop(
                     return
                 yield {"type": "phase", "round": rounds, "phase": "tools"}
                 sorted_idx = sorted(parts.keys())
+                if agent_chat_mode == "plan_discover":
+                    clarify_idxs = [
+                        i
+                        for i in sorted_idx
+                        if parts[i].get("name") == _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION
+                    ]
+                    if len(clarify_idxs) > 1:
+                        yield {
+                            "type": "error",
+                            "detail": (
+                                "at most one hof_builtin_present_plan_clarification "
+                                "per round"
+                            ),
+                        }
+                        return
+                    if len(clarify_idxs) == 1:
+                        cix = clarify_idxs[0]
+                        if cix != sorted_idx[-1]:
+                            yield {
+                                "type": "error",
+                                "detail": (
+                                    "hof_builtin_present_plan_clarification must be the last "
+                                    "tool call in the round"
+                                ),
+                            }
+                            return
+                        if any(
+                            parts[j].get("name") in mutation_allowlist for j in sorted_idx
+                        ):
+                            yield {
+                                "type": "error",
+                                "detail": (
+                                    "cannot combine hof_builtin_present_plan_clarification "
+                                    "with mutation tools in the same round"
+                                ),
+                            }
+                            return
                 tool_calls_payload: list[dict[str, Any]] = []
                 for idx in sorted_idx:
                     tc = parts[idx]
@@ -1360,6 +1737,9 @@ def _run_agent_openai_loop(
                     },
                 )
                 pending_ids: list[str] = []
+                plan_clarify_halt: str | None = None
+                plan_clarify_questions: list[dict[str, Any]] | None = None
+                plan_clarify_tool_call_id: str | None = None
                 for idx in sorted_idx:
                     tc = parts[idx]
                     name = tc["name"]
@@ -1379,6 +1759,8 @@ def _run_agent_openai_loop(
                     note = policy.rationale_for(name)
                     if note:
                         tc_ev["internal_rationale"] = note
+                    if name in BUILTIN_AGENT_TOOL_NAMES:
+                        tc_ev["internal"] = True
                     yield tc_ev
                     logger.info(
                         "agent_chat tool_call run_id=%s round=%d name=%s tool_call_id=%s "
@@ -1399,7 +1781,74 @@ def _run_agent_openai_loop(
                             "arguments_chars": len(args_wire),
                         },
                     )
-                    if name in mutation_allowlist:
+                    if (
+                        name == _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION
+                        and agent_chat_mode == "plan_discover"
+                    ):
+                        logger.info(
+                            "agent_chat plan_clarification_validating run_id=%s "
+                            "args_wire_chars=%d",
+                            run_id,
+                            len(args_wire),
+                        )
+                        qs, verr = _parse_and_validate_plan_clarification_questions(args_wire)
+                        if verr is not None:
+                            logger.warning(
+                                "agent_chat plan_clarification_validation_error "
+                                "run_id=%s error=%s args_wire_start=%s",
+                                run_id,
+                                verr,
+                                args_wire[:300],
+                            )
+                            yield {"type": "error", "detail": verr}
+                            return
+                        cid = str(uuid.uuid4())
+                        save_pending(
+                            cid,
+                            {
+                                "run_id": run_id,
+                                "kind": "plan_clarification",
+                                "tool_call_id": tid,
+                                "questions": qs,
+                            },
+                        )
+                        ph_obj: dict[str, Any] = {
+                            "awaiting_plan_clarification": True,
+                            "clarification_id": cid,
+                        }
+                        placeholder = json.dumps(ph_obj)
+                        tr_cl: dict[str, Any] = {
+                            "type": "tool_result",
+                            "name": name,
+                            "summary": (
+                                "Awaiting clarification answers "
+                                "(agent_resume_plan_clarification stream)."
+                            ),
+                            "status_code": 202,
+                            "tool_call_id": tid,
+                            "data": {"questions": qs, "clarification_id": cid},
+                            "internal": True,
+                        }
+                        yield tr_cl
+                        oa_messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tid,
+                                "content": placeholder,
+                            },
+                        )
+                        plan_clarify_halt = cid
+                        plan_clarify_questions = qs
+                        plan_clarify_tool_call_id = tid
+                        logger.info(
+                            "agent_chat plan_clarification_pending run_id=%s round=%d "
+                            "clarification_id=%s tool_call_id=%s",
+                            run_id,
+                            rounds,
+                            cid,
+                            tid,
+                        )
+                    elif name in mutation_allowlist:
                         pid = str(uuid.uuid4())
                         preview = _mutation_preview_payload(name, args_wire, policy)
                         save_pending(
@@ -1492,6 +1941,8 @@ def _run_agent_openai_loop(
                         pdata = parsed_tool_result_for_stream(out_json)
                         if pdata is not None:
                             tr_out["data"] = pdata
+                        if name in BUILTIN_AGENT_TOOL_NAMES:
+                            tr_out["internal"] = True
                         yield tr_out
                         oa_messages.append(
                             {
@@ -1500,6 +1951,60 @@ def _run_agent_openai_loop(
                                 "content": format_tool_result_for_model(name, out_json),
                             },
                         )
+                        if (
+                            name == _HOF_BUILTIN_UPDATE_PLAN_TODO_STATE
+                            and agent_chat_mode == "plan_execute"
+                        ):
+                            try:
+                                body = json.loads(out_json)
+                                di = body.get("done_indices")
+                                if isinstance(di, list) and di:
+                                    idxs: list[int] = []
+                                    for x in di:
+                                        try:
+                                            idxs.append(int(x))
+                                        except (TypeError, ValueError):
+                                            continue
+                                    if idxs:
+                                        yield {
+                                            "type": "plan_todo_update",
+                                            "done_indices": idxs,
+                                        }
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                if plan_clarify_halt is not None:
+                    store_extras = (
+                        plan_resume_final_extras
+                        if plan_resume_final_extras is not None
+                        else {}
+                    )
+                    save_agent_run(
+                        run_id,
+                        {
+                            "oa_messages": oa_messages,
+                            "model": model,
+                            "llm_backend": lm_backend,
+                            "rounds": rounds,
+                            "open_plan_clarification_id": plan_clarify_halt,
+                            "agent_chat_mode": "plan_discover",
+                            "plan_resume_final_extras": store_extras,
+                        },
+                    )
+                    yield {
+                        "type": "awaiting_plan_clarification",
+                        "run_id": run_id,
+                        "clarification_id": plan_clarify_halt,
+                        "tool_call_id": plan_clarify_tool_call_id,
+                        "questions": plan_clarify_questions,
+                    }
+                    logger.info(
+                        "agent_chat awaiting_plan_clarification run_id=%s round=%d "
+                        "clarification_id=%s (stream pauses until resume)",
+                        run_id,
+                        rounds,
+                        plan_clarify_halt,
+                    )
+                    return
                 if pending_ids:
                     mode = policy.confirmation_summary_mode
                     if mode == "llm_stream":
@@ -1534,6 +2039,7 @@ def _run_agent_openai_loop(
                             "llm_backend": lm_backend,
                             "rounds": rounds,
                             "open_pending_ids": pending_ids,
+                            "agent_chat_mode": agent_chat_mode,
                         },
                     )
                     yield {
@@ -1560,12 +2066,15 @@ def _run_agent_openai_loop(
                 rounds,
                 len(text),
             )
-            yield {
+            final_ev: dict[str, Any] = {
                 "type": "final",
                 "reply": text,
                 "tool_rounds_used": rounds,
                 "model": model,
             }
+            if final_extras:
+                final_ev.update(final_extras)
+            yield final_ev
             _agent_stream_debug_append(
                 {
                     "kind": "final",
@@ -1616,6 +2125,8 @@ def _run_agent_chat_stream(
     attachments: list | None,
     *,
     policy: AgentPolicy,
+    mode: str | None = None,
+    plan_text: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield NDJSON-shaped dicts."""
     max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = _agent_limits()
@@ -1632,9 +2143,14 @@ def _run_agent_chat_stream(
         yield {"type": "error", "detail": str(exc)}
         return
 
-    model = _resolve_agent_model()
+    chat_mode = _normalize_agent_chat_mode(mode)
+    model = _resolve_agent_model_for_chat_mode(chat_mode)
     try:
-        reasoning = _resolve_agent_reasoning_config(lm_backend)
+        reasoning = _resolve_agent_reasoning_config_for_chat_mode(
+            lm_backend,
+            chat_mode,
+            model,
+        )
     except ValueError as exc:
         yield {"type": "error", "detail": str(exc)}
         return
@@ -1691,16 +2207,43 @@ def _run_agent_chat_stream(
     note_fn = policy.attachments_system_note or default_attachments_system_note
     att_note = note_fn(att_norm) if att_norm else ""
     system_content = _build_system_prompt(policy, attachment_note=att_note)
+    plan_resume_final_extras: dict[str, Any] | None = None
+    if chat_mode == "plan":
+        system_content += _AGENT_CHAT_PLAN_MODE_SUFFIX
+        loop_tools: list[dict[str, Any]] = []
+        final_extras: dict[str, Any] | None = {"mode": "plan"}
+    elif chat_mode == "plan_discover":
+        system_content = _AGENT_CHAT_PLAN_DISCOVER_PREFIX + system_content + _AGENT_CHAT_PLAN_DISCOVER_SUFFIX
+        discover_allowlist = frozenset(policy.allowlist_read | BUILTIN_AGENT_TOOL_NAMES)
+        loop_tools = openai_tool_specs(discover_allowlist)
+        final_extras = {"mode": "plan"}
+        plan_resume_final_extras = {"mode": "plan"}
+    elif chat_mode == "plan_execute":
+        exec_suffix = _AGENT_CHAT_PLAN_EXECUTE_SUFFIX
+        pt = (plan_text or "").strip()
+        if pt:
+            exec_suffix += (
+                "\n\n## Approved plan markdown (authoritative; execute these steps in order)\n\n"
+                + pt
+            )
+        system_content += exec_suffix
+        loop_tools = tools
+        final_extras = None
+    else:
+        loop_tools = tools
+        final_extras = None
+
     oa_messages: list[dict[str, Any]] = [{"role": "system", "content": system_content}]
     _append_client_messages(oa_messages, messages, att_norm)
 
     logger.info(
-        "agent_chat start run_id=%s backend=%s model=%s oa_messages=%d tool_specs=%d",
+        "agent_chat start run_id=%s backend=%s model=%s oa_messages=%d tool_specs=%d mode=%s",
         run_id,
         lm_backend,
         model,
         len(oa_messages),
-        len(tools),
+        len(loop_tools),
+        chat_mode,
     )
 
     yield from _run_agent_openai_loop(
@@ -1708,7 +2251,7 @@ def _run_agent_chat_stream(
         model,
         policy,
         allowlist,
-        tools,
+        loop_tools,
         oa_messages,
         0,
         run_id,
@@ -1717,6 +2260,9 @@ def _run_agent_chat_stream(
         max_rounds=max_rounds,
         max_tool_output_chars=max_tool_output_chars,
         max_cli_line_chars=max_cli_line_chars,
+        final_extras=final_extras,
+        agent_chat_mode=chat_mode,
+        plan_resume_final_extras=plan_resume_final_extras,
     )
 
 
@@ -1784,12 +2330,17 @@ def _run_agent_resume_stream(
     lm_backend = str(run.get("llm_backend") or "openai").strip().lower()
     if lm_backend not in ("openai", "anthropic"):
         lm_backend = "openai"
+    start_round = int(run.get("rounds") or 0)
+    resume_chat_mode = _normalize_agent_chat_mode(str(run.get("agent_chat_mode") or ""))
     try:
-        reasoning = _resolve_agent_reasoning_config(lm_backend)
+        reasoning = _resolve_agent_reasoning_config_for_chat_mode(
+            lm_backend,
+            resume_chat_mode,
+            model,
+        )
     except ValueError as exc:
         yield {"type": "error", "detail": str(exc)}
         return
-    start_round = int(run.get("rounds") or 0)
     allowlist = policy.effective_allowlist()
     tools = openai_tool_specs(allowlist)
 
@@ -2017,6 +2568,7 @@ def _run_agent_resume_stream(
             reasoning=reasoning,
             max_tool_output_chars=max_tool_output_chars,
             max_cli_line_chars=max_cli_line_chars,
+            agent_chat_mode=resume_chat_mode,
         )
         return
 
@@ -2044,22 +2596,242 @@ def _run_agent_resume_stream(
         max_rounds=max_rounds,
         max_tool_output_chars=max_tool_output_chars,
         max_cli_line_chars=max_cli_line_chars,
+        agent_chat_mode=resume_chat_mode,
+    )
+
+
+def _run_agent_resume_plan_clarification_stream(
+    run_id: str,
+    clarification_id: str,
+    answers: list[Any],
+    *,
+    policy: AgentPolicy,
+) -> Iterator[dict[str, Any]]:
+    """Feed clarification answers into the paused plan-discovery tool call and continue."""
+    max_rounds, max_tool_output_chars, _m, max_cli_line_chars = _agent_limits()
+
+    rid = (run_id or "").strip()
+    cid = (clarification_id or "").strip()
+    if not rid or not cid:
+        yield {"type": "error", "detail": "run_id and clarification_id are required"}
+        return
+
+    run = load_agent_run(rid)
+    if not run:
+        yield {
+            "type": "error",
+            "detail": "Unknown or expired run_id; start a new chat.",
+        }
+        return
+
+    open_cid = str(run.get("open_plan_clarification_id") or "").strip()
+    if not open_cid or open_cid != cid:
+        yield {"type": "error", "detail": "No matching plan clarification gate for this run."}
+        return
+
+    pend = load_pending(cid)
+    if not pend or str(pend.get("kind") or "") != "plan_clarification":
+        yield {"type": "error", "detail": "Clarification session expired or invalid."}
+        return
+
+    questions = pend.get("questions")
+    if not isinstance(questions, list):
+        yield {"type": "error", "detail": "Invalid saved clarification state"}
+        return
+
+    qnorm: list[dict[str, Any]] = []
+    for q in questions:
+        if isinstance(q, dict):
+            qnorm.append(q)
+    if len(qnorm) != len(questions):
+        yield {"type": "error", "detail": "Invalid saved clarification state"}
+        return
+
+    sel_map, other_text_map, aerr = _validate_clarification_answers(
+        qnorm, answers or []
+    )
+    if aerr is not None:
+        yield {"type": "error", "detail": aerr}
+        return
+    if sel_map is None:
+        yield {"type": "error", "detail": "invalid clarification answers"}
+        return
+
+    oa_messages = run["oa_messages"]
+    if not isinstance(oa_messages, list):
+        yield {"type": "error", "detail": "Invalid saved agent state"}
+        return
+
+    tid = str(pend.get("tool_call_id") or "").strip()
+    if not tid:
+        yield {"type": "error", "detail": "Invalid saved clarification state"}
+        return
+
+    model = str(run.get("model") or "gpt-4o-mini").strip() or "gpt-4o-mini"
+    lm_backend = str(run.get("llm_backend") or "openai").strip().lower()
+    if lm_backend not in ("openai", "anthropic"):
+        lm_backend = "openai"
+    start_round = int(run.get("rounds") or 0)
+    resume_chat_mode = _normalize_agent_chat_mode(str(run.get("agent_chat_mode") or ""))
+    if resume_chat_mode != "plan_discover":
+        resume_chat_mode = "plan_discover"
+    try:
+        reasoning = _resolve_agent_reasoning_config_for_chat_mode(
+            lm_backend,
+            resume_chat_mode,
+            model,
+        )
+    except ValueError as exc:
+        yield {"type": "error", "detail": str(exc)}
+        return
+    raw_extras = run.get("plan_resume_final_extras")
+    plan_resume_final_extras: dict[str, Any] | None
+    if isinstance(raw_extras, dict):
+        plan_resume_final_extras = dict(raw_extras)
+    else:
+        plan_resume_final_extras = {"mode": "plan"}
+
+    discover_allowlist = frozenset(policy.allowlist_read | BUILTIN_AGENT_TOOL_NAMES)
+    tools = openai_tool_specs(discover_allowlist)
+
+    if lm_backend == "anthropic":
+        api_key = _resolve_anthropic_api_key()
+        if not api_key:
+            yield {
+                "type": "error",
+                "detail": "Missing ANTHROPIC_API_KEY (required to resume this run)",
+            }
+            return
+        try:
+            from llm_markdown.providers import AnthropicProvider
+        except ImportError:
+            yield {
+                "type": "error",
+                "detail": "Install llm-markdown with the anthropic extra (llm-markdown[anthropic])",
+            }
+            return
+        provider = AnthropicProvider(
+            api_key=api_key,
+            model=model,
+            max_tokens=_resolve_agent_max_completion_tokens(),
+        )
+    else:
+        api_key = _resolve_openai_api_key()
+        if not api_key:
+            yield {
+                "type": "error",
+                "detail": "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)",
+            }
+            return
+        try:
+            from llm_markdown.providers import OpenAIProvider
+        except ImportError:
+            yield {
+                "type": "error",
+                "detail": "Install llm-markdown with the openai extra (llm-markdown[openai])",
+            }
+            return
+        provider = OpenAIProvider(
+            api_key=api_key,
+            model=model,
+            max_tokens=_resolve_agent_max_completion_tokens(),
+        )
+
+    summary = _clarification_answer_summary_for_model(
+        qnorm, sel_map, other_text_map
+    )
+    payload = {
+        "answered": True,
+        "selections": sel_map,
+        "other_text_by_question": other_text_map,
+        "summary_for_model": summary,
+    }
+    out_json = json.dumps(payload)
+    model_body = format_tool_result_for_model(
+        _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION,
+        out_json,
+    )
+    try:
+        _replace_tool_message_content(oa_messages, tid, model_body)
+    except ValueError as exc:
+        yield {"type": "error", "detail": str(exc)}
+        return
+
+    delete_pending(cid)
+    delete_agent_run(rid)
+    yield {"type": "resume_start", "run_id": rid, "model": model, "continuation": True}
+    logger.info(
+        "agent_chat plan_clarification resume_start run_id=%s clarification_id=%s",
+        rid,
+        cid,
+    )
+
+    yield from _run_agent_openai_loop(
+        provider,
+        model,
+        policy,
+        discover_allowlist,
+        tools,
+        oa_messages,
+        start_round,
+        rid,
+        lm_backend=lm_backend,
+        reasoning=reasoning,
+        max_rounds=max_rounds,
+        max_tool_output_chars=max_tool_output_chars,
+        max_cli_line_chars=max_cli_line_chars,
+        final_extras=plan_resume_final_extras,
+        agent_chat_mode=resume_chat_mode,
+        plan_resume_final_extras=plan_resume_final_extras,
     )
 
 
 def iter_agent_chat_stream(
     messages: list,
     attachments: list | None = None,
+    mode: str | None = None,
+    plan_text: str | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Stream agent trace (same contract as ``POST …/agent_chat/stream``)."""
+    """Stream agent trace (same contract as ``POST …/agent_chat/stream``).
+
+    ``mode``:
+    - ``instant`` (default): normal tool loop.
+    - ``plan``: one model turn, no tools; ``final`` includes ``"mode": "plan"``.
+    - ``plan_discover``: tool loop for discovery; may pause with ``awaiting_plan_clarification``.
+    - ``plan_execute``: normal tool loop with system guidance to follow the approved plan.
+
+    ``plan_text``: when ``mode`` is ``plan_execute``, optional full approved plan markdown
+    (injected into the system prompt so the client need not duplicate it in ``messages``).
+    """
     policy = get_agent_policy()
-    yield from _run_agent_chat_stream(messages, attachments, policy=policy)
+    yield from _run_agent_chat_stream(
+        messages,
+        attachments,
+        policy=policy,
+        mode=mode,
+        plan_text=plan_text,
+    )
 
 
 def iter_agent_resume_stream(run_id: str, resolutions: list) -> Iterator[dict[str, Any]]:
     """Stream continued agent trace after mutation confirmation."""
     policy = get_agent_policy()
     yield from _run_agent_resume_stream(run_id, resolutions, policy=policy)
+
+
+def iter_agent_resume_plan_clarification_stream(
+    run_id: str,
+    clarification_id: str,
+    answers: list,
+) -> Iterator[dict[str, Any]]:
+    """Continue plan discovery after the user submits clarification answers."""
+    policy = get_agent_policy()
+    yield from _run_agent_resume_plan_clarification_stream(
+        run_id,
+        clarification_id,
+        answers,
+        policy=policy,
+    )
 
 
 def _run_agent_resume_inbox_stream(
@@ -2154,12 +2926,17 @@ def _run_agent_resume_inbox_stream(
     lm_backend = str(run.get("llm_backend") or "openai").strip().lower()
     if lm_backend not in ("openai", "anthropic"):
         lm_backend = "openai"
+    start_round = int(run.get("rounds") or 0)
+    resume_chat_mode = _normalize_agent_chat_mode(str(run.get("agent_chat_mode") or ""))
     try:
-        reasoning = _resolve_agent_reasoning_config(lm_backend)
+        reasoning = _resolve_agent_reasoning_config_for_chat_mode(
+            lm_backend,
+            resume_chat_mode,
+            model,
+        )
     except ValueError as exc:
         yield {"type": "error", "detail": str(exc)}
         return
-    start_round = int(run.get("rounds") or 0)
     allowlist = policy.effective_allowlist()
     tools = openai_tool_specs(allowlist)
 
@@ -2242,6 +3019,7 @@ def _run_agent_resume_inbox_stream(
                 max_tool_output_chars=max_tool_output_chars,
                 max_cli_line_chars=max_cli_line_chars,
                 chained_from_inbox_resume=True,
+                agent_chat_mode=resume_chat_mode,
             )
             return
 
@@ -2270,6 +3048,7 @@ def _run_agent_resume_inbox_stream(
         max_rounds=max_rounds,
         max_tool_output_chars=max_tool_output_chars,
         max_cli_line_chars=max_cli_line_chars,
+        agent_chat_mode=resume_chat_mode,
     )
 
 

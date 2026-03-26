@@ -43,7 +43,8 @@ const DEFAULT_TRANSCRIBE_PROMPT =
 
 function readViteEnvString(key: string): string | undefined {
   try {
-    const env = (import.meta as unknown as { env?: Record<string, string> }).env;
+    const env = (import.meta as unknown as { env?: Record<string, string> })
+      .env;
     const v = env?.[key];
     return typeof v === "string" && v.trim() ? v.trim() : undefined;
   } catch {
@@ -352,6 +353,8 @@ export function HofAgentComposer({
     onPickFiles,
     conversationEmpty,
     providerWaitNotice,
+    agentMode,
+    setAgentMode,
   } = useHofAgentChat();
 
   const [providerWaitComposerTick, setProviderWaitComposerTick] = useState(0);
@@ -414,9 +417,10 @@ export function HofAgentComposer({
     voiceState === "preparing_mic" ||
     voiceState === "linking_session" ||
     voiceState === "finalizing";
-  const voiceBanner = voiceFeatureEnabled ? voiceBannerContent(voiceState) : null;
-  const showVoiceButton =
-    voiceFeatureEnabled && voiceState !== "unsupported";
+  const voiceBanner = voiceFeatureEnabled
+    ? voiceBannerContent(voiceState)
+    : null;
+  const showVoiceButton = voiceFeatureEnabled && voiceState !== "unsupported";
 
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const attachMenuRef = useRef<HTMLDivElement>(null);
@@ -589,10 +593,7 @@ export function HofAgentComposer({
             voiceBanner.variant,
           )}`}
         >
-          <div
-            className="flex w-7 shrink-0 justify-center"
-            aria-hidden
-          >
+          <div className="flex w-7 shrink-0 justify-center" aria-hidden>
             {voiceIsLive ? (
               <span className="relative mt-0.5 flex size-3 shrink-0">
                 <span className="absolute inline-flex size-full animate-ping rounded-full bg-[var(--color-destructive)] opacity-50" />
@@ -653,16 +654,17 @@ export function HofAgentComposer({
         </p>
       ) : null}
       <div className={controlsRowClassName}>
-        <div ref={attachMenuRef} className="relative shrink-0">
-          <button
-            type="button"
-            disabled={inputLocked}
-            className={squareIconBtnClass}
-            aria-label="Add to message"
-            aria-expanded={attachMenuOpen}
-            aria-haspopup="menu"
-            onClick={() => setAttachMenuOpen((o) => !o)}
-          >
+        <div className="flex shrink-0 items-center gap-1">
+          <div ref={attachMenuRef} className="relative shrink-0">
+            <button
+              type="button"
+              disabled={inputLocked}
+              className={squareIconBtnClass}
+              aria-label="Add to message"
+              aria-expanded={attachMenuOpen}
+              aria-haspopup="menu"
+              onClick={() => setAttachMenuOpen((o) => !o)}
+            >
             {uploadBusy ? (
               <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
             ) : (
@@ -705,6 +707,34 @@ export function HofAgentComposer({
               </button>
             </div>
           ) : null}
+          </div>
+          <div className="relative flex shrink-0 items-center rounded-md border border-border bg-surface text-[11px] font-medium">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setAgentMode("instant")}
+              className={`rounded-l-[5px] px-2 py-1 transition-colors ${
+                agentMode === "instant"
+                  ? "bg-foreground text-background"
+                  : "text-secondary hover:text-foreground"
+              }`}
+            >
+              <Sparkles className="mr-1 inline size-3" aria-hidden />
+              Instant
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setAgentMode("plan")}
+              className={`rounded-r-[5px] px-2 py-1 transition-colors ${
+                agentMode === "plan"
+                  ? "bg-foreground text-background"
+                  : "text-secondary hover:text-foreground"
+              }`}
+            >
+              Plan
+            </button>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {showVoiceButton ? (
@@ -723,9 +753,7 @@ export function HofAgentComposer({
                     ? "Stop voice input"
                     : "Start voice input"
               }
-              aria-pressed={
-                voiceSessionActive && voiceState !== "finalizing"
-              }
+              aria-pressed={voiceSessionActive && voiceState !== "finalizing"}
               onClick={onVoiceToggle}
             >
               {voiceConnecting ? (
@@ -833,7 +861,9 @@ export function HofAgentComposer({
       ) : null}
       <div
         className={`${inputShellClassName}${
-          voiceSessionActive ? " ring-2 ring-inset ring-[var(--color-accent)]/40" : ""
+          voiceSessionActive
+            ? " ring-2 ring-inset ring-[var(--color-accent)]/40"
+            : ""
         }`}
       >
         {composerBody}
@@ -863,161 +893,164 @@ export function HofAgentComposer({
             className={SKILLS_DIALOG_PANEL_CLASS}
             onMouseDown={(e) => e.stopPropagation()}
           >
-          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3">
-            <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              <span className="text-base font-medium text-foreground">
-                Agent skills
-              </span>
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span className="text-base font-medium text-foreground">
+                  Agent skills
+                </span>
+                {!skillsLoading &&
+                !skillsErr &&
+                skillsData?.configured &&
+                skillsData.tools.length > 0 ? (
+                  <span className="tabular-nums text-sm font-normal text-secondary">
+                    {skillsSearchQuery.trim()
+                      ? `${filteredSkills.length} of ${skillsData.tools.length}`
+                      : skillsData.tools.length}
+                  </span>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="rounded-md px-2 py-1 text-xs text-secondary hover:bg-hover hover:text-foreground"
+                onClick={closeSkillsDialog}
+              >
+                Close
+              </button>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-sm">
+              {skillsLoading ? (
+                <div className="flex shrink-0 items-center gap-2 p-4 text-secondary">
+                  <Loader2
+                    className="size-4 shrink-0 animate-spin"
+                    aria-hidden
+                  />
+                  <span>Loading…</span>
+                </div>
+              ) : null}
+              {!skillsLoading && skillsErr ? (
+                <p className="shrink-0 px-4 py-3 text-[13px] text-[var(--color-destructive)]">
+                  {skillsErr}
+                </p>
+              ) : null}
               {!skillsLoading &&
               !skillsErr &&
-              skillsData?.configured &&
-              skillsData.tools.length > 0 ? (
-                <span className="tabular-nums text-sm font-normal text-secondary">
-                  {skillsSearchQuery.trim()
-                    ? `${filteredSkills.length} of ${skillsData.tools.length}`
-                    : skillsData.tools.length}
-                </span>
+              skillsData &&
+              !skillsData.configured ? (
+                <p className="shrink-0 px-4 py-3 text-secondary">
+                  Agent is not configured on this server.
+                </p>
               ) : null}
-            </div>
-            <button
-              type="button"
-              className="rounded-md px-2 py-1 text-xs text-secondary hover:bg-hover hover:text-foreground"
-              onClick={closeSkillsDialog}
-            >
-              Close
-            </button>
-          </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-sm">
-            {skillsLoading ? (
-              <div className="flex shrink-0 items-center gap-2 p-4 text-secondary">
-                <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
-                <span>Loading…</span>
-              </div>
-            ) : null}
-            {!skillsLoading && skillsErr ? (
-              <p className="shrink-0 px-4 py-3 text-[13px] text-[var(--color-destructive)]">
-                {skillsErr}
-              </p>
-            ) : null}
-            {!skillsLoading &&
-            !skillsErr &&
-            skillsData &&
-            !skillsData.configured ? (
-              <p className="shrink-0 px-4 py-3 text-secondary">
-                Agent is not configured on this server.
-              </p>
-            ) : null}
-            {!skillsLoading &&
-            !skillsErr &&
-            skillsData &&
-            skillsData.configured &&
-            skillsData.tools.length === 0 ? (
-              <p className="shrink-0 px-4 py-3 text-secondary">
-                No tools in the agent allowlist.
-              </p>
-            ) : null}
-            {!skillsLoading &&
-            !skillsErr &&
-            skillsData &&
-            skillsData.tools.length > 0 ? (
-              <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-                <div className="shrink-0 border-b border-border px-3 py-2">
-                  <div className="relative">
-                    <Search
-                      className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-tertiary"
-                      strokeWidth={2}
-                      aria-hidden
-                    />
-                    <input
-                      type="search"
-                      value={skillsSearchQuery}
-                      onChange={(e) => setSkillsSearchQuery(e.target.value)}
-                      placeholder="Search skills…"
-                      aria-label="Search skills"
-                      className="w-full rounded-md border border-border bg-surface py-1.5 pl-8 pr-2 text-sm text-foreground placeholder:text-tertiary outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/35"
-                    />
-                  </div>
-                </div>
+              {!skillsLoading &&
+              !skillsErr &&
+              skillsData &&
+              skillsData.configured &&
+              skillsData.tools.length === 0 ? (
+                <p className="shrink-0 px-4 py-3 text-secondary">
+                  No tools in the agent allowlist.
+                </p>
+              ) : null}
+              {!skillsLoading &&
+              !skillsErr &&
+              skillsData &&
+              skillsData.tools.length > 0 ? (
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-                  {filteredSkills.length === 0 ? (
-                    <p className="p-4 text-[13px] text-secondary">
-                      No skills match your search.
-                    </p>
-                  ) : (
-                    <ul
-                      className="min-h-0 flex-1 list-none space-y-0.5 overflow-y-auto overflow-x-hidden overscroll-contain p-2 [scrollbar-gutter:stable]"
-                      role="listbox"
-                    >
-                      {filteredSkills.map((t) => {
-                        const preview = skillListPreviewLine(t);
-                        const selected = skillsSelectedTool?.name === t.name;
-                        return (
-                          <li key={t.name}>
-                            <button
-                              type="button"
-                              role="option"
-                              aria-selected={selected}
-                              onClick={() => setSkillsSelectedTool(t)}
-                              className={`flex w-full flex-col gap-1 rounded-md border px-2.5 py-2 text-left transition-colors ${
-                                selected
-                                  ? "border-[var(--color-accent)]/40 bg-[var(--color-accent)]/8"
-                                  : "border-transparent hover:bg-hover"
-                              }`}
-                            >
-                              <div className="flex min-w-0 items-start justify-between gap-2">
-                                <span className="min-w-0 flex-1 text-sm font-medium leading-snug text-foreground">
-                                  {humanizeToolName(t.name)}
-                                </span>
-                                {t.mutation ? (
-                                  <span className="shrink-0 rounded bg-hover px-1.5 py-0.5 text-[10px] font-medium leading-tight text-secondary">
-                                    {REQUIRES_APPROVAL_LABEL}
+                  <div className="shrink-0 border-b border-border px-3 py-2">
+                    <div className="relative">
+                      <Search
+                        className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-tertiary"
+                        strokeWidth={2}
+                        aria-hidden
+                      />
+                      <input
+                        type="search"
+                        value={skillsSearchQuery}
+                        onChange={(e) => setSkillsSearchQuery(e.target.value)}
+                        placeholder="Search skills…"
+                        aria-label="Search skills"
+                        className="w-full rounded-md border border-border bg-surface py-1.5 pl-8 pr-2 text-sm text-foreground placeholder:text-tertiary outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/35"
+                      />
+                    </div>
+                  </div>
+                  <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+                    {filteredSkills.length === 0 ? (
+                      <p className="p-4 text-[13px] text-secondary">
+                        No skills match your search.
+                      </p>
+                    ) : (
+                      <ul
+                        className="min-h-0 flex-1 list-none space-y-0.5 overflow-y-auto overflow-x-hidden overscroll-contain p-2 [scrollbar-gutter:stable]"
+                        role="listbox"
+                      >
+                        {filteredSkills.map((t) => {
+                          const preview = skillListPreviewLine(t);
+                          const selected = skillsSelectedTool?.name === t.name;
+                          return (
+                            <li key={t.name}>
+                              <button
+                                type="button"
+                                role="option"
+                                aria-selected={selected}
+                                onClick={() => setSkillsSelectedTool(t)}
+                                className={`flex w-full flex-col gap-1 rounded-md border px-2.5 py-2 text-left transition-colors ${
+                                  selected
+                                    ? "border-[var(--color-accent)]/40 bg-[var(--color-accent)]/8"
+                                    : "border-transparent hover:bg-hover"
+                                }`}
+                              >
+                                <div className="flex min-w-0 items-start justify-between gap-2">
+                                  <span className="min-w-0 flex-1 text-sm font-medium leading-snug text-foreground">
+                                    {humanizeToolName(t.name)}
+                                  </span>
+                                  {t.mutation ? (
+                                    <span className="shrink-0 rounded bg-hover px-1.5 py-0.5 text-[10px] font-medium leading-tight text-secondary">
+                                      {REQUIRES_APPROVAL_LABEL}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                {preview ? (
+                                  <span className="line-clamp-3 text-[11px] leading-snug text-secondary">
+                                    {preview}
                                   </span>
                                 ) : null}
-                              </div>
-                              {preview ? (
-                                <span className="line-clamp-3 text-[11px] leading-snug text-secondary">
-                                  {preview}
-                                </span>
-                              ) : null}
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                  {skillsSelectedTool ? (
-                    <>
-                      <button
-                        type="button"
-                        aria-label="Close skill details"
-                        className="absolute inset-0 z-[1] bg-foreground/10 transition-opacity"
-                        onClick={() => {
-                          setSkillsSelectedTool(null);
-                          setSkillPanelEntered(false);
-                        }}
-                      />
-                      <div
-                        className={`absolute inset-y-0 right-0 z-[2] flex min-h-0 w-full max-w-[min(100%,22rem)] flex-col border-l border-border bg-background shadow-xl transition-transform duration-200 ease-out sm:max-w-[26rem] ${
-                          skillPanelEntered
-                            ? "translate-x-0"
-                            : "translate-x-full"
-                        }`}
-                        onMouseDown={(e) => e.stopPropagation()}
-                      >
-                        <SkillDetailPanel
-                          tool={skillsSelectedTool}
-                          onBack={() => {
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                    {skillsSelectedTool ? (
+                      <>
+                        <button
+                          type="button"
+                          aria-label="Close skill details"
+                          className="absolute inset-0 z-[1] bg-foreground/10 transition-opacity"
+                          onClick={() => {
                             setSkillsSelectedTool(null);
                             setSkillPanelEntered(false);
                           }}
                         />
-                      </div>
-                    </>
-                  ) : null}
+                        <div
+                          className={`absolute inset-y-0 right-0 z-[2] flex min-h-0 w-full max-w-[min(100%,22rem)] flex-col border-l border-border bg-background shadow-xl transition-transform duration-200 ease-out sm:max-w-[26rem] ${
+                            skillPanelEntered
+                              ? "translate-x-0"
+                              : "translate-x-full"
+                          }`}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >
+                          <SkillDetailPanel
+                            tool={skillsSelectedTool}
+                            onBack={() => {
+                              setSkillsSelectedTool(null);
+                              setSkillPanelEntered(false);
+                            }}
+                          />
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            ) : null}
-          </div>
+              ) : null}
+            </div>
           </div>
         </div>
       </dialog>

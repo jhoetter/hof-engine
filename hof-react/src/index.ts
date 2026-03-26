@@ -10,9 +10,15 @@ export {
   type HofAgentChatContextValue,
   type HofAgentChatProviderProps,
   type ProviderWaitNotice,
+  type AgentMode,
+  type AgentPlanPhase,
+  type PlanClarificationBarrierV1,
 } from "./agent/hofAgentChatContext";
 export type { AssistantMarkdownLinkClickHandler } from "./agent/assistantMarkdownLinkContext";
-export { HofAgentMessages, type HofAgentMessagesProps } from "./agent/HofAgentMessages";
+export {
+  HofAgentMessages,
+  type HofAgentMessagesProps,
+} from "./agent/HofAgentMessages";
 export { HofAgentPendingApprovalBar } from "./agent/HofAgentPendingApprovalBar";
 export { HofAgentProviderWaitBanner } from "./agent/HofAgentProviderWaitBanner";
 export { defaultPollInboxReviewWatch } from "./agent/hofAgentChatContext";
@@ -35,7 +41,27 @@ export {
 export type {
   AgentConversationDraftV1,
   AgentConversationStateV1,
+  AgentConversationPlanV1,
+  PlanClarificationQuestion,
 } from "./agent/conversationTypes";
+export {
+  HofAgentPlanClarificationCard,
+  type HofAgentPlanClarificationCardProps,
+  type PlanClarificationAnswerWire,
+} from "./agent/HofAgentPlanClarificationCard";
+export {
+  HofAgentPlanCard,
+  type HofAgentPlanCardProps,
+} from "./agent/HofAgentPlanCard";
+export { PLAN_EXECUTE_USER_MARKER } from "./agent/hofAgentChatModel";
+export {
+  parsePlanMarkdownTodos,
+  parseStructuredPlan,
+  preferPlanTaskListBody,
+  sliceMarkdownFromFirstTaskListLine,
+  type ParsedPlanTodo,
+  type StructuredPlan,
+} from "./agent/planMarkdownTodos";
 export { FunctionResultDisplay } from "./agent/FunctionResultDisplay";
 export { useHofTable } from "./hooks/useHofTable";
 export { useHofFunction } from "./hooks/useHofFunction";

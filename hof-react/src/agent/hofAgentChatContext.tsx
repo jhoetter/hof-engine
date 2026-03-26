@@ -19,7 +19,10 @@ import {
   streamHofFunction,
   type HofStreamEvent,
 } from "../hooks/streamHofFunction";
-import type { AgentConversationStateV1 } from "./conversationTypes";
+import type {
+  AgentConversationStateV1,
+  PlanClarificationQuestion,
+} from "./conversationTypes";
 import type {
   AgentAttachment,
   ApprovalBarrier,
@@ -40,8 +43,14 @@ import {
   mutationPendingIdsFromBlocks,
   newId,
   normalizeAgentCliDisplayLine,
+  PLAN_EXECUTE_USER_MARKER,
+  stripLastAssistantBlockForPlan,
   toolResultAwaitingUserConfirmation,
 } from "./hofAgentChatModel";
+import {
+  parseStructuredPlan,
+  preferPlanTaskListBody,
+} from "./planMarkdownTodos";
 import {
   AssistantMarkdownLinkProvider,
   type AssistantMarkdownLinkClickHandler,
@@ -59,8 +68,7 @@ function pendingDetailsFromMutationPendingEvent(
 ): PendingDetailsEntry {
   const hasPv = Object.prototype.hasOwnProperty.call(ev, "preview");
   const argsRaw = (ev as { arguments?: unknown }).arguments;
-  const arguments_json =
-    typeof argsRaw === "string" ? argsRaw : undefined;
+  const arguments_json = typeof argsRaw === "string" ? argsRaw : undefined;
   return {
     name: typeof ev.name === "string" ? ev.name : "",
     cli_line:
@@ -90,7 +98,11 @@ function approvalBarrierItemFromDetails(
 }
 
 /** Terminal ``processing_status`` for receipt PDF pipeline (matches spreadsheet-app ``_RECEIPT_PROCESSING_TERMINAL``). */
-const RECEIPT_PROCESSING_TERMINAL = new Set(["ready", "needs_review", "failed"]);
+const RECEIPT_PROCESSING_TERMINAL = new Set([
+  "ready",
+  "needs_review",
+  "failed",
+]);
 
 /** Default client poll: expense/revenue/receipt row no longer needs Inbox HITL. */
 export async function defaultPollInboxReviewWatch(
@@ -99,21 +111,30 @@ export async function defaultPollInboxReviewWatch(
   const rt = w.record_type.trim().toLowerCase();
   try {
     if (rt === "expense") {
-      const row = await postHofFunction<Record<string, unknown>>("get_expense", {
-        id: w.record_id,
-      });
+      const row = await postHofFunction<Record<string, unknown>>(
+        "get_expense",
+        {
+          id: w.record_id,
+        },
+      );
       return String(row?.approval_status ?? "") !== "pending_review";
     }
     if (rt === "revenue") {
-      const row = await postHofFunction<Record<string, unknown>>("get_revenue", {
-        id: w.record_id,
-      });
+      const row = await postHofFunction<Record<string, unknown>>(
+        "get_revenue",
+        {
+          id: w.record_id,
+        },
+      );
       return String(row?.confirmation_status ?? "") !== "pending_review";
     }
     if (rt === "receipt" || rt === "receipt_document") {
-      const row = await postHofFunction<Record<string, unknown>>("get_receipt_document", {
-        id: w.record_id,
-      });
+      const row = await postHofFunction<Record<string, unknown>>(
+        "get_receipt_document",
+        {
+          id: w.record_id,
+        },
+      );
       const ps = String(row?.processing_status ?? "").toLowerCase();
       if (!RECEIPT_PROCESSING_TERMINAL.has(ps)) {
         return false;
@@ -157,9 +178,7 @@ function updateProviderWaitFromStreamType(
   if (typ === "provider_wait") {
     const raw = (ev as { seconds?: unknown }).seconds;
     const sec =
-      typeof raw === "number" && Number.isFinite(raw)
-        ? Math.max(0, raw)
-        : 0;
+      typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, raw) : 0;
     const rounded = Math.max(1, Math.round(sec));
     const reasonRaw = (ev as { reason?: unknown }).reason;
     const reason =
@@ -207,6 +226,26 @@ export type HofAgentChatProps = {
    * the URL in the host (e.g. open same-origin inbox in an iframe).
    */
   onAssistantMarkdownLinkClick?: AssistantMarkdownLinkClickHandler;
+  /** Initial chat mode; default ``"instant"``. */
+  initialAgentMode?: AgentMode;
+  /** Merged into ``agent_resume_plan_clarification`` POST body. Defaults to ``prepareAgentResumeRequest``. */
+  prepareAgentResumePlanClarificationRequest?: () => Promise<Record<string, unknown>>;
+};
+
+export type AgentMode = "instant" | "plan";
+export type AgentPlanPhase =
+  | null
+  | "generating"
+  | "clarifying"
+  | "ready"
+  | "executing"
+  | "done";
+export type AgentChatRequestMode = "instant" | "plan" | "plan_execute";
+
+export type PlanClarificationBarrierV1 = {
+  runId: string;
+  clarificationId: string;
+  questions: PlanClarificationQuestion[];
 };
 
 export type HofAgentChatProviderProps = Omit<HofAgentChatProps, "className"> & {
@@ -259,6 +298,27 @@ export type HofAgentChatContextValue = {
    * automatically once every pending id has approve/reject set; this is for manual triggers.
    */
   confirmPendingMutations: () => void;
+  agentMode: AgentMode;
+  setAgentMode: Dispatch<SetStateAction<AgentMode>>;
+  planPhase: AgentPlanPhase;
+  planText: string;
+  setPlanText: Dispatch<SetStateAction<string>>;
+  planRunId: string | null;
+  planClarificationBarrier: PlanClarificationBarrierV1 | null;
+  planClarificationSubmittedSummary: readonly {
+    prompt: string;
+    selectedLabels: string[];
+  }[];
+  submitPlanClarification: (
+    answers: {
+      question_id: string;
+      selected_option_ids: string[];
+      other_text?: string;
+    }[],
+  ) => void;
+  dismissPlanClarificationBarrier: () => void;
+  planTodoDoneIndices: readonly number[];
+  executePlan: () => void;
 };
 
 const HofAgentChatContext = createContext<HofAgentChatContextValue | null>(
@@ -268,9 +328,7 @@ const HofAgentChatContext = createContext<HofAgentChatContextValue | null>(
 export function useHofAgentChat(): HofAgentChatContextValue {
   const v = useContext(HofAgentChatContext);
   if (!v) {
-    throw new Error(
-      "useHofAgentChat must be used within HofAgentChatProvider",
-    );
+    throw new Error("useHofAgentChat must be used within HofAgentChatProvider");
   }
   return v;
 }
@@ -286,22 +344,23 @@ export function HofAgentChatProvider({
   prepareAgentResumeInboxRequest,
   pollInboxReviewWatch,
   onAssistantMarkdownLinkClick,
+  initialAgentMode = "instant",
+  prepareAgentResumePlanClarificationRequest,
   children,
 }: HofAgentChatProviderProps) {
   const [thread, setThread] = useState<ThreadItem[]>([]);
   const [liveBlocks, setLiveBlocks] = useState<LiveBlock[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [thinkingEpisodeStartedAtMs, setThinkingEpisodeStartedAtMs] =
-    useState<number | null>(null);
+  const [thinkingEpisodeStartedAtMs, setThinkingEpisodeStartedAtMs] = useState<
+    number | null
+  >(null);
   const thinkingEpisodeStartedAtRef = useRef<number | null>(null);
   const updateThinkingEpisodeStart = useCallback((ms: number | null) => {
     thinkingEpisodeStartedAtRef.current = ms;
     setThinkingEpisodeStartedAtMs(ms);
   }, []);
-  const [attachmentQueue, setAttachmentQueue] = useState<AgentAttachment[]>(
-    [],
-  );
+  const [attachmentQueue, setAttachmentQueue] = useState<AgentAttachment[]>([]);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadErr, setUploadErr] = useState<string | null>(null);
   const [approvalBarrier, setApprovalBarrier] =
@@ -309,8 +368,9 @@ export function HofAgentChatProvider({
   const [approvalDecisions, setApprovalDecisions] = useState<
     Record<string, boolean | null>
   >({});
-  const [mutationOutcomeByPendingId, setMutationOutcomeByPendingId] =
-    useState<Record<string, boolean | undefined>>({});
+  const [mutationOutcomeByPendingId, setMutationOutcomeByPendingId] = useState<
+    Record<string, boolean | undefined>
+  >({});
   const [inboxReviewBarrier, setInboxReviewBarrier] =
     useState<InboxReviewBarrier | null>(null);
   const [inboxPollWaiting, setInboxPollWaiting] = useState(false);
@@ -328,7 +388,9 @@ export function HofAgentChatProvider({
     async () => {},
   );
   const inboxReviewBarrierRef = useRef<InboxReviewBarrier | null>(null);
-  const pollInboxWatchRef = useRef(pollInboxReviewWatch ?? defaultPollInboxReviewWatch);
+  const pollInboxWatchRef = useRef(
+    pollInboxReviewWatch ?? defaultPollInboxReviewWatch,
+  );
   const resumeMergeContinuationRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const liveBlocksRef = useRef<LiveBlock[]>([]);
@@ -337,13 +399,43 @@ export function HofAgentChatProvider({
   const currentAgentRunIdRef = useRef("");
   const assistantStreamPhaseRef = useRef<"model" | "summary" | null>(null);
   const skipNextPersistRef = useRef(true);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lastTerminalStreamEventRef = useRef<any>(null);
+
+  const [agentMode, setAgentMode] = useState<AgentMode>(initialAgentMode);
+  const [planPhase, setPlanPhase] = useState<AgentPlanPhase>(null);
+  const [planText, setPlanText] = useState("");
+  const [planRunId, setPlanRunId] = useState<string | null>(null);
+  const [planClarificationBarrier, setPlanClarificationBarrier] =
+    useState<PlanClarificationBarrierV1 | null>(null);
+  const [planClarificationSubmittedSummary, setPlanClarificationSubmittedSummary] =
+    useState<{ prompt: string; selectedLabels: string[] }[]>([]);
+  const [planTodoDoneIndices, setPlanTodoDoneIndices] = useState<number[]>([]);
+  const planTextRef = useRef("");
+  const planDraftStreamingActiveRef = useRef(false);
+  const planDraftBufferRef = useRef("");
+  const chatRequestModeRef = useRef<AgentChatRequestMode>(
+    initialAgentMode === "plan" ? "plan" : "instant",
+  );
+  /** True after Execute plan until stream ends with ``final`` or ``error`` (survives ``awaiting_confirmation``). */
+  const planExecuteActiveRef = useRef(false);
+
+  useEffect(() => {
+    planTextRef.current = planText;
+  }, [planText]);
+
+  useEffect(() => {
+    chatRequestModeRef.current =
+      agentMode === "plan" ? "plan" : "instant";
+  }, [agentMode]);
 
   useEffect(() => {
     inboxReviewBarrierRef.current = inboxReviewBarrier;
   }, [inboxReviewBarrier]);
 
   useEffect(() => {
-    pollInboxWatchRef.current = pollInboxReviewWatch ?? defaultPollInboxReviewWatch;
+    pollInboxWatchRef.current =
+      pollInboxReviewWatch ?? defaultPollInboxReviewWatch;
   }, [pollInboxReviewWatch]);
 
   useLayoutEffect(() => {
@@ -370,12 +462,15 @@ export function HofAgentChatProvider({
     const d = snap.draft;
     if (d?.liveBlocks && Array.isArray(d.liveBlocks)) {
       const lb = d.liveBlocks as LiveBlock[];
-      const th = (Array.isArray(snap.thread) ? snap.thread : []) as ThreadItem[];
+      const th = (
+        Array.isArray(snap.thread) ? snap.thread : []
+      ) as ThreadItem[];
       const last = th.length > 0 ? th[th.length - 1] : undefined;
       // Saved state sometimes had both a final ``run`` on the thread and the same blocks still
       // in ``draft.liveBlocks`` (persist race). That paints the whole turn twice after reload/fetch.
-      const draftInbox = (d as { inboxReviewBarrier?: { runId?: string } | null })
-        .inboxReviewBarrier;
+      const draftInbox = (
+        d as { inboxReviewBarrier?: { runId?: string } | null }
+      ).inboxReviewBarrier;
       const discardDraftLive =
         lb.length > 0 &&
         !d.approvalBarrier?.runId &&
@@ -415,6 +510,44 @@ export function HofAgentChatProvider({
     setAttachmentQueue([]);
     setInput("");
     setUploadErr(null);
+    const p = snap.plan;
+    if (p && typeof p === "object") {
+      if (p.phase) {
+        setPlanPhase(p.phase);
+      }
+      if (typeof p.text === "string") {
+        setPlanText(p.text);
+      }
+      if (typeof p.runId === "string" || p.runId === null) {
+        setPlanRunId(p.runId);
+      }
+      if (p.clarificationBarrier) {
+        setPlanClarificationBarrier(
+          p.clarificationBarrier as PlanClarificationBarrierV1,
+        );
+      }
+      if (Array.isArray(p.planTodoDoneIndices)) {
+        setPlanTodoDoneIndices(p.planTodoDoneIndices as number[]);
+      }
+      const cs = (p as { clarificationSummary?: unknown }).clarificationSummary;
+      if (Array.isArray(cs)) {
+        const rows: { prompt: string; selectedLabels: string[] }[] = [];
+        for (const row of cs) {
+          if (row && typeof row === "object") {
+            const o = row as Record<string, unknown>;
+            const prompt = typeof o.prompt === "string" ? o.prompt : "";
+            const labelsRaw = o.selectedLabels;
+            const selectedLabels = Array.isArray(labelsRaw)
+              ? labelsRaw.map((x) => String(x))
+              : [];
+            rows.push({ prompt, selectedLabels });
+          }
+        }
+        if (rows.length > 0) {
+          setPlanClarificationSubmittedSummary(rows);
+        }
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: hydrate only from initial mount props; parent uses ``key`` to switch conversations
   }, []);
 
@@ -448,6 +581,11 @@ export function HofAgentChatProvider({
         approvalBarrier !== null ||
         inboxReviewBarrier !== null ||
         busy;
+      const hasPlan =
+        planPhase !== null ||
+        planText.length > 0 ||
+        planRunId !== null ||
+        planClarificationBarrier !== null;
       const state: AgentConversationStateV1 = {
         version: 1,
         thread: structuredClone(thread) as unknown[],
@@ -458,6 +596,20 @@ export function HofAgentChatProvider({
               approvalBarrier,
               inboxReviewBarrier,
               approvalDecisions: { ...approvalDecisions },
+            }
+          : undefined,
+        plan: hasPlan
+          ? {
+              phase: planPhase ?? "generating",
+              text: planText,
+              runId: planRunId,
+              clarificationBarrier: planClarificationBarrier,
+              ...(planClarificationSubmittedSummary.length > 0
+                ? {
+                    clarificationSummary: [...planClarificationSubmittedSummary],
+                  }
+                : {}),
+              planTodoDoneIndices,
             }
           : undefined,
       };
@@ -474,6 +626,12 @@ export function HofAgentChatProvider({
     busy,
     onPersist,
     persistDebounceMs,
+    planPhase,
+    planText,
+    planRunId,
+    planClarificationBarrier,
+    planClarificationSubmittedSummary,
+    planTodoDoneIndices,
   ]);
 
   useEffect(() => {
@@ -521,7 +679,10 @@ export function HofAgentChatProvider({
   const flushLiveToThread = useCallback(
     (
       blocks: LiveBlock[],
-      options?: { mergeContinuation?: boolean },
+      options?: {
+        mergeContinuation?: boolean;
+        presetRunId?: string;
+      },
     ) => {
       if (blocks.length === 0) {
         return;
@@ -529,6 +690,7 @@ export function HofAgentChatProvider({
       const cleaned = compactBlocksForHistory(blocks);
       const toStore = cleaned.length > 0 ? cleaned : blocks;
       const mergeContinuation = options?.mergeContinuation === true;
+      const presetRunId = options?.presetRunId;
       setThread((t) => {
         if (
           mergeContinuation &&
@@ -539,7 +701,11 @@ export function HofAgentChatProvider({
           if (last.kind !== "run") {
             return [
               ...t,
-              { kind: "run", id: newId(), blocks: structuredClone(toStore) },
+              {
+                kind: "run",
+                id: presetRunId ?? newId(),
+                blocks: structuredClone(toStore),
+              },
             ];
           }
           const merged: LiveBlock[] = [
@@ -551,15 +717,42 @@ export function HofAgentChatProvider({
         }
         return [
           ...t,
-          { kind: "run", id: newId(), blocks: structuredClone(toStore) },
+          {
+            kind: "run",
+            id: presetRunId ?? newId(),
+            blocks: structuredClone(toStore),
+          },
         ];
       });
     },
     [],
   );
 
+  /** When a plan_execute stream ends with ``final`` or ``error``, update phase and todo state. */
+  const applyPlanExecuteStreamCompletion = useCallback((termTyp: string) => {
+    if (!planExecuteActiveRef.current) {
+      return;
+    }
+    if (termTyp === "final" || termTyp === "error") {
+      planExecuteActiveRef.current = false;
+    }
+    if (termTyp === "final") {
+      const n = parseStructuredPlan(planTextRef.current.trim()).todos.length;
+      if (n > 0) {
+        setPlanTodoDoneIndices(Array.from({ length: n }, (_, i) => i));
+      }
+      setPlanPhase("done");
+    }
+  }, []);
+
   const runAgent = useCallback(
-    async (items: ThreadItem[]) => {
+    async (
+      items: ThreadItem[],
+      requestModeOverride?: AgentChatRequestMode,
+      planExecuteTextOverride?: string,
+    ) => {
+      const effectiveMode =
+        requestModeOverride ?? chatRequestModeRef.current;
       const myId = ++reqIdRef.current;
       abortRef.current?.abort();
       abortRef.current = new AbortController();
@@ -568,6 +761,14 @@ export function HofAgentChatProvider({
       liveBlocksRef.current = [];
       setLiveBlocks([]);
       currentAgentRunIdRef.current = "";
+      if (effectiveMode === "plan") {
+        planDraftStreamingActiveRef.current = true;
+        planDraftBufferRef.current = "";
+        setPlanText("");
+        setPlanPhase("generating");
+      } else {
+        planDraftStreamingActiveRef.current = false;
+      }
       const msgs = threadToApiMessages(items);
       const attachments = collectThreadAttachments(items);
       try {
@@ -583,6 +784,18 @@ export function HofAgentChatProvider({
           const extra = await prepareAgentChatRequest();
           Object.assign(body, extra);
         }
+        const apiMode =
+          effectiveMode === "plan" ? "plan_discover" : effectiveMode;
+        if (apiMode !== "instant") {
+          body.mode = apiMode;
+        }
+        if (apiMode === "plan_execute") {
+          const pt = (planExecuteTextOverride ?? "").trim();
+          if (pt) {
+            body.plan_text = pt;
+          }
+        }
+        lastTerminalStreamEventRef.current = null;
         await streamHofFunction("agent_chat", body, {
           signal: abortRef.current.signal,
           onEvent: (ev) => {
@@ -590,6 +803,30 @@ export function HofAgentChatProvider({
               return;
             }
             const typ = typeof ev.type === "string" ? ev.type : "";
+            if (
+              typ === "final" ||
+              typ === "awaiting_confirmation" ||
+              typ === "awaiting_inbox_review" ||
+              typ === "awaiting_plan_clarification" ||
+              typ === "error"
+            ) {
+              lastTerminalStreamEventRef.current = ev;
+            }
+            if (typ === "plan_todo_update") {
+              const di = (ev as { done_indices?: unknown }).done_indices;
+              if (Array.isArray(di)) {
+                setPlanTodoDoneIndices((prev) => {
+                  const s = new Set(prev);
+                  for (const x of di) {
+                    const n = Number(x);
+                    if (Number.isFinite(n)) {
+                      s.add(n);
+                    }
+                  }
+                  return Array.from(s).sort((a, b) => a - b);
+                });
+              }
+            }
             if (typ === "run_start") {
               assistantStreamPhaseRef.current = null;
               pendingDetailsRef.current.clear();
@@ -601,6 +838,30 @@ export function HofAgentChatProvider({
               setInboxResumeError(null);
               setProviderWaitNotice(null);
               updateThinkingEpisodeStart(Date.now());
+            }
+            if (effectiveMode === "plan" && typ === "tool_call") {
+              planDraftBufferRef.current = "";
+              setPlanText("");
+            }
+            if (
+              planDraftStreamingActiveRef.current &&
+              typ === "assistant_delta"
+            ) {
+              const chunk =
+                typeof (ev as { text?: unknown }).text === "string"
+                  ? (ev as { text: string }).text
+                  : "";
+              if (chunk) {
+                planDraftBufferRef.current += chunk;
+                setPlanText(planDraftBufferRef.current);
+              }
+            }
+            if (
+              typ === "final" ||
+              typ === "awaiting_plan_clarification" ||
+              typ === "error"
+            ) {
+              planDraftStreamingActiveRef.current = false;
             }
             updateProviderWaitFromStreamType(typ, ev, setProviderWaitNotice);
             if (typ === "phase") {
@@ -671,10 +932,14 @@ export function HofAgentChatProvider({
               }
             }
             setLiveBlocks((prev) => {
-              const et = typeof evForBlocks.type === "string" ? evForBlocks.type : "";
+              const et =
+                typeof evForBlocks.type === "string"
+                  ? evForBlocks.type
+                  : "";
               const next = applyStreamEventWithDedupe(prev, evForBlocks, {
                 assistantStreamPhase: assistantStreamPhaseRef.current,
-                thinkingEpisodeStartedAtMs: thinkingEpisodeStartedAtRef.current,
+                thinkingEpisodeStartedAtMs:
+                  thinkingEpisodeStartedAtRef.current,
                 ...(et === "assistant_done"
                   ? { assistantDoneClockMs: Date.now() }
                   : {}),
@@ -727,11 +992,93 @@ export function HofAgentChatProvider({
             >,
           );
         }
-        if (doneBlocks.length > 0) {
+        const term = lastTerminalStreamEventRef.current;
+        const termTyp =
+          term && typeof term.type === "string" ? String(term.type) : "";
+        const termMode =
+          term && typeof term.mode === "string" ? String(term.mode) : "";
+        if (
+          termTyp === "final" &&
+          termMode === "plan" &&
+          effectiveMode === "plan"
+        ) {
+          const replyRaw = term?.reply;
+          const reply =
+            typeof replyRaw === "string" ? replyRaw.trim() : "";
+          const planRid = newId();
+          setPlanRunId(planRid);
+          const toFlush = stripLastAssistantBlockForPlan(doneBlocks);
+          if (toFlush.length > 0) {
+            flushLiveToThread(structuredClone(toFlush), {
+              presetRunId: planRid,
+            });
+          }
+          setPlanText(preferPlanTaskListBody(reply));
+          setPlanPhase("ready");
+          setPlanClarificationBarrier(null);
+        } else if (doneBlocks.length > 0) {
           flushLiveToThread(structuredClone(doneBlocks));
+        }
+        if (termTyp === "awaiting_plan_clarification" && term) {
+          const rid = coerceRunId(term.run_id);
+          const clarificationId = String(term.clarification_id ?? "").trim();
+          const qs = term.questions;
+          const questions: PlanClarificationQuestion[] = [];
+          if (Array.isArray(qs)) {
+            for (const raw of qs) {
+              if (raw && typeof raw === "object") {
+                const o = raw as Record<string, unknown>;
+                const id = String(o.id ?? "").trim();
+                const prompt = String(o.prompt ?? "").trim();
+                const optsRaw = o.options;
+                const options: { id: string; label: string }[] = [];
+                if (Array.isArray(optsRaw)) {
+                  for (const op of optsRaw) {
+                    if (op && typeof op === "object") {
+                      const ox = op as Record<string, unknown>;
+                      const oid = String(ox.id ?? "").trim();
+                      const lab = String(ox.label ?? "").trim();
+                      if (oid && lab) {
+                        options.push({ id: oid, label: lab });
+                      }
+                    }
+                  }
+                }
+                if (id && prompt && options.length >= 2) {
+                  questions.push({
+                    id,
+                    prompt,
+                    options,
+                    allow_multiple: Boolean(o.allow_multiple),
+                  });
+                }
+              }
+            }
+          }
+          if (rid && clarificationId && questions.length > 0) {
+            setPlanClarificationSubmittedSummary([]);
+            setPlanClarificationBarrier({
+              runId: rid,
+              clarificationId,
+              questions,
+            });
+            setPlanPhase("clarifying");
+          }
+          if (doneBlocks.length > 0) {
+            flushLiveToThread(structuredClone(doneBlocks));
+          }
         }
         liveBlocksRef.current = [];
         setLiveBlocks([]);
+        if (effectiveMode === "plan") {
+          setPlanPhase((prev) => {
+            if (prev === "generating" && termTyp === "error") {
+              return null;
+            }
+            return prev;
+          });
+        }
+        applyPlanExecuteStreamCompletion(termTyp);
       } catch (e) {
         if (myId !== reqIdRef.current) {
           return;
@@ -770,6 +1117,7 @@ export function HofAgentChatProvider({
       }
     },
     [
+      applyPlanExecuteStreamCompletion,
       flushLiveToThread,
       finalizeLiveBlocksAfterUserStop,
       prepareAgentChatRequest,
@@ -777,6 +1125,269 @@ export function HofAgentChatProvider({
       updateThinkingEpisodeStart,
     ],
   );
+
+  const submitPlanClarification = useCallback(
+    async (
+      answers: {
+        question_id: string;
+        selected_option_ids: string[];
+        other_text?: string;
+      }[],
+    ) => {
+      const barrier = planClarificationBarrier;
+      if (!barrier || busy) {
+        return;
+      }
+      const summary = barrier.questions.map((q) => {
+        const a = answers.find((x) => x.question_id === q.id);
+        const labels = (a?.selected_option_ids ?? []).map((oid) => {
+          const opt = q.options.find((o) => o.id === oid);
+          return opt?.label ?? oid;
+        });
+        if (a?.other_text) {
+          labels.push(a.other_text);
+        }
+        return { prompt: q.prompt, selectedLabels: labels };
+      });
+      setPlanClarificationSubmittedSummary(summary);
+      setPlanClarificationBarrier(null);
+      setPlanPhase("generating");
+      planDraftStreamingActiveRef.current = true;
+      planDraftBufferRef.current = "";
+      setPlanText("");
+      const myId = ++reqIdRef.current;
+      abortRef.current?.abort();
+      abortRef.current = new AbortController();
+      setBusy(true);
+      updateThinkingEpisodeStart(Date.now());
+      liveBlocksRef.current = [];
+      setLiveBlocks([]);
+      currentAgentRunIdRef.current = "";
+      lastTerminalStreamEventRef.current = null;
+      try {
+        const body: Record<string, unknown> = {
+          run_id: barrier.runId,
+          clarification_id: barrier.clarificationId,
+          answers,
+        };
+        const prep =
+          prepareAgentResumePlanClarificationRequest ?? prepareAgentResumeRequest;
+        if (prep) {
+          Object.assign(body, await prep());
+        }
+        await streamHofFunction("agent_resume_plan_clarification", body, {
+          signal: abortRef.current.signal,
+          onEvent: (ev) => {
+            if (myId !== reqIdRef.current) {
+              return;
+            }
+            const typ = typeof ev.type === "string" ? ev.type : "";
+            if (
+              typ === "final" ||
+              typ === "awaiting_plan_clarification" ||
+              typ === "error"
+            ) {
+              lastTerminalStreamEventRef.current = ev;
+              planDraftStreamingActiveRef.current = false;
+            }
+            if (typ === "plan_todo_update") {
+              const di = (ev as { done_indices?: unknown }).done_indices;
+              if (Array.isArray(di)) {
+                setPlanTodoDoneIndices((prev) => {
+                  const s = new Set(prev);
+                  for (const x of di) {
+                    const n = Number(x);
+                    if (Number.isFinite(n)) {
+                      s.add(n);
+                    }
+                  }
+                  return Array.from(s).sort((a, b) => a - b);
+                });
+              }
+            }
+            updateProviderWaitFromStreamType(typ, ev, setProviderWaitNotice);
+            if (typ === "phase") {
+              const ph = typeof ev.phase === "string" ? ev.phase : "";
+              if (ph === "model") {
+                updateThinkingEpisodeStart(Date.now());
+              }
+              if (ph === "model" || ph === "summary") {
+                assistantStreamPhaseRef.current = ph;
+              }
+            }
+            if (typ === "run_start" || typ === "resume_start") {
+              currentAgentRunIdRef.current = coerceRunId(ev.run_id);
+              updateThinkingEpisodeStart(Date.now());
+            }
+            if (typ === "tool_call") {
+              planDraftBufferRef.current = "";
+              setPlanText("");
+            }
+            if (
+              planDraftStreamingActiveRef.current &&
+              typ === "assistant_delta"
+            ) {
+              const chunk =
+                typeof (ev as { text?: unknown }).text === "string"
+                  ? (ev as { text: string }).text
+                  : "";
+              if (chunk) {
+                planDraftBufferRef.current += chunk;
+                setPlanText(planDraftBufferRef.current);
+              }
+            }
+            setLiveBlocks((prev) => {
+              const et =
+                typeof ev.type === "string" ? ev.type : "";
+              const next = applyStreamEventWithDedupe(prev, ev, {
+                assistantStreamPhase: assistantStreamPhaseRef.current,
+                thinkingEpisodeStartedAtMs:
+                  thinkingEpisodeStartedAtRef.current,
+                ...(et === "assistant_done"
+                  ? { assistantDoneClockMs: Date.now() }
+                  : {}),
+              });
+              liveBlocksRef.current = next;
+              return next;
+            });
+          },
+        });
+        if (myId !== reqIdRef.current) {
+          return;
+        }
+        const term = lastTerminalStreamEventRef.current;
+        const termTyp =
+          term && typeof term.type === "string" ? String(term.type) : "";
+        const termMode =
+          term && typeof term.mode === "string" ? String(term.mode) : "";
+        const doneBlocks = liveBlocksRef.current;
+        if (termTyp === "final" && termMode === "plan" && term) {
+          const replyRaw = term.reply;
+          const reply =
+            typeof replyRaw === "string" ? replyRaw.trim() : "";
+          const planRid = newId();
+          setPlanRunId(planRid);
+          const toFlush = stripLastAssistantBlockForPlan(doneBlocks);
+          if (toFlush.length > 0) {
+            flushLiveToThread(structuredClone(toFlush), {
+              presetRunId: planRid,
+            });
+          }
+          setPlanText(preferPlanTaskListBody(reply));
+          setPlanPhase("ready");
+          setPlanClarificationBarrier(null);
+        } else if (termTyp === "awaiting_plan_clarification" && term) {
+          const rid = coerceRunId(term.run_id);
+          const clarificationId = String(
+            term.clarification_id ?? "",
+          ).trim();
+          const qs = term.questions;
+          const questions: PlanClarificationQuestion[] = [];
+          if (Array.isArray(qs)) {
+            for (const raw of qs) {
+              if (raw && typeof raw === "object") {
+                const o = raw as Record<string, unknown>;
+                const id = String(o.id ?? "").trim();
+                const prompt = String(o.prompt ?? "").trim();
+                const optsRaw = o.options;
+                const options: { id: string; label: string }[] = [];
+                if (Array.isArray(optsRaw)) {
+                  for (const op of optsRaw) {
+                    if (op && typeof op === "object") {
+                      const ox = op as Record<string, unknown>;
+                      const oid = String(ox.id ?? "").trim();
+                      const lab = String(ox.label ?? "").trim();
+                      if (oid && lab) {
+                        options.push({ id: oid, label: lab });
+                      }
+                    }
+                  }
+                }
+                if (id && prompt && options.length >= 2) {
+                  questions.push({
+                    id,
+                    prompt,
+                    options,
+                    allow_multiple: Boolean(o.allow_multiple),
+                  });
+                }
+              }
+            }
+          }
+          if (rid && clarificationId && questions.length > 0) {
+            setPlanClarificationSubmittedSummary([]);
+            setPlanClarificationBarrier({
+              runId: rid,
+              clarificationId,
+              questions,
+            });
+            setPlanPhase("clarifying");
+          }
+          if (doneBlocks.length > 0) {
+            flushLiveToThread(structuredClone(doneBlocks));
+          }
+        } else if (doneBlocks.length > 0) {
+          flushLiveToThread(structuredClone(doneBlocks));
+        }
+        liveBlocksRef.current = [];
+        setLiveBlocks([]);
+      } catch (e) {
+        if (myId !== reqIdRef.current) {
+          return;
+        }
+        if (e instanceof Error && e.name === "AbortError") {
+          liveBlocksRef.current = [];
+          setLiveBlocks([]);
+          return;
+        }
+        const msg = e instanceof Error ? e.message : String(e);
+        liveBlocksRef.current = [];
+        setLiveBlocks([
+          { kind: "error", id: newId(), detail: msg } as LiveBlock,
+        ]);
+      } finally {
+        if (myId === reqIdRef.current) {
+          setBusy(false);
+          updateThinkingEpisodeStart(null);
+          setProviderWaitNotice(null);
+        }
+      }
+    },
+    [
+      busy,
+      planClarificationBarrier,
+      prepareAgentResumePlanClarificationRequest,
+      prepareAgentResumeRequest,
+      flushLiveToThread,
+      updateThinkingEpisodeStart,
+    ],
+  );
+
+  const dismissPlanClarificationBarrier = useCallback(() => {
+    setPlanClarificationBarrier(null);
+    setPlanPhase(null);
+  }, []);
+
+  const executePlan = useCallback(() => {
+    if (planPhase !== "ready" || busy) {
+      return;
+    }
+    setPlanPhase("executing");
+    setPlanTodoDoneIndices([]);
+    planExecuteActiveRef.current = true;
+    const next = [
+      ...threadRef.current,
+      {
+        kind: "user" as const,
+        id: newId(),
+        content: PLAN_EXECUTE_USER_MARKER,
+        attachments: [],
+      },
+    ];
+    setThread(next);
+    threadRef.current = next;
+    void runAgent(next, "plan_execute", planText);
+  }, [planPhase, busy, planText, runAgent]);
 
   const runResume = useCallback(async () => {
     if (!approvalBarrier) {
@@ -814,109 +1425,138 @@ export function HofAgentChatProvider({
         Object.assign(resumeBody, extra);
       }
       await streamHofFunction("agent_resume_mutations", resumeBody, {
-          signal: abortRef.current.signal,
-          onEvent: (ev) => {
-            if (myId !== reqIdRef.current) {
-              return;
+        signal: abortRef.current.signal,
+        onEvent: (ev) => {
+          if (myId !== reqIdRef.current) {
+            return;
+          }
+          const rtyp = typeof ev.type === "string" ? ev.type : "";
+          if (
+            rtyp === "final" ||
+            rtyp === "awaiting_confirmation" ||
+            rtyp === "awaiting_inbox_review" ||
+            rtyp === "awaiting_plan_clarification" ||
+            rtyp === "error"
+          ) {
+            lastTerminalStreamEventRef.current = ev;
+          }
+          if (rtyp === "plan_todo_update") {
+            const di = (ev as { done_indices?: unknown }).done_indices;
+            if (Array.isArray(di)) {
+              setPlanTodoDoneIndices((prev) => {
+                const s = new Set(prev);
+                for (const x of di) {
+                  const n = Number(x);
+                  if (Number.isFinite(n)) {
+                    s.add(n);
+                  }
+                }
+                return Array.from(s).sort((a, b) => a - b);
+              });
             }
-            const rtyp = typeof ev.type === "string" ? ev.type : "";
-            if (rtyp === "resume_start") {
-              resumeMergeContinuationRef.current =
-                (ev as { continuation?: unknown }).continuation === true;
-              assistantStreamPhaseRef.current = null;
-              currentAgentRunIdRef.current = coerceRunId(ev.run_id);
-              pendingDetailsRef.current.clear();
-              mutationPendingIdsThisRunRef.current = [];
-              setInboxReviewBarrier(null);
-              setInboxResumeError(null);
-              setProviderWaitNotice(null);
+          }
+          if (rtyp === "resume_start") {
+            resumeMergeContinuationRef.current =
+              (ev as { continuation?: unknown }).continuation === true;
+            assistantStreamPhaseRef.current = null;
+            currentAgentRunIdRef.current = coerceRunId(ev.run_id);
+            pendingDetailsRef.current.clear();
+            mutationPendingIdsThisRunRef.current = [];
+            setInboxReviewBarrier(null);
+            setInboxResumeError(null);
+            setProviderWaitNotice(null);
+            updateThinkingEpisodeStart(Date.now());
+          }
+          updateProviderWaitFromStreamType(rtyp, ev, setProviderWaitNotice);
+          if (rtyp === "phase") {
+            const ph = typeof ev.phase === "string" ? ev.phase : "";
+            if (ph === "model") {
               updateThinkingEpisodeStart(Date.now());
             }
-            updateProviderWaitFromStreamType(rtyp, ev, setProviderWaitNotice);
-            if (rtyp === "phase") {
-              const ph = typeof ev.phase === "string" ? ev.phase : "";
-              if (ph === "model") {
-                updateThinkingEpisodeStart(Date.now());
-              }
-              if (ph === "model" || ph === "summary") {
-                assistantStreamPhaseRef.current = ph;
-              }
+            if (ph === "model" || ph === "summary") {
+              assistantStreamPhaseRef.current = ph;
             }
-            if (rtyp === "mutation_pending") {
-              const pid =
-                typeof ev.pending_id === "string" ? ev.pending_id : "";
-              if (pid) {
-                pendingDetailsRef.current.set(
-                  pid,
-                  pendingDetailsFromMutationPendingEvent(ev),
-                );
-                const acc = mutationPendingIdsThisRunRef.current;
-                if (!acc.includes(pid)) {
-                  acc.push(pid);
-                }
-              }
-            }
-            let evForBlocks: HofStreamEvent = ev;
-            if (rtyp === "awaiting_confirmation") {
-              const awRid =
-                coerceRunId(ev.run_id) || currentAgentRunIdRef.current.trim();
-              const fromEvent = Array.isArray(ev.pending_ids)
-                ? (ev.pending_ids as unknown[])
-                    .map((x) => String(x))
-                    .filter(Boolean)
-                : [];
-              const pids = mergePendingIdLists(
-                fromEvent,
-                mutationPendingIdsThisRunRef.current,
-                mutationPendingIdsFromBlocks(liveBlocksRef.current),
+          }
+          if (rtyp === "mutation_pending") {
+            const pid = typeof ev.pending_id === "string" ? ev.pending_id : "";
+            if (pid) {
+              pendingDetailsRef.current.set(
+                pid,
+                pendingDetailsFromMutationPendingEvent(ev),
               );
-              const itemsBarrier = pids.map((pid) =>
-                approvalBarrierItemFromDetails(
-                  pid,
-                  pendingDetailsRef.current.get(pid),
-                ),
-              );
-              setApprovalBarrier({ runId: awRid, items: itemsBarrier });
-              const dec: Record<string, boolean | null> = {};
-              for (const p of pids) {
-                dec[p] = null;
-              }
-              setApprovalDecisions(dec);
-              evForBlocks =
-                pids.length > 0
-                  ? ({
-                      ...ev,
-                      run_id: awRid,
-                      pending_ids: pids,
-                    } as HofStreamEvent)
-                  : ev;
-            }
-            if (rtyp === "awaiting_inbox_review") {
-              const parsed = inboxReviewBarrierFromStreamEvent(ev);
-              if (parsed) {
-                setInboxReviewBarrier(parsed);
-                setInboxResumeError(null);
-                setApprovalBarrier(null);
-                setApprovalDecisions({});
+              const acc = mutationPendingIdsThisRunRef.current;
+              if (!acc.includes(pid)) {
+                acc.push(pid);
               }
             }
-            setLiveBlocks((prev) => {
-              const rt = typeof evForBlocks.type === "string" ? evForBlocks.type : "";
-              const next = applyStreamEventWithDedupe(prev, evForBlocks, {
-                assistantStreamPhase: assistantStreamPhaseRef.current,
-                thinkingEpisodeStartedAtMs: thinkingEpisodeStartedAtRef.current,
-                ...(rt === "assistant_done"
-                  ? { assistantDoneClockMs: Date.now() }
-                  : {}),
-              });
-              liveBlocksRef.current = next;
-              return next;
+          }
+          let evForBlocks: HofStreamEvent = ev;
+          if (rtyp === "awaiting_confirmation") {
+            const awRid =
+              coerceRunId(ev.run_id) || currentAgentRunIdRef.current.trim();
+            const fromEvent = Array.isArray(ev.pending_ids)
+              ? (ev.pending_ids as unknown[])
+                  .map((x) => String(x))
+                  .filter(Boolean)
+              : [];
+            const pids = mergePendingIdLists(
+              fromEvent,
+              mutationPendingIdsThisRunRef.current,
+              mutationPendingIdsFromBlocks(liveBlocksRef.current),
+            );
+            const itemsBarrier = pids.map((pid) =>
+              approvalBarrierItemFromDetails(
+                pid,
+                pendingDetailsRef.current.get(pid),
+              ),
+            );
+            setApprovalBarrier({ runId: awRid, items: itemsBarrier });
+            const dec: Record<string, boolean | null> = {};
+            for (const p of pids) {
+              dec[p] = null;
+            }
+            setApprovalDecisions(dec);
+            evForBlocks =
+              pids.length > 0
+                ? ({
+                    ...ev,
+                    run_id: awRid,
+                    pending_ids: pids,
+                  } as HofStreamEvent)
+                : ev;
+          }
+          if (rtyp === "awaiting_inbox_review") {
+            const parsed = inboxReviewBarrierFromStreamEvent(ev);
+            if (parsed) {
+              setInboxReviewBarrier(parsed);
+              setInboxResumeError(null);
+              setApprovalBarrier(null);
+              setApprovalDecisions({});
+            }
+          }
+          setLiveBlocks((prev) => {
+            const rt =
+              typeof evForBlocks.type === "string" ? evForBlocks.type : "";
+            const next = applyStreamEventWithDedupe(prev, evForBlocks, {
+              assistantStreamPhase: assistantStreamPhaseRef.current,
+              thinkingEpisodeStartedAtMs: thinkingEpisodeStartedAtRef.current,
+              ...(rt === "assistant_done"
+                ? { assistantDoneClockMs: Date.now() }
+                : {}),
             });
-          },
+            liveBlocksRef.current = next;
+            return next;
+          });
         },
-      );
+      });
       if (myId !== reqIdRef.current) {
         return;
+      }
+      {
+        const term = lastTerminalStreamEventRef.current;
+        const termTyp =
+          term && typeof term.type === "string" ? String(term.type) : "";
+        applyPlanExecuteStreamCompletion(termTyp);
       }
       setMutationOutcomeByPendingId((prev) => {
         const next = { ...prev };
@@ -984,9 +1624,7 @@ export function HofAgentChatProvider({
       if (e instanceof Error && e.name === "AbortError") {
         const raw = liveBlocksRef.current;
         if (raw.length > 0) {
-          const frozen = finalizeLiveBlocksAfterUserStop(
-            structuredClone(raw),
-          );
+          const frozen = finalizeLiveBlocksAfterUserStop(structuredClone(raw));
           if (frozen.length > 0) {
             flushLiveToThread(structuredClone(frozen));
           }
@@ -1013,6 +1651,7 @@ export function HofAgentChatProvider({
       }
     }
   }, [
+    applyPlanExecuteStreamCompletion,
     approvalBarrier,
     approvalDecisions,
     flushLiveToThread,
@@ -1032,10 +1671,15 @@ export function HofAgentChatProvider({
       liveBlocksRef.current = [];
       setLiveBlocks([]);
       mutationPendingIdsThisRunRef.current = [];
-      const resolutions = barrier.watches.map((w) => ({ watch_id: w.watch_id }));
+      const resolutions = barrier.watches.map((w) => ({
+        watch_id: w.watch_id,
+      }));
       const rid = barrier.runId;
       try {
-        const resumeBody: Record<string, unknown> = { run_id: rid, resolutions };
+        const resumeBody: Record<string, unknown> = {
+          run_id: rid,
+          resolutions,
+        };
         const prep =
           prepareAgentResumeInboxRequest ?? prepareAgentResumeRequest;
         if (prep) {
@@ -1049,6 +1693,30 @@ export function HofAgentChatProvider({
               return;
             }
             const rtyp = typeof ev.type === "string" ? ev.type : "";
+            if (
+              rtyp === "final" ||
+              rtyp === "awaiting_confirmation" ||
+              rtyp === "awaiting_inbox_review" ||
+              rtyp === "awaiting_plan_clarification" ||
+              rtyp === "error"
+            ) {
+              lastTerminalStreamEventRef.current = ev;
+            }
+            if (rtyp === "plan_todo_update") {
+              const di = (ev as { done_indices?: unknown }).done_indices;
+              if (Array.isArray(di)) {
+                setPlanTodoDoneIndices((prev) => {
+                  const s = new Set(prev);
+                  for (const x of di) {
+                    const n = Number(x);
+                    if (Number.isFinite(n)) {
+                      s.add(n);
+                    }
+                  }
+                  return Array.from(s).sort((a, b) => a - b);
+                });
+              }
+            }
             if (rtyp === "error") {
               const detail =
                 typeof ev.detail === "string" ? ev.detail : "error";
@@ -1152,6 +1820,12 @@ export function HofAgentChatProvider({
         if (myId !== reqIdRef.current) {
           return;
         }
+        {
+          const term = lastTerminalStreamEventRef.current;
+          const termTyp =
+            term && typeof term.type === "string" ? String(term.type) : "";
+          applyPlanExecuteStreamCompletion(termTyp);
+        }
         let doneBlocks = liveBlocksRef.current;
         const ridForSynth = currentAgentRunIdRef.current.trim();
         const hasApprovalBlock = doneBlocks.some(
@@ -1242,6 +1916,7 @@ export function HofAgentChatProvider({
       }
     },
     [
+      applyPlanExecuteStreamCompletion,
       flushLiveToThread,
       finalizeLiveBlocksAfterUserStop,
       prepareAgentResumeInboxRequest,
@@ -1257,7 +1932,9 @@ export function HofAgentChatProvider({
     if (!approvalBarrier?.items.length || busy) {
       return;
     }
-    if (barrierMatchesAnyThreadOrLiveBlocks(approvalBarrier, thread, liveBlocks)) {
+    if (
+      barrierMatchesAnyThreadOrLiveBlocks(approvalBarrier, thread, liveBlocks)
+    ) {
       return;
     }
     setApprovalBarrier(null);
@@ -1492,6 +2169,18 @@ export function HofAgentChatProvider({
       thinkingEpisodeStartedAtMs,
       providerWaitNotice,
       confirmPendingMutations,
+      agentMode,
+      setAgentMode,
+      planPhase,
+      planText,
+      setPlanText,
+      planRunId,
+      planClarificationBarrier,
+      planClarificationSubmittedSummary,
+      submitPlanClarification,
+      dismissPlanClarificationBarrier,
+      planTodoDoneIndices,
+      executePlan,
     }),
     [
       welcomeName,
@@ -1517,6 +2206,16 @@ export function HofAgentChatProvider({
       thinkingEpisodeStartedAtMs,
       providerWaitNotice,
       confirmPendingMutations,
+      agentMode,
+      planPhase,
+      planText,
+      planRunId,
+      planClarificationBarrier,
+      planClarificationSubmittedSummary,
+      submitPlanClarification,
+      dismissPlanClarificationBarrier,
+      planTodoDoneIndices,
+      executePlan,
     ],
   );
 

@@ -27,6 +27,24 @@ class AgentConversationDraftV1(BaseModel):
     )
 
 
+class AgentConversationPlanV1(BaseModel):
+    """Plan-mode state persisted alongside the conversation."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    phase: str | None = None
+    text: str = ""
+    run_id: str | None = Field(default=None, alias="runId")
+    clarification_barrier: dict[str, Any] | None = Field(
+        default=None,
+        alias="clarificationBarrier",
+    )
+    plan_todo_done_indices: list[int] = Field(
+        default_factory=list,
+        alias="planTodoDoneIndices",
+    )
+
+
 class AgentConversationStateV1(BaseModel):
     """Full assistant transcript for one conversation."""
 
@@ -36,6 +54,7 @@ class AgentConversationStateV1(BaseModel):
     thread: list[Any] = Field(default_factory=list)
     mutation_outcomes: dict[str, bool] = Field(default_factory=dict, alias="mutationOutcomes")
     draft: AgentConversationDraftV1 | None = None
+    plan: AgentConversationPlanV1 | None = None
 
     @field_validator("version")
     @classmethod

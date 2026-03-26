@@ -19,9 +19,31 @@ export type AgentConversationDraftV1 = {
   approvalDecisions: Record<string, boolean | null>;
 };
 
+export type PlanClarificationQuestion = {
+  id: string;
+  prompt: string;
+  options: { id: string; label: string }[];
+  allow_multiple: boolean;
+};
+
+export type AgentConversationPlanV1 = {
+  phase: "clarifying" | "generating" | "ready" | "executing" | "done";
+  text: string;
+  runId: string | null;
+  clarificationBarrier?: {
+    runId: string;
+    clarificationId: string;
+    questions: PlanClarificationQuestion[];
+  } | null;
+  /** Submitted clarification answers (for Answer card); optional for older snapshots. */
+  clarificationSummary?: { prompt: string; selectedLabels: string[] }[];
+  planTodoDoneIndices?: number[];
+};
+
 export type AgentConversationStateV1 = {
   version: 1;
   thread: unknown[];
   mutationOutcomes: Record<string, boolean>;
   draft?: AgentConversationDraftV1;
+  plan?: AgentConversationPlanV1;
 };

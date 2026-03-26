@@ -3,6 +3,7 @@
 from hof.agent.conversation_state import (
     MAX_CONVERSATION_STATE_BYTES,
     AgentConversationDraftV1,
+    AgentConversationPlanV1,
     AgentConversationStateV1,
     conversation_state_json_size,
     enforce_max_conversation_state_bytes,
@@ -37,6 +38,7 @@ from hof.agent.stream import (
     default_normalize_attachments,
     iter_agent_chat_stream,
     iter_agent_resume_inbox_stream,
+    iter_agent_resume_plan_clarification_stream,
     iter_agent_resume_stream,
 )
 from hof.agent.tooling import format_cli_line
@@ -44,6 +46,7 @@ from hof.agent.tooling import format_cli_line
 __all__ = [
     "MAX_CONVERSATION_STATE_BYTES",
     "AgentConversationDraftV1",
+    "AgentConversationPlanV1",
     "AgentConversationStateV1",
     "AgentPolicy",
     "ConfirmationSummaryMode",
@@ -72,6 +75,7 @@ __all__ = [
     "get_agent_policy",
     "iter_agent_chat_stream",
     "iter_agent_resume_inbox_stream",
+    "iter_agent_resume_plan_clarification_stream",
     "iter_agent_resume_stream",
     "normalize_conversation_state_for_storage",
     "try_get_agent_policy",

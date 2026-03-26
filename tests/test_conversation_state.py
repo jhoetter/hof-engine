@@ -21,6 +21,54 @@ def test_validate_minimal_round_trip() -> None:
     assert stored["mutationOutcomes"] == {}
 
 
+def test_validate_accepts_plan_object() -> None:
+    raw = {
+        "version": 1,
+        "thread": [],
+        "mutationOutcomes": {},
+        "plan": {"phase": "ready", "text": "- [ ] step", "runId": "r1"},
+    }
+    model = validate_conversation_state(raw)
+    assert model.plan is not None
+    assert model.plan.phase == "ready"
+    assert model.plan.text.startswith("- [ ]")
+    assert model.plan.run_id == "r1"
+
+
+def test_validate_accepts_plan_clarifying_and_todo_indices() -> None:
+    raw = {
+        "version": 1,
+        "thread": [],
+        "mutationOutcomes": {},
+        "plan": {
+            "phase": "clarifying",
+            "text": "",
+            "runId": "r1",
+            "clarificationBarrier": {
+                "runId": "run-x",
+                "clarificationId": "cid-y",
+                "questions": [
+                    {
+                        "id": "q1",
+                        "prompt": "Scope?",
+                        "options": [
+                            {"id": "a", "label": "A"},
+                            {"id": "b", "label": "B"},
+                        ],
+                    },
+                ],
+            },
+            "planTodoDoneIndices": [0, 2],
+        },
+    }
+    model = validate_conversation_state(raw)
+    assert model.plan is not None
+    assert model.plan.phase == "clarifying"
+    assert model.plan.clarification_barrier is not None
+    assert model.plan.clarification_barrier["clarificationId"] == "cid-y"
+    assert model.plan.plan_todo_done_indices == [0, 2]
+
+
 def test_validate_accepts_camel_case_alias() -> None:
     raw = {
         "version": 1,

@@ -46,6 +46,8 @@ def test_builtin_names_match_policy_constant() -> None:
             "hof_builtin_runtime_info",
             "hof_builtin_http_get",
             "hof_builtin_calculate",
+            "hof_builtin_present_plan_clarification",
+            "hof_builtin_update_plan_todo_state",
         },
     )
     for name in BUILTIN_AGENT_TOOL_NAMES:

@@ -580,3 +580,37 @@ def hof_builtin_calculate(
         return {"error": str(exc)}
 
     return {"mode": "expression", "result": result}
+
+
+@function(
+    name="hof_builtin_present_plan_clarification",
+    tool_summary="Show the user a set of multiple-choice clarification questions during plan discovery. "
+    "The UI renders each question as a card with selectable options. "
+    "After calling this tool, STOP immediately — do not write any assistant text.",
+    when_to_use=(
+        "When you need the user's input before you can produce a concrete plan. "
+        "Call this tool with your questions and then STOP (no text after the tool call)."
+    ),
+    when_not_to_use="When you already have enough context to produce a plan — just output the plan directly.",
+)
+def hof_builtin_present_plan_clarification(questions: list) -> dict[str, Any]:
+    """Intercepted by the stream loop; this body is never reached."""
+    return {"status": "intercepted"}
+
+
+@function(
+    name="hof_builtin_update_plan_todo_state",
+    tool_summary="Mark plan checklist items as completed during plan execution.",
+    when_to_use="After completing one or more steps in the approved plan, call this "
+    "with the 0-based indices of the finished items.",
+    when_not_to_use="Outside plan execution mode.",
+)
+def hof_builtin_update_plan_todo_state(done_indices: list) -> dict[str, Any]:
+    raw = done_indices or []
+    idxs: list[int] = []
+    for x in raw:
+        try:
+            idxs.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    return {"done_indices": idxs}

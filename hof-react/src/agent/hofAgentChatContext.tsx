@@ -2061,15 +2061,8 @@ export function HofAgentChatProvider({
     if (planPhase === "generating") {
       return "Preparing plan";
     }
-    if (
-      agentMode === "plan" &&
-      planPhase == null &&
-      !planClarificationBarrier
-    ) {
-      return "Generating questions";
-    }
     return null;
-  }, [busy, agentMode, planPhase, planClarificationBarrier]);
+  }, [busy, planPhase]);
 
   const value = useMemo<HofAgentChatContextValue>(
     () => ({

@@ -1,6 +1,9 @@
 import type { HofStreamEvent } from "../hooks/streamHofFunction";
 import type { AssistantStreamSegment } from "./assistantStreamSegments";
-import type { PlanClarificationQuestion } from "./conversationTypes";
+import type {
+  PlanClarificationQuestion,
+  StructuredPlanProposal,
+} from "./conversationTypes";
 import { preferPlanTaskListBody } from "./planMarkdownTodos";
 import {
   PLAN_TODO_UPDATE_EVENT_TYPE,
@@ -1396,8 +1399,24 @@ export function stripLastAssistantBlockForPlan(blocks: LiveBlock[]): LiveBlock[]
 }
 
 /**
+ * Build deterministic plan markdown from a server-validated structured plan.
+ * Matches the Python ``plan_proposal_to_markdown`` output exactly.
+ */
+function structuredPlanToMarkdown(sp: StructuredPlanProposal): string {
+  const parts = [`# ${sp.title}`];
+  if (sp.description) {
+    parts.push("", sp.description);
+  }
+  parts.push("");
+  for (const step of sp.steps) {
+    parts.push(`- [ ] ${step.label}`);
+  }
+  return parts.join("\n");
+}
+
+/**
  * Extract plan-ready data from a ``final`` terminal event with ``mode: "plan"``.
- * Returns the generated plan run ID, parsed plan text, and blocks to flush to the thread.
+ * Prefers ``structured_plan`` (tool-based path) over free-form ``reply`` parsing.
  */
 export function finalizePlanFromTerminalEvent(
   term: Record<string, unknown>,
@@ -1407,10 +1426,26 @@ export function finalizePlanFromTerminalEvent(
   planText: string;
   blocksToFlush: LiveBlock[];
 } {
-  const replyRaw = term.reply;
-  const reply = typeof replyRaw === "string" ? replyRaw.trim() : "";
   const planRunId = newId();
   const blocksToFlush = stripLastAssistantBlockForPlan(doneBlocks);
+
+  const sp = term.structured_plan;
+  if (
+    sp &&
+    typeof sp === "object" &&
+    "title" in sp &&
+    "steps" in sp &&
+    Array.isArray((sp as StructuredPlanProposal).steps)
+  ) {
+    return {
+      planRunId,
+      planText: structuredPlanToMarkdown(sp as StructuredPlanProposal),
+      blocksToFlush,
+    };
+  }
+
+  const replyRaw = term.reply;
+  const reply = typeof replyRaw === "string" ? replyRaw.trim() : "";
   return {
     planRunId,
     planText: preferPlanTaskListBody(reply),

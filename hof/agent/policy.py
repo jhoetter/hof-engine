@@ -169,6 +169,7 @@ BUILTIN_AGENT_TOOL_NAMES: frozenset[str] = frozenset(
         "hof_builtin_runtime_info",
         "hof_builtin_http_get",
         "hof_builtin_calculate",
+        "hof_builtin_present_plan",
         "hof_builtin_present_plan_clarification",
         "hof_builtin_update_plan_todo_state",
     },

@@ -1,4 +1,4 @@
-"""NDJSON agent chat stream: OpenAI tool loop, mutation gate, resume."""
+"""NDJSON agent chat stream: LLM tool loop, mutation gate, resume."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from llm_markdown.providers import ReasoningConfig, ReasoningMode, stream_agent_turn
 
@@ -47,8 +47,18 @@ from hof.config import get_config
 
 logger = logging.getLogger(__name__)
 
+_HOF_BUILTIN_PRESENT_PLAN = "hof_builtin_present_plan"
 _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION = "hof_builtin_present_plan_clarification"
 _HOF_BUILTIN_UPDATE_PLAN_TODO_STATE = "hof_builtin_update_plan_todo_state"
+
+# Plan-discover explore phase: no terminal plan tools (must reply with text before questioning).
+_DISCOVER_EXCLUDE_FROM_EXPLORE: frozenset[str] = frozenset(
+    {
+        _HOF_BUILTIN_PRESENT_PLAN,
+        _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION,
+        _HOF_BUILTIN_UPDATE_PLAN_TODO_STATE,
+    },
+)
 
 
 def _provider_wait_wire(ev: Any) -> dict[str, Any] | None:
@@ -89,41 +99,36 @@ class _AgentStreamTurnExhaustedError(Exception):
 
 
 def _provider_error_eligible_for_engine_stream_retry(exc: BaseException) -> bool:
-    from llm_markdown.providers.base import ProviderError
-    from llm_markdown.providers.failure_info import ProviderFailureCategory
-
-    if not isinstance(exc, ProviderError):
+    """Retry engine-level stream when failure looks transient (duck-type :class:`ProviderError`)."""
+    if not _looks_like_llm_provider_error(exc):
         return False
-    if exc.failure is not None:
-        return exc.failure.category in {
-            ProviderFailureCategory.RATE_LIMIT,
-            ProviderFailureCategory.OVERLOADED,
-            ProviderFailureCategory.SERVER,
-            ProviderFailureCategory.TIMEOUT,
-        }
-    return bool(exc.retryable)
+    failure = getattr(exc, "failure", None)
+    if failure is not None:
+        return _provider_failure_category_is_engine_exhaustible(failure)
+    return bool(getattr(exc, "retryable", False))
 
 
-def _engine_stream_retry_sleep_seconds(exc: ProviderError) -> float:
-    from llm_markdown.providers.failure_info import ProviderFailureCategory
-
-    f = exc.failure
+def _engine_stream_retry_sleep_seconds(exc: BaseException) -> float:
+    f = getattr(exc, "failure", None)
     raw = (
         float(f.retry_after_seconds)
-        if f is not None and f.retry_after_seconds is not None
+        if f is not None and getattr(f, "retry_after_seconds", None) is not None
         else None
     )
     if raw is not None and raw > 0:
         return min(120.0, max(0.5, raw))
-    if f is not None and f.category == ProviderFailureCategory.TIMEOUT:
+    cv = _failure_category_value(f)
+    if cv == "timeout":
         return 3.0
+    # Anthropic 529 overloaded: short fixed waits rarely help; give capacity time to recover.
+    if cv == "overloaded":
+        return 12.0
     return 5.0
 
 
-def _engine_stream_wait_reason(exc: ProviderError) -> str:
-    from llm_markdown.providers.failure_info import ProviderFailureCategory
-
-    if exc.failure is not None and exc.failure.category == ProviderFailureCategory.RATE_LIMIT:
+def _engine_stream_wait_reason(exc: BaseException) -> str:
+    f = getattr(exc, "failure", None)
+    if f is not None and _failure_category_value(f) == "rate_limit":
         return "rate_limit"
     return "transient_error"
 
@@ -135,14 +140,40 @@ def _user_message_after_engine_retries_exhausted(
 ) -> str:
     """First-person copy after all Hof engine-level stream retries failed (no raw provider payload)."""
     times_word = "time" if attempts == 1 else "times"
-    base = (
-        "I hit a usage limit (too many requests or tokens in a short window). "
-        f"I waited and tried again automatically {attempts} {times_word}, then had to stop."
-    )
+    cv = _failure_category_value(f)
+
+    if cv == "rate_limit":
+        base = (
+            "I hit a usage limit (too many requests or tokens in a short window). "
+            f"I waited and tried again automatically {attempts} {times_word}, then had to stop."
+        )
+    elif cv == "overloaded":
+        base = (
+            "The AI provider is temporarily overloaded (high demand on their side — not your quota). "
+            f"I waited and tried again automatically {attempts} {times_word}, then had to stop."
+        )
+    elif cv == "server":
+        base = (
+            "The AI provider returned a temporary server error. "
+            f"I waited and tried again automatically {attempts} {times_word}, then had to stop."
+        )
+    elif cv == "timeout":
+        base = (
+            "The request timed out. "
+            f"I waited and tried again automatically {attempts} {times_word}, then had to stop."
+        )
+    else:
+        base = (
+            "The AI request failed after automatic retries. "
+            f"I tried {attempts} {times_word}, then had to stop."
+        )
+
     ra = getattr(f, "retry_after_seconds", None)
     if ra is not None and isinstance(ra, (int, float)) and ra > 0:
         secs = max(1, int(round(float(ra))))
         base += f" Waiting about {secs} more seconds before you send your message again may help."
+    elif cv == "overloaded":
+        base += " Please wait a few minutes and try again — overload often clears after a short pause."
     else:
         base += " Please wait a short while, then send your message again."
     return base
@@ -150,16 +181,14 @@ def _user_message_after_engine_retries_exhausted(
 
 def _user_message_transient_limit_without_exhausted_retries(f: Any) -> str:
     """First-person copy when a limit error is shown without engine-exhausted wording (e.g. partial stream)."""
-    from llm_markdown.providers.failure_info import ProviderFailureCategory
-
-    cat = getattr(f, "category", None)
+    cv = _failure_category_value(f)
     ra = getattr(f, "retry_after_seconds", None)
-    if cat == ProviderFailureCategory.RATE_LIMIT:
+    if cv == "rate_limit":
         msg = (
             "I hit a usage limit before I could finish this step. "
             "Please wait a short moment and try again."
         )
-    elif cat == ProviderFailureCategory.TIMEOUT:
+    elif cv == "timeout":
         msg = (
             "The request timed out before I could finish this step. "
             "Please try again in a moment."
@@ -221,48 +250,93 @@ def _iter_stream_agent_turn_with_engine_retries(
             time.sleep(wait)
 
 
+def _looks_like_llm_provider_error(exc: BaseException) -> bool:
+    """True if ``exc`` is a :class:`~llm_markdown.providers.base.ProviderError`-like object.
+
+    Avoid ``isinstance(..., ProviderError)``: two copies of ``llm_markdown`` in the same
+    process (editable + import path quirks) can produce distinct ``ProviderError`` classes,
+    so ``isinstance`` returns false even though the runtime error is the same shape.
+    """
+    return hasattr(exc, "failure") and hasattr(exc, "provider")
+
+
+def _failure_category_value(failure: object | None) -> str | None:
+    """Normalized ``failure.category`` as a lowercase string (enum or raw str)."""
+    if failure is None:
+        return None
+    cat = getattr(failure, "category", None)
+    if isinstance(cat, str) and cat.strip():
+        return cat.strip().lower()
+    val = getattr(cat, "value", None) if cat is not None else None
+    if isinstance(val, str) and val.strip():
+        return val.strip().lower()
+    return None
+
+
+_TRANSIENT_FAILURE_CATEGORIES: frozenset[str] = frozenset(
+    ("rate_limit", "overloaded", "server", "timeout"),
+)
+
+
+def _provider_failure_category_is_engine_exhaustible(failure: object | None) -> bool:
+    cv = _failure_category_value(failure)
+    return cv in _TRANSIENT_FAILURE_CATEGORIES
+
+
+def _provider_error_is_transient_for_log(exc: BaseException) -> bool:
+    """Whether a provider failure is expected-transient (log at warning, not exception)."""
+    if not _looks_like_llm_provider_error(exc):
+        return False
+    # llm-markdown sets this from HTTP status / message heuristics; trust it first.
+    if bool(getattr(exc, "retryable", False)):
+        return True
+    failure = getattr(exc, "failure", None)
+    cv = _failure_category_value(failure)
+    if cv is not None:
+        return cv in _TRANSIENT_FAILURE_CATEGORIES
+    return False
+
+
 def _agent_stream_error_event(
     exc: BaseException,
     *,
     engine_turn_retries_exhausted: bool = False,
     engine_retry_max_attempts: int | None = None,
 ) -> dict[str, Any]:
-    """Map exceptions to NDJSON ``error``; use structured fields when :class:`ProviderError` carries failure info."""
-    from llm_markdown.providers.base import ProviderError
-    from llm_markdown.providers.failure_info import ProviderFailureCategory
-
-    exhausted_categories = {
-        ProviderFailureCategory.RATE_LIMIT,
-        ProviderFailureCategory.OVERLOADED,
-        ProviderFailureCategory.SERVER,
-        ProviderFailureCategory.TIMEOUT,
+    """Map exceptions to NDJSON ``error``; duck-type :class:`~llm_markdown.providers.base.ProviderError`."""
+    if not _looks_like_llm_provider_error(exc):
+        return {"type": "error", "detail": str(exc)}
+    f = getattr(exc, "failure", None)
+    if f is None:
+        return {"type": "error", "detail": str(exc)}
+    attempts = (
+        engine_retry_max_attempts
+        if engine_retry_max_attempts is not None
+        else _resolve_agent_engine_stream_max_attempts()
+    )
+    exhaustible = _provider_failure_category_is_engine_exhaustible(f)
+    if engine_turn_retries_exhausted and exhaustible:
+        detail = _user_message_after_engine_retries_exhausted(f, attempts=attempts)
+    elif exhaustible:
+        detail = _user_message_transient_limit_without_exhausted_retries(f)
+    else:
+        detail = getattr(f, "public_message", None) or str(exc)
+    cat_key = _failure_category_value(f) or "unknown"
+    out: dict[str, Any] = {
+        "type": "error",
+        "detail": detail,
+        "error_category": cat_key,
+        "retryable": False
+        if engine_turn_retries_exhausted
+        else bool(getattr(exc, "retryable", False)),
     }
-
-    if isinstance(exc, ProviderError) and exc.failure is not None:
-        f = exc.failure
-        attempts = (
-            engine_retry_max_attempts
-            if engine_retry_max_attempts is not None
-            else _resolve_agent_engine_stream_max_attempts()
-        )
-        if engine_turn_retries_exhausted and f.category in exhausted_categories:
-            detail = _user_message_after_engine_retries_exhausted(f, attempts=attempts)
-        elif f.category in exhausted_categories:
-            detail = _user_message_transient_limit_without_exhausted_retries(f)
-        else:
-            detail = f.public_message
-        out: dict[str, Any] = {
-            "type": "error",
-            "detail": detail,
-            "error_category": f.category.value,
-            "retryable": False if engine_turn_retries_exhausted else bool(exc.retryable),
-        }
-        if f.http_status is not None:
-            out["http_status"] = f.http_status
-        if f.retry_after_seconds is not None:
-            out["retry_after_seconds"] = f.retry_after_seconds
-        return out
-    return {"type": "error", "detail": str(exc)}
+    http_status = getattr(f, "http_status", None)
+    if http_status is not None:
+        out["http_status"] = http_status
+    retry_after = getattr(f, "retry_after_seconds", None)
+    if retry_after is not None:
+        out["retry_after_seconds"] = retry_after
+    return out
 
 
 def _mutation_preview_payload(
@@ -753,18 +827,34 @@ def _build_system_prompt(policy: AgentPolicy, *, attachment_note: str) -> str:
     return text
 
 
-def _build_discover_tools(policy: AgentPolicy) -> tuple[frozenset[str], list[dict[str, Any]]]:
-    """Allowlist and OpenAI tool specs for plan-discover mode (read-only + builtins)."""
-    allowlist = frozenset(policy.allowlist_read | BUILTIN_AGENT_TOOL_NAMES)
+def _build_discover_tools(
+    policy: AgentPolicy,
+    *,
+    phase: Literal["explore", "clarify", "propose"],
+) -> tuple[frozenset[str], list[dict[str, Any]]]:
+    """Allowlist and OpenAI tool specs for plan-discover mode.
+
+    - **explore:** Domain reads and non-terminal builtins only — model cannot
+      call clarification or ``hof_builtin_present_plan`` until it has produced
+      at least one assistant text turn (enforced in the tool loop).
+    - **clarify:** Like explore plus ``hof_builtin_present_plan_clarification``;
+      ``hof_builtin_present_plan`` stays unavailable until resume after answers.
+    - **propose:** Full read set plus all builtins (used after clarification resume).
+    """
+    base_read = policy.allowlist_read
+    builtins_all = BUILTIN_AGENT_TOOL_NAMES
+    if phase == "explore":
+        allowlist = frozenset(
+            base_read | (builtins_all - _DISCOVER_EXCLUDE_FROM_EXPLORE),
+        )
+    elif phase == "clarify":
+        allowlist = frozenset(
+            base_read | (builtins_all - {_HOF_BUILTIN_PRESENT_PLAN}),
+        )
+    else:
+        allowlist = frozenset(base_read | builtins_all)
     return allowlist, openai_tool_specs(allowlist)
 
-
-_AGENT_CHAT_PLAN_MODE_SUFFIX = (
-    "\n\n## Plan mode (planning only)\n"
-    "The user asked for a plan before any execution. Respond with a clear markdown plan. "
-    "Use `- [ ]` checkboxes for concrete actionable steps. "
-    "Do not call tools and do not state that work is already done—planning only.\n"
-)
 
 _AGENT_CHAT_PLAN_EXECUTE_SUFFIX = (
     "\n\n## Approved plan execution\n"
@@ -787,76 +877,34 @@ _AGENT_CHAT_PLAN_EXECUTE_SUFFIX = (
 )
 
 _AGENT_CHAT_PLAN_DISCOVER_PREFIX = (
-    "# \u26a0\ufe0f MODE: PLAN DISCOVERY (overrides ALL other instructions)\n\n"
-    "You are in plan discovery mode. Your goal is to produce a plan the user can review and "
-    "execute.\n\n"
-    "## DEFAULT: ASK FIRST (use this in >90% of real requests)\n\n"
-    "**First message in a new conversation:** treat the task as underspecified unless the user "
-    "already stated every parameter you need (scope, method, time range, entities, preferences). "
-    "In almost all cases use **(A)** clarification after light research.\n\n"
-    "Most user requests are **ambiguous** about scope, method, parameters, legal/accounting rules, "
-    "or preferences. **Default to (A):** call `hof_builtin_present_plan_clarification` after "
-    "light research, then STOP.\n\n"
-    "Only skip clarification **(B)** when the task is trivially unambiguous and fully specified. "
-    "If you are unsure, **always choose (A)**.\n\n"
-    "Before choosing (B), check whether anything could still be ambiguous: scope; which records "
-    "or entities apply; method or parameters; time windows; policy or compliance constraints; "
-    "defaults vs explicit user preferences; destructive vs non-destructive scope. If any of "
-    "these are not fixed by the user\u2019s message, use (A).\n\n"
-    "**When in doubt, ASK.** One extra clarification round is better than a wrong plan.\n\n"
-    "## DECISION RULE (follow this EXACTLY)\n\n"
-    "After researching with tools, choose **one** of two actions:\n\n"
-    "**(A) Clarification needed** (default) \u2192 call `hof_builtin_present_plan_clarification` "
-    "and STOP. Do NOT write any assistant text. Do NOT output a plan.\n\n"
-    "**(B) Enough context** (rare) \u2192 output the structured plan as your final reply.\n\n"
-    "There is NO option C. **NEVER write questions, requests for information, or open-ended "
-    "requests for more detail in assistant text** \u2014 use the tool for (A).\n\n"
-    "## Plan format (final reply, option B only)\n\n"
-    "Your final reply must follow this exact shape:\n"
-    "- Line 1: `# ` + short title (3\u20138 words)\n"
-    "- Blank line\n"
-    "- 1\u20132 sentences describing the approach (no data, no questions)\n"
-    "- Blank line\n"
-    "- `- [ ]` task lines (one concrete action per line)\n\n"
-    "The description must be a **statement of intent**, not a question or request.\n\n"
-    "## Rules\n\n"
-    "- **NEVER** ask questions in assistant text (use tool for option A)\n"
-    "- **NEVER** write data summaries from tool output in the final reply (no row counts, totals, "
-    "or tables)\n"
-    "- **NEVER** call mutation tools\n"
-    "- Keep intermediate assistant text (before tool calls) very short\n\n"
+    "# Plan discovery mode\n\n"
+    "The user wants a plan they can review before anything is executed.\n\n"
+    "## How delivery works\n\n"
+    "The UI renders clarification questions and the approved plan from tool "
+    "calls (not from free-form assistant text for those steps).\n\n"
     "## Workflow\n\n"
-    "1. **Research** \u2014 call read-only tools to understand the data\n"
-    "2. **Decide** \u2014 (A) need clarification? \u2192 call tool, STOP. "
-    "(B) enough context? \u2192 step 3\n"
-    "3. **Output plan** \u2014 reply with the structured plan\n\n"
-    "## Clarification tool format (option A)\n\n"
-    "Call `hof_builtin_present_plan_clarification` with:\n"
-    "- Each question: `id`, `prompt`, `options` (2\u20134 choices + ALWAYS one with "
-    "`id` containing \"other\" and `label` \"Andere / eigene Angabe\"), `allow_multiple`.\n"
-    "- After the tool call, STOP. No text after.\n\n"
-    "## WRONG vs CORRECT (shape only)\n\n"
-    "\u274c Any question or multiple-choice in assistant prose \u2192 use the clarification tool "
-    "(A), not text.\n"
-    "\u274c Final reply that repeats tool-derived numbers or lists \u2192 forbidden.\n"
-    "\u274c Final reply without `- [ ]` lines \u2192 broken.\n\n"
-    "\u2705 Final reply: `# Title`, short intent statement, then `- [ ]` lines only.\n\n"
+    "1. First explore the request: use domain read tools as needed and reply "
+    "with a short visible summary or plan of attack (at least one assistant message).\n"
+    "2. Then call `hof_builtin_present_plan_clarification` to gather any "
+    "remaining user input on scope, preferences, or parameters.\n"
+    "3. After the user answers, use read tools as needed and call "
+    "`hof_builtin_present_plan` to propose a concrete plan.\n\n"
     "---\n\n"
 )
 
 _AGENT_CHAT_PLAN_DISCOVER_SUFFIX = (
-    "\n\n## CRITICAL REMINDER \u2014 plan discovery mode\n"
-    "**Prefer (A).** Unless the request is trivially specific, call "
-    "`hof_builtin_present_plan_clarification`, then STOP (no assistant text).\n"
-    "Only (B) if unambiguous: reply with `# Title` + description + `- [ ]` lines.\n"
-    "NEVER put questions or data dumps in assistant text.\n"
+    "\n\n## Plan discovery\n"
+    "Explore with tools first, then question, then propose the plan via the "
+    "built-in tools above — the tools available in each phase enforce that order.\n"
 )
 
 
 def _normalize_agent_chat_mode(mode: str | None) -> str:
-    """Return ``instant``, ``plan``, ``plan_discover``, or ``plan_execute``."""
+    """Return ``instant``, ``plan_discover``, or ``plan_execute``."""
     raw = (mode or "").strip().lower().replace("-", "_")
-    if raw in ("plan", "plan_discover", "plan_execute"):
+    if raw in ("plan", "plan_discover"):
+        return "plan_discover"
+    if raw == "plan_execute":
         return raw
     return "instant"
 
@@ -1474,6 +1522,14 @@ def _parse_and_validate_plan_clarification_questions(
     return parse_plan_clarification_questions(arguments_json)
 
 
+def _parse_and_validate_plan_proposal(
+    arguments_json: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    from hof.agent.plan_types import parse_plan_proposal
+
+    return parse_plan_proposal(arguments_json)
+
+
 def _validate_clarification_answers(
     questions: list[dict[str, Any]],
     answers: list[Any],
@@ -1501,7 +1557,7 @@ def _clarification_answer_summary_for_model(
     return "User clarification answers:\n" + "\n\n".join(lines)
 
 
-def _run_agent_openai_loop(
+def _run_agent_llm_tool_loop(
     provider: Any,
     model: str,
     policy: AgentPolicy,
@@ -1519,10 +1575,16 @@ def _run_agent_openai_loop(
     final_extras: dict[str, Any] | None = None,
     agent_chat_mode: str = "instant",
     plan_resume_final_extras: dict[str, Any] | None = None,
+    discover_explore_allowlist: frozenset[str] | None = None,
+    discover_explore_tools: list[dict[str, Any]] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Run model ↔ tools until final reply, error, or halt for mutation confirmation."""
     rounds = start_round
     mutation_allowlist = policy.allowlist_mutation
+    _discover_text_retried = False
+    _discover_explored = False
+    _clarification_retries = 0
+    _MAX_CLARIFICATION_RETRIES = 3
     try:
         while rounds < max_rounds:
             rounds += 1
@@ -1547,8 +1609,27 @@ def _run_agent_openai_loop(
             reasoning_chars = 0
             trace_parts: list[str] = []
 
-            st_tools = tools if len(tools) > 0 else None
-            st_tool_choice = "auto" if st_tools is not None else None
+            _in_discover_explore = (
+                agent_chat_mode == "plan_discover"
+                and discover_explore_allowlist is not None
+                and discover_explore_tools is not None
+                and not _discover_explored
+            )
+            active_allowlist = (
+                discover_explore_allowlist
+                if _in_discover_explore
+                else allowlist
+            )
+            active_tools = (
+                discover_explore_tools if _in_discover_explore else tools
+            )
+            st_tools = active_tools if len(active_tools) > 0 else None
+            if st_tools is not None and agent_chat_mode == "plan_discover":
+                st_tool_choice: str | dict[str, str] | None = "auto"
+            elif st_tools is not None:
+                st_tool_choice = "auto"
+            else:
+                st_tool_choice = None
             for ev in _iter_stream_agent_turn_with_engine_retries(
                 provider,
                 lm_backend,
@@ -1639,38 +1720,43 @@ def _run_agent_openai_loop(
                 yield {"type": "phase", "round": rounds, "phase": "tools"}
                 sorted_idx = sorted(parts.keys())
                 if agent_chat_mode == "plan_discover":
-                    clarify_idxs = [
+                    _plan_terminal_tools = {
+                        _HOF_BUILTIN_PRESENT_PLAN,
+                        _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION,
+                    }
+                    terminal_idxs = [
                         i
                         for i in sorted_idx
-                        if parts[i].get("name") == _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION
+                        if parts[i].get("name") in _plan_terminal_tools
                     ]
-                    if len(clarify_idxs) > 1:
+                    if len(terminal_idxs) > 1:
                         yield {
                             "type": "error",
                             "detail": (
-                                "at most one hof_builtin_present_plan_clarification "
-                                "per round"
+                                "at most one plan/clarification tool per round"
                             ),
                         }
                         return
-                    if len(clarify_idxs) == 1:
-                        cix = clarify_idxs[0]
-                        if cix != sorted_idx[-1]:
+                    if len(terminal_idxs) == 1:
+                        tix = terminal_idxs[0]
+                        tname = parts[tix].get("name")
+                        if tix != sorted_idx[-1]:
                             yield {
                                 "type": "error",
                                 "detail": (
-                                    "hof_builtin_present_plan_clarification must be the last "
+                                    f"{tname} must be the last "
                                     "tool call in the round"
                                 ),
                             }
                             return
                         if any(
-                            parts[j].get("name") in mutation_allowlist for j in sorted_idx
+                            parts[j].get("name") in mutation_allowlist
+                            for j in sorted_idx
                         ):
                             yield {
                                 "type": "error",
                                 "detail": (
-                                    "cannot combine hof_builtin_present_plan_clarification "
+                                    f"cannot combine {tname} "
                                     "with mutation tools in the same round"
                                 ),
                             }
@@ -1700,6 +1786,7 @@ def _run_agent_openai_loop(
                 plan_clarify_halt: str | None = None
                 plan_clarify_questions: list[dict[str, Any]] | None = None
                 plan_clarify_tool_call_id: str | None = None
+                plan_proposal_halt: dict[str, Any] | None = None
                 for idx in sorted_idx:
                     tc = parts[idx]
                     name = tc["name"]
@@ -1760,8 +1847,44 @@ def _run_agent_openai_loop(
                                 verr,
                                 args_wire[:300],
                             )
-                            yield {"type": "error", "detail": verr}
-                            return
+                            _clarification_retries += 1
+                            if _clarification_retries > _MAX_CLARIFICATION_RETRIES:
+                                yield {
+                                    "type": "error",
+                                    "detail": (
+                                        "plan clarification validation failed after "
+                                        f"{_MAX_CLARIFICATION_RETRIES} retries: {verr}"
+                                    ),
+                                }
+                                return
+                            oa_messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tid,
+                                    "content": json.dumps(
+                                        {
+                                            "error": "validation_failed",
+                                            "message": verr,
+                                            "hint": (
+                                                "Retry with a corrected questions array. "
+                                                "Each question requires: id (string), "
+                                                "prompt (string), options (list of 2–5 "
+                                                "objects each with id and label strings). "
+                                                "Never omit options."
+                                            ),
+                                        }
+                                    ),
+                                }
+                            )
+                            logger.info(
+                                "agent_chat plan_clarification_retry run_id=%s round=%d "
+                                "retry=%d/%d",
+                                run_id,
+                                rounds,
+                                _clarification_retries,
+                                _MAX_CLARIFICATION_RETRIES,
+                            )
+                            break  # clarification is always last; outer loop retries
                         cid = str(uuid.uuid4())
                         save_pending(
                             cid,
@@ -1807,6 +1930,65 @@ def _run_agent_openai_loop(
                             rounds,
                             cid,
                             tid,
+                        )
+                    elif (
+                        name == _HOF_BUILTIN_PRESENT_PLAN
+                        and agent_chat_mode == "plan_discover"
+                    ):
+                        logger.info(
+                            "agent_chat plan_proposal_validating run_id=%s "
+                            "args_wire_chars=%d",
+                            run_id,
+                            len(args_wire),
+                        )
+                        proposal, verr = _parse_and_validate_plan_proposal(args_wire)
+                        if verr is not None:
+                            logger.warning(
+                                "agent_chat plan_proposal_validation_error "
+                                "run_id=%s error=%s args_wire_start=%s",
+                                run_id,
+                                verr,
+                                args_wire[:300],
+                            )
+                            yield {"type": "error", "detail": verr}
+                            return
+                        from hof.agent.plan_types import (
+                            PlanProposal,
+                            plan_proposal_to_markdown,
+                        )
+
+                        md = plan_proposal_to_markdown(
+                            PlanProposal.model_validate(proposal),
+                        )
+                        tr_plan: dict[str, Any] = {
+                            "type": "tool_result",
+                            "name": name,
+                            "summary": "Plan presented to user for review.",
+                            "status_code": 200,
+                            "tool_call_id": tid,
+                            "data": {"proposal": proposal},
+                            "internal": True,
+                        }
+                        yield tr_plan
+                        oa_messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tid,
+                                "content": json.dumps(
+                                    {"status": "plan_presented"},
+                                ),
+                            },
+                        )
+                        plan_proposal_halt = {
+                            "markdown": md,
+                            "structured_plan": proposal,
+                        }
+                        logger.info(
+                            "agent_chat plan_proposal_accepted run_id=%s round=%d "
+                            "steps=%d",
+                            run_id,
+                            rounds,
+                            len(proposal.get("steps", [])),
                         )
                     elif name in mutation_allowlist:
                         pid = str(uuid.uuid4())
@@ -1875,7 +2057,7 @@ def _run_agent_openai_loop(
                         out_json, summary = execute_tool(
                             name,
                             args_wire,
-                            allowlist,
+                            active_allowlist,
                             max_tool_output_chars=max_tool_output_chars,
                         )
                         ok, status_code = tool_result_status_for_ui(out_json)
@@ -1937,6 +2119,30 @@ def _run_agent_openai_loop(
                                     "plan_todo_update: failed to parse tool output: %s",
                                     out_json[:200],
                                 )
+                if plan_proposal_halt is not None:
+                    delete_agent_run(run_id)
+                    plan_md = plan_proposal_halt["markdown"]
+                    plan_final: dict[str, Any] = {
+                        "type": "final",
+                        "reply": plan_md,
+                        "tool_rounds_used": rounds,
+                        "model": model,
+                        "mode": "plan",
+                        "structured_plan": plan_proposal_halt["structured_plan"],
+                    }
+                    if final_extras:
+                        for k, v in final_extras.items():
+                            if k not in plan_final:
+                                plan_final[k] = v
+                    yield plan_final
+                    logger.info(
+                        "agent_chat plan_proposal_final run_id=%s round=%d "
+                        "reply_chars=%d",
+                        run_id,
+                        rounds,
+                        len(plan_md),
+                    )
+                    return
                 if plan_clarify_halt is not None:
                     store_extras = (
                         plan_resume_final_extras
@@ -2024,6 +2230,58 @@ def _run_agent_openai_loop(
                 continue
 
             text = assistant_text.strip()
+
+            # Explore phase complete: first non-tool round ends with visible text (or empty);
+            # switch to clarify-phase tools without emitting ``final``.
+            if (
+                agent_chat_mode == "plan_discover"
+                and discover_explore_allowlist is not None
+                and not _discover_explored
+            ):
+                _discover_explored = True
+                oa_messages.append(
+                    {"role": "assistant", "content": text if text else ""},
+                )
+                logger.info(
+                    "agent_chat discover_explore_complete run_id=%s round=%d "
+                    "text_chars=%d",
+                    run_id,
+                    rounds,
+                    len(text),
+                )
+                continue
+
+            # Anthropic: clarify phase only — if the model keeps replying with text
+            # instead of calling ``hof_builtin_present_plan_clarification``, nudge once
+            # then allow final (tool_choice stays auto).
+            if (
+                agent_chat_mode == "plan_discover"
+                and lm_backend == "anthropic"
+                and not _discover_text_retried
+                and text
+                and _discover_explored
+            ):
+                _discover_text_retried = True
+                oa_messages.append({"role": "assistant", "content": text})
+                oa_messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Please present your questions using the "
+                            "hof_builtin_present_plan_clarification tool now."
+                        ),
+                    },
+                )
+                reasoning = ReasoningConfig.off()
+                logger.info(
+                    "agent_chat discover_text_retry run_id=%s round=%d "
+                    "text_chars=%d",
+                    run_id,
+                    rounds,
+                    len(text),
+                )
+                continue
+
             delete_agent_run(run_id)
             logger.info(
                 "agent_chat final run_id=%s round=%s reply_chars=%d",
@@ -2058,7 +2316,16 @@ def _run_agent_openai_loop(
         )
         yield {"type": "error", "detail": f"Stopped after {max_rounds} model turns"}
     except _AgentStreamTurnExhaustedError as wrap:
-        logger.exception("agent_openai_loop failed after engine stream retries")
+        if _provider_error_is_transient_for_log(wrap.cause):
+            logger.warning(
+                "agent_llm_tool_loop engine_stream_retries_exhausted run_id=%s attempts=%s "
+                "cause=%s",
+                run_id,
+                wrap.attempts,
+                str(wrap.cause)[:400],
+            )
+        else:
+            logger.exception("agent_llm_tool_loop failed after engine stream retries")
         _agent_stream_debug_append(
             {
                 "kind": "stream_error",
@@ -2073,7 +2340,26 @@ def _run_agent_openai_loop(
             engine_retry_max_attempts=wrap.attempts,
         )
     except Exception as exc:
-        logger.exception("agent_openai_loop failed")
+        if not _looks_like_llm_provider_error(exc):
+            logger.exception("agent_llm_tool_loop failed")
+            _agent_stream_debug_append(
+                {
+                    "kind": "stream_error",
+                    "run_id": run_id,
+                    "exc_type": type(exc).__name__,
+                    "detail": str(exc)[:400],
+                },
+            )
+            yield _agent_stream_error_event(exc)
+            return
+        if _provider_error_is_transient_for_log(exc):
+            logger.warning(
+                "agent_llm_tool_loop provider_error_transient run_id=%s detail=%s",
+                run_id,
+                str(exc)[:400],
+            )
+        else:
+            logger.exception("agent_llm_tool_loop failed")
         _agent_stream_debug_append(
             {
                 "kind": "stream_error",
@@ -2131,19 +2417,27 @@ def _run_agent_chat_stream(
     _agent_stream_debug_append({"kind": "run_begin", "run_id": run_id, "model": model})
     allowlist = policy.effective_allowlist()
     tools = openai_tool_specs(allowlist)
+    loop_allowlist = allowlist
 
     note_fn = policy.attachments_system_note or default_attachments_system_note
     att_note = note_fn(att_norm) if att_norm else ""
     system_content = _build_system_prompt(policy, attachment_note=att_note)
     plan_resume_final_extras: dict[str, Any] | None = None
-    if chat_mode == "plan":
-        system_content += _AGENT_CHAT_PLAN_MODE_SUFFIX
-        loop_tools: list[dict[str, Any]] = []
+    discover_explore_allowlist: frozenset[str] | None = None
+    discover_explore_tools: list[dict[str, Any]] | None = None
+    if chat_mode == "plan_discover":
+        system_content = (
+            _AGENT_CHAT_PLAN_DISCOVER_PREFIX
+            + system_content
+            + _AGENT_CHAT_PLAN_DISCOVER_SUFFIX
+        )
+        discover_explore_allowlist, discover_explore_tools = _build_discover_tools(
+            policy, phase="explore",
+        )
+        loop_allowlist, loop_tools = _build_discover_tools(
+            policy, phase="clarify",
+        )
         final_extras: dict[str, Any] | None = {"mode": "plan"}
-    elif chat_mode == "plan_discover":
-        system_content = _AGENT_CHAT_PLAN_DISCOVER_PREFIX + system_content + _AGENT_CHAT_PLAN_DISCOVER_SUFFIX
-        discover_allowlist, loop_tools = _build_discover_tools(policy)
-        final_extras = {"mode": "plan"}
         plan_resume_final_extras = {"mode": "plan"}
     elif chat_mode == "plan_execute":
         exec_suffix = _AGENT_CHAT_PLAN_EXECUTE_SUFFIX
@@ -2173,11 +2467,11 @@ def _run_agent_chat_stream(
         chat_mode,
     )
 
-    yield from _run_agent_openai_loop(
+    yield from _run_agent_llm_tool_loop(
         provider,
         model,
         policy,
-        allowlist,
+        loop_allowlist,
         loop_tools,
         oa_messages,
         0,
@@ -2190,6 +2484,8 @@ def _run_agent_chat_stream(
         final_extras=final_extras,
         agent_chat_mode=chat_mode,
         plan_resume_final_extras=plan_resume_final_extras,
+        discover_explore_allowlist=discover_explore_allowlist,
+        discover_explore_tools=discover_explore_tools,
     )
 
 
@@ -2199,7 +2495,7 @@ def _run_agent_resume_stream(
     *,
     policy: AgentPolicy,
 ) -> Iterator[dict[str, Any]]:
-    """Apply confirm/reject for pending mutations and continue the OpenAI loop."""
+    """Apply confirm/reject for pending mutations and continue the LLM tool loop."""
     max_rounds, max_tool_output_chars, _m, max_cli_line_chars = _agent_limits()
 
     rid = (run_id or "").strip()
@@ -2472,7 +2768,7 @@ def _run_agent_resume_stream(
         len(open_ids),
     )
 
-    yield from _run_agent_openai_loop(
+    yield from _run_agent_llm_tool_loop(
         provider,
         model,
         policy,
@@ -2581,7 +2877,9 @@ def _run_agent_resume_plan_clarification_stream(
     else:
         plan_resume_final_extras = {"mode": "plan"}
 
-    discover_allowlist, tools = _build_discover_tools(policy)
+    discover_allowlist, tools = _build_discover_tools(
+        policy, phase="propose",
+    )
 
     try:
         provider = _resolve_provider(lm_backend, model)
@@ -2618,7 +2916,7 @@ def _run_agent_resume_plan_clarification_stream(
         cid,
     )
 
-    yield from _run_agent_openai_loop(
+    yield from _run_agent_llm_tool_loop(
         provider,
         model,
         policy,
@@ -2692,7 +2990,7 @@ def _run_agent_resume_inbox_stream(
     *,
     policy: AgentPolicy,
 ) -> Iterator[dict[str, Any]]:
-    """After client inbox watches clear: server verify, then continue the OpenAI loop."""
+    """After client inbox watches clear: server verify, then continue the LLM tool loop."""
     max_rounds, max_tool_output_chars, _m, max_cli_line_chars = _agent_limits()
 
     rid = (run_id or "").strip()
@@ -2849,7 +3147,7 @@ def _run_agent_resume_inbox_stream(
         start_round,
     )
 
-    yield from _run_agent_openai_loop(
+    yield from _run_agent_llm_tool_loop(
         provider,
         model,
         policy,

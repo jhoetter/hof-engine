@@ -15,6 +15,9 @@ from hof.agent.plan_types import (
     PlanClarificationBarrierV1,
     PlanClarificationOption,
     PlanClarificationQuestion,
+    PlanProposal,
+    PlanStep,
+    parse_plan_proposal,
 )
 from hof.agent.policy import (
     AgentPolicy,
@@ -54,6 +57,9 @@ __all__ = [
     "PlanClarificationBarrierV1",
     "PlanClarificationOption",
     "PlanClarificationQuestion",
+    "PlanProposal",
+    "PlanStep",
+    "parse_plan_proposal",
     "MAX_CONVERSATION_STATE_BYTES",
     "AgentConversationDraftV1",
     "AgentConversationPlanV1",

@@ -583,22 +583,56 @@ def hof_builtin_calculate(
 
 
 @function(
+    name="hof_builtin_present_plan",
+    tool_summary=(
+        "Present a structured plan to the user for review and approval. "
+        "After calling this tool, STOP — do not write any assistant text."
+    ),
+    when_to_use=(
+        "When you have enough context to propose a concrete plan. "
+        "Call with title, description, and steps."
+    ),
+    when_not_to_use=(
+        "When you still need clarification from the user — "
+        "use hof_builtin_present_plan_clarification instead."
+    ),
+)
+def hof_builtin_present_plan(
+    title: str, description: str, steps: list,
+) -> dict[str, Any]:
+    """Intercepted by the stream loop; this body is never reached.
+
+    Validated server-side via :class:`~hof.agent.plan_types.PlanProposal`.
+    ``steps``: list of ``{label: str}`` objects.
+    """
+    return {"status": "intercepted"}
+
+
+@function(
     name="hof_builtin_present_plan_clarification",
-    tool_summary="Show the user a set of multiple-choice clarification questions during plan discovery. "
-    "The UI renders each question as a card with selectable options. "
-    "After calling this tool, STOP immediately — do not write any assistant text.",
+    tool_summary=(
+        "Show the user multiple-choice clarification questions during plan discovery. "
+        "The UI renders each question as a card with selectable options. "
+        "After calling this tool, STOP — do not write any assistant text."
+    ),
     when_to_use=(
         "When you need the user's input before you can produce a concrete plan. "
         "Call this tool with your questions and then STOP (no text after the tool call)."
     ),
-    when_not_to_use="When you already have enough context to produce a plan — just output the plan directly.",
+    when_not_to_use=(
+        "When you already have enough context to produce a plan — "
+        "use hof_builtin_present_plan instead."
+    ),
 )
 def hof_builtin_present_plan_clarification(questions: list) -> dict[str, Any]:
     """Intercepted by the stream loop; this body is never reached.
 
     ``questions`` is validated server-side via
     :class:`~hof.agent.plan_types.PlanClarificationQuestion`.
-    Each element: ``{id, prompt, options: [{id, label}], allow_multiple}``.
+    Required shape: ``{id, prompt, options: [{id, label}], allow_multiple}``.
+    ``key``/``label``/``hint`` are accepted as aliases for ``id``/``prompt``.
+    ``options`` (at least 2) is **required** — omitting it causes a validation
+    error returned to the model so it can retry with correct choices.
     """
     return {"status": "intercepted"}
 

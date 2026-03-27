@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -28,6 +29,10 @@ from hof.agent.policy import (
 from hof.agent.state import load_agent_run, save_agent_run
 from hof.agent.stream import (
     _agent_stream_error_event,
+    _failure_category_value,
+    _looks_like_llm_provider_error,
+    _provider_error_eligible_for_engine_stream_retry,
+    _provider_error_is_transient_for_log,
     _AgentStreamTurnExhaustedError,
     _append_client_messages,
     _iter_stream_agent_turn_with_engine_retries,
@@ -38,6 +43,69 @@ from hof.agent.stream import (
     iter_agent_resume_inbox_stream,
     iter_agent_resume_stream,
 )
+
+
+def _tool_names_from_openai_specs(tools: list[Any] | None) -> set[str]:
+    out: set[str] = set()
+    for t in tools or []:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function")
+        if isinstance(fn, dict):
+            n = fn.get("name")
+            if isinstance(n, str):
+                out.add(n)
+    return out
+
+
+def test_plan_discover_explore_text_then_clarify_tools(monkeypatch) -> None:
+    """First plan_discover round uses explore allowlist; text does not emit ``final`` yet."""
+    importlib.reload(importlib.import_module("hof.agent.builtin_tools"))
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset({"list_expenses"}),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="test ",
+        ),
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AGENT_REASONING_MODE", raising=False)
+    monkeypatch.setenv("AGENT_LLM_BACKEND", "openai")
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_stream(*_a, **kw):
+        calls.append(kw)
+        n = len(calls)
+
+        def gen():
+            if n == 1:
+                yield AgentContentDelta(text="Explored the scope.")
+                yield AgentMessageFinish(finish_reason="stop", usage=None)
+            else:
+                yield AgentContentDelta(text="Next step: ask the user.")
+                yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+        return gen()
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream):
+        ev = list(
+            iter_agent_chat_stream(
+                [{"role": "user", "content": "plan my taxes"}],
+                None,
+                mode="plan_discover",
+            ),
+        )
+
+    finals = [e for e in ev if e.get("type") == "final"]
+    assert len(finals) == 1
+    assert len(calls) == 2
+    t1 = _tool_names_from_openai_specs(calls[0].get("tools"))
+    t2 = _tool_names_from_openai_specs(calls[1].get("tools"))
+    assert "hof_builtin_present_plan_clarification" not in t1
+    assert "hof_builtin_present_plan_clarification" in t2
+    assert calls[0].get("tool_choice") == "auto"
+    assert calls[1].get("tool_choice") == "auto"
 
 
 def test_default_normalize_attachments_accepts_keys() -> None:
@@ -213,7 +281,7 @@ def test_resume_emits_mutation_applied_from_post_apply_hook(monkeypatch) -> None
     assert any(e.get("type") == "resume_start" for e in ev2)
 
 
-def test_resume_defers_openai_loop_when_inbox_watches(monkeypatch) -> None:
+def test_resume_defers_llm_tool_loop_when_inbox_watches(monkeypatch) -> None:
     """After mutation confirm, inbox watches keep the run open and emit awaiting_inbox_review."""
 
     from hof.functions import function
@@ -1144,6 +1212,89 @@ def test_agent_stream_error_event_maps_provider_failure() -> None:
     assert "technical_detail" not in d
 
 
+def test_provider_error_is_transient_for_log() -> None:
+    from llm_markdown.providers.base import ProviderError
+    from llm_markdown.providers.failure_info import ProviderFailure, ProviderFailureCategory
+
+    f_ok = ProviderFailure(
+        category=ProviderFailureCategory.OVERLOADED,
+        http_status=529,
+        retry_after_seconds=None,
+        public_message="x",
+        technical_detail="t",
+    )
+    assert _provider_error_is_transient_for_log(
+        ProviderError("AnthropicProvider", "m", failure=f_ok, retryable=True),
+    )
+    f_auth = ProviderFailure(
+        category=ProviderFailureCategory.AUTH,
+        http_status=401,
+        retry_after_seconds=None,
+        public_message="x",
+        technical_detail="t",
+    )
+    assert not _provider_error_is_transient_for_log(
+        ProviderError("AnthropicProvider", "m", failure=f_auth, retryable=False),
+    )
+
+
+def test_looks_like_provider_error_does_not_require_isinstance() -> None:
+    """Duck-typing avoids isinstance() false negatives when two llm-markdown copies load."""
+
+    class FakeProviderError(RuntimeError):
+        def __init__(self) -> None:
+            super().__init__("m")
+            self.provider = "AnthropicProvider"
+            self.failure = SimpleNamespace(
+                category=SimpleNamespace(value="server"),
+            )
+
+    assert _looks_like_llm_provider_error(FakeProviderError())
+    assert _provider_error_is_transient_for_log(FakeProviderError())
+    assert _provider_error_eligible_for_engine_stream_retry(FakeProviderError())
+
+
+def test_agent_stream_error_event_duck_typed_maps_transient_detail() -> None:
+    """NDJSON error uses first-person copy for overload without isinstance(ProviderError)."""
+
+    class FakeProviderError(RuntimeError):
+        def __init__(self) -> None:
+            super().__init__("m")
+            self.provider = "AnthropicProvider"
+            self.failure = SimpleNamespace(
+                category=SimpleNamespace(value="overloaded"),
+                http_status=529,
+                retry_after_seconds=None,
+                public_message="ignored for transient branch",
+                technical_detail="t",
+            )
+            self.retryable = True
+
+    d = _agent_stream_error_event(FakeProviderError())
+    assert d["type"] == "error"
+    assert d["error_category"] == "overloaded"
+    assert "temporarily unavailable" in d["detail"].lower()
+    assert "AnthropicProvider" not in d["detail"]
+
+
+def test_failure_category_value_accepts_string_category() -> None:
+    assert (
+        _failure_category_value(SimpleNamespace(category="SERVER"))
+        == "server"
+    )
+
+
+def test_provider_error_transient_when_retryable_even_if_category_odd() -> None:
+    class E(RuntimeError):
+        def __init__(self) -> None:
+            super().__init__("m")
+            self.provider = "p"
+            self.failure = SimpleNamespace(category="weird")
+            self.retryable = True
+
+    assert _provider_error_is_transient_for_log(E())
+
+
 def test_agent_stream_error_event_rate_limit_uses_first_person_copy() -> None:
     from llm_markdown.providers.base import ProviderError
     from llm_markdown.providers.failure_info import ProviderFailure, ProviderFailureCategory
@@ -1186,6 +1337,32 @@ def test_agent_stream_error_event_after_engine_retries_exhausted() -> None:
     assert "12" in d["detail"]
     assert d["retryable"] is False
     assert "technical_detail" not in d
+
+
+def test_agent_stream_error_event_after_engine_retries_exhausted_overloaded() -> None:
+    """529-style overload must not be described as the user's usage quota."""
+    from llm_markdown.providers.base import ProviderError
+    from llm_markdown.providers.failure_info import ProviderFailure, ProviderFailureCategory
+
+    failure = ProviderFailure(
+        category=ProviderFailureCategory.OVERLOADED,
+        http_status=529,
+        retry_after_seconds=None,
+        public_message="ignored for exhausted path",
+        technical_detail="x",
+    )
+    exc = ProviderError("anthropic", "internal", failure=failure, retryable=True)
+    d = _agent_stream_error_event(
+        exc,
+        engine_turn_retries_exhausted=True,
+        engine_retry_max_attempts=3,
+    )
+    assert d["type"] == "error"
+    assert "overloaded" in d["detail"].lower()
+    assert "not your quota" in d["detail"].lower() or "their side" in d["detail"].lower()
+    assert "usage limit" not in d["detail"].lower()
+    assert "3 times" in d["detail"]
+    assert d["retryable"] is False
 
 
 def test_iter_stream_agent_turn_retries_when_only_segment_start_before_error(

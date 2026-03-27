@@ -43,6 +43,7 @@ export type {
   AgentConversationStateV1,
   AgentConversationPlanV1,
   PlanClarificationQuestion,
+  StructuredPlanProposal,
 } from "./agent/conversationTypes";
 export {
   HofAgentPlanClarificationCard,

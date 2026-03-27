@@ -26,6 +26,13 @@ export type PlanClarificationQuestion = {
   allow_multiple: boolean;
 };
 
+/** Structured plan from ``hof_builtin_present_plan`` tool (server-validated). */
+export type StructuredPlanProposal = {
+  title: string;
+  description: string;
+  steps: { label: string }[];
+};
+
 export type AgentConversationPlanV1 = {
   phase: "clarifying" | "generating" | "ready" | "executing" | "done";
   text: string;

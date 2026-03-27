@@ -732,6 +732,15 @@ function looksLikeJsonOrToolCallLine(t: string): boolean {
  * Strip HTML tags, markdown tables, bullet/numbered lists, headings, code fences,
  * and JSON-like lines (hallucinated tool payloads) — the thinking pane is plain analytical notes only.
  */
+const SETTLED_LABEL_MAP: Record<string, string> = {
+  "Generating questions": "Generated questions",
+  "Preparing plan": "Prepared plan",
+};
+
+function settledReasoningLabel(streamingLabel: string): string {
+  return SETTLED_LABEL_MAP[streamingLabel] ?? streamingLabel;
+}
+
 function sanitizeReasoningText(raw: string): string {
   let s = raw;
   // Strip HTML details/summary blocks (models sometimes dump these into thinking)
@@ -864,6 +873,7 @@ function ReasoningStreamPeek({
   streaming,
   reasoningElapsedMs,
   consolidatedContentForPopover,
+  reasoningLabel: reasoningLabelProp,
 }: {
   text: string;
   streaming: boolean;
@@ -874,6 +884,8 @@ function ReasoningStreamPeek({
    * popover can show the model output (often streamed as ``assistant_delta`` only).
    */
   consolidatedContentForPopover?: string;
+  /** Stamped label from the block (persists after flush). Overrides default "Thought" for settled rows. */
+  reasoningLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const columnRef = useRef<HTMLDivElement>(null);
@@ -1040,6 +1052,7 @@ function ReasoningStreamPeek({
     ? REASONING_THINKING_SHIMMER_LABEL_CLASS
     : "text-[11px] font-medium text-tertiary";
 
+  /** Plan-discover phase uses the same shimmer row as “Thinking” (no separate banner). */
   const streamingThinkingWord = streamingReasoningLabel ?? "Thinking";
 
   const bodyClass =
@@ -1148,7 +1161,11 @@ function ReasoningStreamPeek({
               </>
             ) : (
               <>
-                <span className={thinkingLabelClass}>Thought</span>
+                <span className={thinkingLabelClass}>
+                  {reasoningLabelProp
+                    ? settledReasoningLabel(reasoningLabelProp)
+                    : "Thought"}
+                </span>
                 {effectiveSettled != null ? (
                   <span className="text-[11px] font-medium text-tertiary">
                     for {effectiveSettled}
@@ -1176,6 +1193,7 @@ function AssistantModelStreamShell({
   wireStreaming = true,
   caretVisible,
   reasoningElapsedMs,
+  reasoningLabel,
 }: {
   streamText: string;
   streamTextRole: "content" | "reasoning" | "mixed" | undefined;
@@ -1188,6 +1206,7 @@ function AssistantModelStreamShell({
   /** Typing caret in content bubble; defaults to ``wireStreaming``. */
   caretVisible?: boolean;
   reasoningElapsedMs?: number;
+  reasoningLabel?: string;
 }) {
   const showCaret = caretVisible ?? wireStreaming;
   const hasStreamText = streamText.trim().length > 0;
@@ -1197,6 +1216,7 @@ function AssistantModelStreamShell({
         text={streamText}
         streaming={wireStreaming}
         reasoningElapsedMs={reasoningElapsedMs}
+        reasoningLabel={reasoningLabel}
       />
     );
   }
@@ -1209,6 +1229,7 @@ function AssistantModelStreamShell({
         text=""
         streaming={true}
         reasoningElapsedMs={reasoningElapsedMs}
+        reasoningLabel={reasoningLabel}
       />
     );
   }
@@ -1236,6 +1257,7 @@ function AssistantSegmentedBody({
   assistantUiLane,
   persistedReasoningElapsedMs,
   afterToolResult,
+  reasoningLabel,
 }: {
   segments: AssistantStreamSegment[];
   /** HTTP stream still open (Thinking label, live reasoning). */
@@ -1255,6 +1277,7 @@ function AssistantSegmentedBody({
    * so later model rounds still show “Thought for …” like the first turn.
    */
   afterToolResult?: boolean;
+  reasoningLabel?: string;
 }) {
   const contentClass = contentBubbleClass ?? replyBubbleClass;
   const showCaret = caretVisible ?? wireStreaming;
@@ -1273,12 +1296,23 @@ function AssistantSegmentedBody({
     -1,
   );
 
-  const { thinkingEpisodeStartedAtMs } = useHofAgentChat();
+  const { thinkingEpisodeStartedAtMs, streamingReasoningLabel, agentMode } =
+    useHofAgentChat();
   const reasoningPhaseEndedAtRef = useRef<number | null>(null);
   const reasoningPhaseWasLiveRef = useRef(false);
   const anyReasoningLive = merged.some((_, idx) =>
     reasoningPhaseTickingLive(merged, idx, lastReasoningIndex, wireStreaming),
   );
+  const lastSeg = merged[merged.length - 1];
+  const contentStreamActive =
+    wireStreaming && lastSeg != null && lastSeg.kind === "content";
+  /** ``streamingReasoningLabel`` only appears on live ``ReasoningStreamPeek``; once reply tokens stream, show the same compact row here. */
+  const showPlanDiscoverDuringReply =
+    agentMode === "plan" &&
+    streamingReasoningLabel != null &&
+    contentStreamActive &&
+    !anyReasoningLive;
+  let planDiscoverInlineInserted = false;
   if (anyReasoningLive) {
     reasoningPhaseWasLiveRef.current = true;
     reasoningPhaseEndedAtRef.current = null;
@@ -1326,7 +1360,7 @@ function AssistantSegmentedBody({
       if (!s.text.trim()) {
         if (emptyReasoningPulse) {
           children.push(
-            <ReasoningStreamPeek key={`seg-r-${i}`} text="" streaming={true} />,
+            <ReasoningStreamPeek key={`seg-r-${i}`} text="" streaming={true} reasoningLabel={reasoningLabel} />,
           );
           continue;
         }
@@ -1340,6 +1374,19 @@ function AssistantSegmentedBody({
           const elapsedForConsolidated = !wireStreaming
             ? persistedReasoningElapsedMs
             : capturedReasoningElapsedMs;
+          if (
+            showPlanDiscoverDuringReply &&
+            !planDiscoverInlineInserted &&
+            nextIsLast
+          ) {
+            children.push(
+              <AgentEarlyThinkingIndicator
+                key="plan-discover-inline"
+                label={streamingReasoningLabel ?? undefined}
+              />,
+            );
+            planDiscoverInlineInserted = true;
+          }
           children.push(
             <div key={`seg-rc-${i}`} className={contentClass}>
               <div className="mb-2">
@@ -1348,6 +1395,7 @@ function AssistantSegmentedBody({
                   streaming={false}
                   reasoningElapsedMs={elapsedForConsolidated}
                   consolidatedContentForPopover={nextEmptyReasoning.text}
+                  reasoningLabel={reasoningLabel}
                 />
               </div>
               <AssistantMarkdown source={nextEmptyReasoning.text} />
@@ -1370,6 +1418,7 @@ function AssistantSegmentedBody({
               text=""
               streaming={false}
               reasoningElapsedMs={persistedReasoningElapsedMs}
+              reasoningLabel={reasoningLabel}
             />,
           );
           continue;
@@ -1388,6 +1437,7 @@ function AssistantSegmentedBody({
           text={s.text}
           streaming={reasoningPeekLive}
           reasoningElapsedMs={durationProp}
+          reasoningLabel={reasoningLabel}
         />,
       );
       continue;
@@ -1398,6 +1448,19 @@ function AssistantSegmentedBody({
       continue;
     }
     if (!s.text.trim() && contentPulse) {
+      if (
+        showPlanDiscoverDuringReply &&
+        !planDiscoverInlineInserted &&
+        isLast
+      ) {
+        children.push(
+          <AgentEarlyThinkingIndicator
+            key="plan-discover-inline"
+            label={streamingReasoningLabel ?? undefined}
+          />,
+        );
+        planDiscoverInlineInserted = true;
+      }
       children.push(
         <div
           key={`seg-c-${i}`}
@@ -1409,6 +1472,19 @@ function AssistantSegmentedBody({
         </div>,
       );
       continue;
+    }
+    if (
+      showPlanDiscoverDuringReply &&
+      !planDiscoverInlineInserted &&
+      isLast
+    ) {
+      children.push(
+        <AgentEarlyThinkingIndicator
+          key="plan-discover-inline"
+          label={streamingReasoningLabel ?? undefined}
+        />,
+      );
+      planDiscoverInlineInserted = true;
     }
     children.push(
       <div key={`seg-c-${i}`} className={contentClass}>
@@ -1542,6 +1618,7 @@ export function LiveBlockView({
                 afterToolResult={afterToolResult}
                 assistantUiLane={lane}
                 emptyLabel=""
+                reasoningLabel={b.reasoningLabel}
               />
             );
           }
@@ -1576,6 +1653,7 @@ export function LiveBlockView({
               afterToolResult={afterToolResult}
               assistantUiLane={lane}
               emptyLabel="Drafting the answer…"
+              reasoningLabel={b.reasoningLabel}
             />
           );
         }
@@ -1587,6 +1665,7 @@ export function LiveBlockView({
             emptyLabel="Drafting the answer…"
             wireStreaming={streamActive}
             caretVisible={streamCaretActive}
+            reasoningLabel={b.reasoningLabel}
           />
         );
       }
@@ -1604,6 +1683,7 @@ export function LiveBlockView({
             assistantUiLane={lane}
             emptyLabel=""
             persistedReasoningElapsedMs={persistedReasoningMs}
+            reasoningLabel={b.reasoningLabel}
           />
         );
       }
@@ -1614,6 +1694,7 @@ export function LiveBlockView({
       if (
         afterToolResult &&
         b.streamPhase === "model" &&
+        lane === "thinking" &&
         (b.streamTextRole === "reasoning" ||
           b.streamTextRole === "mixed" ||
           (b.streamTextRole === undefined && lane === "thinking"))
@@ -1630,6 +1711,7 @@ export function LiveBlockView({
             wireStreaming={false}
             caretVisible={false}
             reasoningElapsedMs={persistedReasoningMs}
+            reasoningLabel={b.reasoningLabel}
           />
         );
       }
@@ -1652,6 +1734,7 @@ export function LiveBlockView({
             afterToolResult={afterToolResult}
             assistantUiLane={lane}
             emptyLabel="Tools may run before any reply text appears."
+            reasoningLabel={b.reasoningLabel}
           />
         );
       }
@@ -1663,6 +1746,7 @@ export function LiveBlockView({
           emptyLabel="Tools may run before any reply text appears."
           wireStreaming={streamActive}
           caretVisible={streamActive}
+          reasoningLabel={b.reasoningLabel}
         />
       );
     }
@@ -1682,6 +1766,7 @@ export function LiveBlockView({
             assistantUiLane={lane}
             emptyLabel=""
             persistedReasoningElapsedMs={persistedReasoningMs}
+            reasoningLabel={b.reasoningLabel}
           />
         );
       }
@@ -1694,6 +1779,7 @@ export function LiveBlockView({
           text={b.text}
           streaming={false}
           reasoningElapsedMs={persistedReasoningMs}
+          reasoningLabel={b.reasoningLabel}
         />
       );
     }
@@ -1710,6 +1796,7 @@ export function LiveBlockView({
             assistantUiLane={lane}
             emptyLabel=""
             persistedReasoningElapsedMs={persistedReasoningMs}
+            reasoningLabel={b.reasoningLabel}
           />
         );
       }
@@ -1737,6 +1824,7 @@ export function LiveBlockView({
             assistantUiLane={lane}
             emptyLabel=""
             persistedReasoningElapsedMs={persistedReasoningMs}
+            reasoningLabel={b.reasoningLabel}
           />
         );
       }
@@ -1745,6 +1833,7 @@ export function LiveBlockView({
           text={b.text}
           streaming={false}
           reasoningElapsedMs={persistedReasoningMs}
+          reasoningLabel={b.reasoningLabel}
         />
       );
     }
@@ -1761,6 +1850,7 @@ export function LiveBlockView({
             afterToolResult={afterToolResult}
             assistantUiLane={lane}
             emptyLabel="Waiting for the model…"
+            reasoningLabel={b.reasoningLabel}
           />
         );
       }
@@ -1772,6 +1862,7 @@ export function LiveBlockView({
           emptyLabel="Waiting for the model…"
           wireStreaming={streamActive}
           caretVisible={streamCaretActive}
+          reasoningLabel={b.reasoningLabel}
         />
       );
     }
@@ -1787,6 +1878,7 @@ export function LiveBlockView({
           assistantUiLane={lane}
           emptyLabel=""
           persistedReasoningElapsedMs={persistedReasoningMs}
+          reasoningLabel={b.reasoningLabel}
         />
       );
     }

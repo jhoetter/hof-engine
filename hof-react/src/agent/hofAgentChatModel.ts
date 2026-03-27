@@ -81,6 +81,8 @@ export type LiveBlock =
       };
       /** Set on ``assistant_done`` from episode clock (persists after flush to thread). */
       reasoning_elapsed_ms?: number;
+      /** Stamped from context on ``assistant_done``: plan-discover phase string for the settled row (e.g. "Generating questions"; UI may show past tense). */
+      reasoningLabel?: string;
     }
   | {
       kind: "tool_call";
@@ -213,34 +215,11 @@ export const CHAT_USER_BUBBLE_CLASS =
 export const PLAN_EXECUTE_USER_MARKER = "[plan:execute]";
 
 /**
- * While drafting a plan **after clarification** (``agent_resume_plan_clarification``), tokens are
- * routed into the plan card — suppress these wire events for ``liveBlocks`` so reasoning does not
- * render under the plan. Initial ``plan_discover`` does not use this; thinking and tools stay in
- * ``liveBlocks``. Tool rows and other structured events still apply when suppression is on.
+ * Plan discovery: approved plan markdown is **not** streamed as ``assistant_delta``. The engine
+ * validates ``hof_builtin_present_plan`` tool arguments and emits ``final`` with ``structured_plan``
+ * (see ``plan_text_source: structured_tool`` on the wire). The UI fills the plan card from that
+ * ``final`` only; pre-final assistant tokens stay in the chat rail.
  */
-export function shouldSuppressLiveBlockDuringPlanDiscover(
-  ev: HofStreamEvent,
-): boolean {
-  const typ = typeof ev.type === "string" ? ev.type : "";
-  if (
-    typ === "assistant_delta" ||
-    typ === "reasoning_delta" ||
-    typ === "segment_start"
-  ) {
-    return true;
-  }
-  if (typ === "assistant_done") {
-    return true;
-  }
-  if (typ === "phase") {
-    const ph =
-      typeof (ev as { phase?: unknown }).phase === "string"
-        ? String((ev as { phase: string }).phase)
-        : "";
-    return ph === "model" || ph === "inbox_review_summary";
-  }
-  return false;
-}
 
 /** Same horizontal rail as thinking, tool cards, and assistant text (avoids mixed widths). */
 export const AGENT_CHAT_COLUMN_CLASS = "w-full max-w-[min(100%,42rem)]";
@@ -722,6 +701,8 @@ export type AgentApplyStreamCtx = {
   assistantDoneClockMs?: number;
   /** Start of the current thinking episode (from stream consumer). */
   thinkingEpisodeStartedAtMs?: number | null;
+  /** Stamped onto the assistant block on ``assistant_done`` for settled reasoning label (plan-discover phase string). */
+  reasoningLabel?: string | null;
 };
 
 function reasoningElapsedStamp(
@@ -791,6 +772,30 @@ export function inferAssistantUiLane(
       b.streamPhase !== "summary"
     ) {
       return "reply";
+    }
+    // `finishReason === "tool_calls"` is stamped as `thinking`, but the visible stream is often
+    // user-facing prose (assistant_delta) before the next tool — not internal reasoning. Show as
+    // reply so it is not labeled "Thought" (plan_discover clarify → questions is the main case).
+    if (
+      b.uiLane === "thinking" &&
+      b.finishReason === "tool_calls" &&
+      b.streamPhase === "model"
+    ) {
+      if (b.streamTextRole === "content" || b.streamTextRole === "mixed") {
+        return "reply";
+      }
+      if (
+        b.streamSegments?.some((s) => s.kind === "content" && s.text.trim())
+      ) {
+        return "reply";
+      }
+      if (
+        b.streamTextRole === "reasoning" &&
+        !b.streamSegments?.length &&
+        b.text.trim().length >= 80
+      ) {
+        return "reply";
+      }
     }
     return b.uiLane;
   }
@@ -1048,6 +1053,10 @@ export function applyStreamEvent(
       } else {
         streamSegmentsOut = last.streamSegments;
       }
+      const labelStamp =
+        typeof ctx.reasoningLabel === "string" && ctx.reasoningLabel.trim()
+          ? { reasoningLabel: ctx.reasoningLabel.trim() }
+          : {};
       return [
         ...trimmed.slice(0, si),
         {
@@ -1059,6 +1068,7 @@ export function applyStreamEvent(
           streamSegments: streamSegmentsOut,
           ...(sp ? { streamPhase: sp } : {}),
           ...reasoningStamp,
+          ...labelStamp,
         },
         ...trimmed.slice(si + 1),
       ];
@@ -1426,7 +1436,11 @@ export function finalizePlanFromTerminalEvent(
   planText: string;
   blocksToFlush: LiveBlock[];
 } {
-  const planRunId = newId();
+  const rawPlanRun = term.plan_run_id;
+  const planRunId =
+    typeof rawPlanRun === "string" && rawPlanRun.trim().length > 0
+      ? rawPlanRun.trim()
+      : newId();
   const blocksToFlush = stripLastAssistantBlockForPlan(doneBlocks);
 
   const sp = term.structured_plan;

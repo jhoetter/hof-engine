@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronDown, ChevronUp, Circle } from "lucide-react";
-import { parseStructuredPlan } from "./planMarkdownTodos";
+import {
+  parseStructuredPlan,
+  visiblePlanMarkdownPreview,
+} from "./planMarkdownTodos";
 
 export type HofAgentPlanCardProps = {
   planText: string;
@@ -22,7 +25,16 @@ export function HofAgentPlanCard({
   onExecutePlan,
 }: HofAgentPlanCardProps) {
   const [viewRawOpen, setViewRawOpen] = useState(false);
-  const parsed = useMemo(() => parseStructuredPlan(planText), [planText]);
+  const planForStructure = useMemo(() => {
+    if (planPhase === "generating") {
+      return visiblePlanMarkdownPreview(planText);
+    }
+    return planText;
+  }, [planPhase, planText]);
+  const parsed = useMemo(
+    () => parseStructuredPlan(planForStructure),
+    [planForStructure],
+  );
   const generating = planPhase === "generating";
   const executing = planPhase === "executing";
   const completed = planPhase === "done";
@@ -141,7 +153,7 @@ export function HofAgentPlanCard({
           </button>
           {viewRawOpen ? (
             <textarea
-              value={planText}
+              value={planForStructure}
               onChange={(e) => onPlanTextChange(e.target.value)}
               disabled={busy || completed}
               className="mb-3 min-h-[160px] w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-[13px] text-foreground outline-none ring-0 focus:ring-2 focus:ring-[var(--color-accent)]/40 disabled:opacity-60"

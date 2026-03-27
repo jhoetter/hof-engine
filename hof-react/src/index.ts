@@ -60,10 +60,17 @@ export {
   parseStructuredPlan,
   preferPlanTaskListBody,
   sliceMarkdownFromFirstTaskListLine,
+  visiblePlanMarkdownPreview,
   normalizePlanTodoWireIndices,
   type ParsedPlanTodo,
   type StructuredPlan,
 } from "./agent/planMarkdownTodos";
+export {
+  computePlanDiscoverStatusLabel,
+  discoverPhaseToEagerLabel,
+  type PlanDiscoverBuiltinLane,
+  type PlanDiscoverStatusInput,
+} from "./agent/planDiscoverStatusLabel";
 export {
   applyPlanTodoWireResolution,
   mergePlanTodoDoneIndices,

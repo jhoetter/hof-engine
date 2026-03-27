@@ -51,6 +51,27 @@ export function preferPlanTaskListBody(markdown: string): string {
   return sliced.length > 0 ? sliced : trimmed;
 }
 
+/**
+ * Markdown to show in the plan card **while streaming** after the plan builtin: drop intro prose
+ * that the model may emit in the **same** assistant segment as the checklist (there is no separate
+ * wire channel for “plan body” vs “preamble” — both are {@link AgentContentDelta} / ``assistant_delta``).
+ * Prefer content from the first ``#`` heading; otherwise from the first GFM task line; otherwise
+ * empty so the card stays minimal until structure appears.
+ */
+export function visiblePlanMarkdownPreview(raw: string): string {
+  const s = raw ?? "";
+  if (!s.trim()) {
+    return "";
+  }
+  if (/^\s*#/m.test(s)) {
+    const idx = s.search(/^\s*#/m);
+    if (idx >= 0) {
+      return s.slice(idx).trimStart();
+    }
+  }
+  return sliceMarkdownFromFirstTaskListLine(s);
+}
+
 /** Parsed plan for Cursor-style plan card (title, description, checklist). */
 export type StructuredPlan = {
   title: string;

@@ -17,6 +17,7 @@ class PlanClarificationOption(BaseModel):
 
     id: str
     label: str
+    is_other: bool = False
 
 
 class PlanClarificationQuestion(BaseModel):
@@ -30,12 +31,19 @@ class PlanClarificationQuestion(BaseModel):
     @field_validator("options")
     @classmethod
     def _ensure_other_option(
-        cls, v: list[PlanClarificationOption],
+        cls,
+        v: list[PlanClarificationOption],
     ) -> list[PlanClarificationOption]:
-        has_other = any("other" in o.id.lower() for o in v)
+        has_other = any(o.is_other for o in v) or any("other" in o.id.lower() for o in v)
         if not has_other:
             idx = len(v)
-            v.append(PlanClarificationOption(id=f"q{idx}_other", label="Andere / eigene Angabe"))
+            v.append(
+                PlanClarificationOption(
+                    id=f"q{idx}_other",
+                    label="Other / specify",
+                    is_other=True,
+                ),
+            )
         return v
 
 
@@ -120,8 +128,8 @@ def parse_plan_proposal(
     return validated.model_dump(), None
 
 
-def _normalize_plan_clarification_option_dict(o: Any) -> dict[str, str] | None:
-    """Map common option aliases to ``id`` / ``label``."""
+def _normalize_plan_clarification_option_dict(o: Any) -> dict[str, Any] | None:
+    """Map common option aliases to ``id`` / ``label`` / optional ``is_other``."""
     if not isinstance(o, dict):
         return None
     oid = o.get("id") or o.get("key") or o.get("value")
@@ -135,7 +143,15 @@ def _normalize_plan_clarification_option_dict(o: Any) -> dict[str, str] | None:
     slb = str(lab).strip()
     if not sid or not slb:
         return None
-    return {"id": sid, "label": slb}
+    out: dict[str, Any] = {"id": sid, "label": slb}
+    io = o.get("is_other")
+    if isinstance(io, bool):
+        out["is_other"] = io
+    else:
+        io2 = o.get("isOther")
+        if isinstance(io2, bool):
+            out["is_other"] = io2
+    return out
 
 
 def _normalize_plan_clarification_question_dict(
@@ -194,7 +210,7 @@ def _normalize_plan_clarification_question_dict(
     else:
         allow_multiple_from_type = None
 
-    normalized_opts: list[dict[str, str]] = []
+    normalized_opts: list[dict[str, Any]] = []
     for o in raw_opts:
         nd = _normalize_plan_clarification_option_dict(o)
         if nd is not None:
@@ -249,6 +265,14 @@ def parse_plan_clarification_questions(
     return out, None
 
 
+def _option_wire_is_other(opt: dict[str, Any]) -> bool:
+    """Whether this option requires free-text (``other_text``) when selected."""
+    if isinstance(opt.get("is_other"), bool):
+        return bool(opt["is_other"])
+    oid = str(opt.get("id", ""))
+    return "other" in oid.lower()
+
+
 def validate_plan_clarification_answers(
     questions: list[dict[str, Any]],
     answers: list[Any],
@@ -283,7 +307,10 @@ def validate_plan_clarification_answers(
             return None, {}, f"question {qid!r} requires at least one selected option"
         raw_other = a.get("other_text") or a.get("otherText")
         other_t = str(raw_other).strip() if raw_other is not None else ""
-        has_other_option = any("other" in oid.lower() for oid in oids)
+        opt_by_id = {str(o["id"]): o for o in qmap[qid]["options"]}
+        has_other_option = any(
+            _option_wire_is_other(opt_by_id[oid]) for oid in oids if oid in opt_by_id
+        )
         if has_other_option and not other_t:
             return (
                 None,

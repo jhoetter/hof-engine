@@ -75,7 +75,8 @@ def _provider_wait_wire(ev: Any) -> dict[str, Any] | None:
 
 
 def _resolve_agent_engine_stream_max_attempts() -> int:
-    """How many times Hof may run ``stream_agent_turn`` for one model step (after llm-markdown retries)."""
+    """How many times Hof may run ``stream_agent_turn`` for one model step
+    (after llm-markdown retries)."""
     raw = os.environ.get("HOF_AGENT_ENGINE_STREAM_ATTEMPTS", "").strip()
     if not raw:
         n = 3
@@ -88,7 +89,8 @@ def _resolve_agent_engine_stream_max_attempts() -> int:
 
 
 class _AgentStreamTurnExhaustedError(Exception):
-    """``stream_agent_turn`` failed with a retryable provider error after all engine-level attempts."""
+    """``stream_agent_turn`` failed with a retryable provider error after all
+    engine-level attempts."""
 
     __slots__ = ("attempts", "cause")
 
@@ -138,7 +140,8 @@ def _user_message_after_engine_retries_exhausted(
     *,
     attempts: int,
 ) -> str:
-    """First-person copy after all Hof engine-level stream retries failed (no raw provider payload)."""
+    """First-person copy after all Hof engine-level stream retries failed
+    (no raw provider payload)."""
     times_word = "time" if attempts == 1 else "times"
     cv = _failure_category_value(f)
 
@@ -149,7 +152,8 @@ def _user_message_after_engine_retries_exhausted(
         )
     elif cv == "overloaded":
         base = (
-            "The AI provider is temporarily overloaded (high demand on their side — not your quota). "
+            "The AI provider is temporarily overloaded "
+            "(high demand on their side — not your quota). "
             f"I waited and tried again automatically {attempts} {times_word}, then had to stop."
         )
     elif cv == "server":
@@ -173,14 +177,17 @@ def _user_message_after_engine_retries_exhausted(
         secs = max(1, int(round(float(ra))))
         base += f" Waiting about {secs} more seconds before you send your message again may help."
     elif cv == "overloaded":
-        base += " Please wait a few minutes and try again — overload often clears after a short pause."
+        base += (
+            " Please wait a few minutes and try again — overload often clears after a short pause."
+        )
     else:
         base += " Please wait a short while, then send your message again."
     return base
 
 
 def _user_message_transient_limit_without_exhausted_retries(f: Any) -> str:
-    """First-person copy when a limit error is shown without engine-exhausted wording (e.g. partial stream)."""
+    """First-person copy when a limit error is shown without engine-exhausted wording
+    (e.g. partial stream)."""
     cv = _failure_category_value(f)
     ra = getattr(f, "retry_after_seconds", None)
     if cv == "rate_limit":
@@ -189,10 +196,7 @@ def _user_message_transient_limit_without_exhausted_retries(f: Any) -> str:
             "Please wait a short moment and try again."
         )
     elif cv == "timeout":
-        msg = (
-            "The request timed out before I could finish this step. "
-            "Please try again in a moment."
-        )
+        msg = "The request timed out before I could finish this step. Please try again in a moment."
     else:
         msg = (
             "The AI service was temporarily unavailable before I could finish this step. "
@@ -303,7 +307,8 @@ def _agent_stream_error_event(
     engine_turn_retries_exhausted: bool = False,
     engine_retry_max_attempts: int | None = None,
 ) -> dict[str, Any]:
-    """Map exceptions to NDJSON ``error``; duck-type :class:`~llm_markdown.providers.base.ProviderError`."""
+    """Map exceptions to NDJSON ``error``; duck-type
+    :class:`~llm_markdown.providers.base.ProviderError`."""
     if not _looks_like_llm_provider_error(exc):
         return {"type": "error", "detail": str(exc)}
     f = getattr(exc, "failure", None)
@@ -557,7 +562,8 @@ def _anthropic_stream_turn_extras(
 def _anthropic_adaptive_thinking_supported_for_model_id(model_id: str) -> bool:
     """Whether Anthropic Messages API accepts ``thinking`` with ``type: adaptive`` for this model.
 
-    Some ids (Haiku, Sonnet 4.5-class) return 400 ``adaptive thinking is not supported on this model``.
+    Some ids (Haiku, Sonnet 4.5-class) return 400
+    ``adaptive thinking is not supported on this model``.
     """
     m = (model_id or "").strip().lower()
     if not m or "haiku" in m:
@@ -692,10 +698,12 @@ def _resolve_agent_reasoning_config_for_chat_mode(
     ``PLAN_AGENT_ANTHROPIC_THINKING`` if non-empty so Sonnet can use adaptive thinking while
     ``AGENT_ANTHROPIC_THINKING=off`` keeps Haiku happy for instant chat.
 
-    ``model_id`` is the resolved model for this request (``PLAN_AGENT`` or ``AGENT_MODEL``); adaptive
-    thinking is omitted when the id is known not to support it (e.g. ``claude-sonnet-4-5``).
+    ``model_id`` is the resolved model for this request (``PLAN_AGENT`` or
+    ``AGENT_MODEL``); adaptive thinking is omitted when the id is known not to
+    support it (e.g. ``claude-sonnet-4-5``).
 
-    ``plan_execute`` uses the default agent model and default reasoning config (no plan-only override).
+    ``plan_execute`` uses the default agent model and default reasoning config
+    (no plan-only override).
     """
     base = _resolve_agent_reasoning_config(lm_backend)
     if chat_mode not in ("plan", "plan_discover"):
@@ -766,9 +774,7 @@ def _resolve_provider(lm_backend: str, model: str) -> Any:
     else:
         api_key = _resolve_openai_api_key()
         if not api_key:
-            raise _ProviderSetupError(
-                "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)"
-            )
+            raise _ProviderSetupError("Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)")
         try:
             from llm_markdown.providers import OpenAIProvider
         except ImportError:
@@ -870,7 +876,7 @@ _AGENT_CHAT_PLAN_EXECUTE_SUFFIX = (
     "- Pass `done_indices` as a JSON array of integers: the **0-based indices** of every checklist "
     "row that is **complete so far** (same top-to-bottom order as the `- [ ]` lines in "
     "the approved plan below). Example: after finishing the first two tasks, call with "
-    "`{\"done_indices\": [0, 1]}`; after the third, `{\"done_indices\": [0, 1, 2]}`.\n"
+    '`{"done_indices": [0, 1]}`; after the third, `{"done_indices": [0, 1, 2]}`.\n'
     "- Call the tool **multiple times per turn** if you complete several steps in one round.\n"
     "- Do not rely on editing markdown checkboxes — only this tool updates the UI.\n"
     "Also briefly note progress in your visible replies.\n"
@@ -1141,7 +1147,8 @@ def _stream_confirmation_summary_for_ui(
                 last_usage = ev.usage
     except _AgentStreamTurnExhaustedError:
         logger.warning(
-            "confirmation summary model call failed after engine stream retries, using static fallback",
+            "confirmation summary model call failed after engine stream retries, "
+            "using static fallback",
         )
         yield {"type": "assistant_delta", "text": _CONFIRMATION_SUMMARY_STATIC_FALLBACK}
         yield {"type": "assistant_done", "finish_reason": "stop"}
@@ -1241,8 +1248,7 @@ def _stream_inbox_review_summary_for_ui(
         yield {
             "type": "error",
             "detail": (
-                f"invalid inbox_review_summary_mode={mode!r} "
-                "(expected llm_stream, static, or none)"
+                f"invalid inbox_review_summary_mode={mode!r} (expected llm_stream, static, or none)"
             ),
         }
         return
@@ -1307,7 +1313,8 @@ def _stream_inbox_review_summary_for_ui(
                     last_usage = ev.usage
         except _AgentStreamTurnExhaustedError:
             logger.warning(
-                "inbox review summary model call failed after engine stream retries, using static fallback",
+                "inbox review summary model call failed after engine stream retries, "
+                "using static fallback",
             )
             fb = _inbox_review_static_message_from_wires(wires)
             yield {"type": "assistant_delta", "text": fb}
@@ -1577,6 +1584,7 @@ def _run_agent_llm_tool_loop(
     plan_resume_final_extras: dict[str, Any] | None = None,
     discover_explore_allowlist: frozenset[str] | None = None,
     discover_explore_tools: list[dict[str, Any]] | None = None,
+    discover_post_clarification_resume: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """Run model ↔ tools until final reply, error, or halt for mutation confirmation."""
     rounds = start_round
@@ -1584,11 +1592,33 @@ def _run_agent_llm_tool_loop(
     _discover_text_retried = False
     _discover_explored = False
     _clarification_retries = 0
-    _MAX_CLARIFICATION_RETRIES = 3
+    _max_clarification_retries = 3
     try:
         while rounds < max_rounds:
             rounds += 1
-            yield {"type": "phase", "round": rounds, "phase": "model"}
+            _phase_model: dict[str, Any] = {
+                "type": "phase",
+                "round": rounds,
+                "phase": "model",
+            }
+            if agent_chat_mode == "plan_discover":
+                # Fresh chat: explore → clarify. After ``agent_resume_plan_clarification`` the
+                # loop is recreated with ``_discover_explored`` false; without this flag every
+                # ``phase: model`` would incorrectly emit ``discover_phase: explore`` (UI
+                # stuck on explore semantics). ``propose`` = drafting structured plan / tools.
+                if discover_post_clarification_resume:
+                    _phase_model["discover_phase"] = "propose"
+                else:
+                    _phase_model["discover_phase"] = (
+                        "explore" if not _discover_explored else "clarify"
+                    )
+                logger.info(
+                    "agent_chat ndjson_phase run_id=%s round=%d phase=model discover_phase=%s",
+                    run_id,
+                    rounds,
+                    _phase_model["discover_phase"],
+                )
+            yield _phase_model
 
             from llm_markdown.agent_stream import (
                 AgentContentDelta,
@@ -1615,14 +1645,8 @@ def _run_agent_llm_tool_loop(
                 and discover_explore_tools is not None
                 and not _discover_explored
             )
-            active_allowlist = (
-                discover_explore_allowlist
-                if _in_discover_explore
-                else allowlist
-            )
-            active_tools = (
-                discover_explore_tools if _in_discover_explore else tools
-            )
+            active_allowlist = discover_explore_allowlist if _in_discover_explore else allowlist
+            active_tools = discover_explore_tools if _in_discover_explore else tools
             st_tools = active_tools if len(active_tools) > 0 else None
             if st_tools is not None and agent_chat_mode == "plan_discover":
                 st_tool_choice: str | dict[str, str] | None = "auto"
@@ -1686,6 +1710,33 @@ def _run_agent_llm_tool_loop(
             if last_usage:
                 done_ev["usage"] = last_usage
             yield done_ev
+            if os.environ.get("HOF_AGENT_UI_TRACE", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            ):
+                _dp_ui = (
+                    str(_phase_model.get("discover_phase", ""))
+                    if agent_chat_mode == "plan_discover"
+                    else "-"
+                )
+                logger.info(
+                    "agent_chat ui_trace run_id=%s round=%s discover_phase=%s "
+                    "finish_reason=%s content_deltas=%s reasoning_deltas=%s "
+                    "reasoning_chars=%s assistant_text_chars=%s "
+                    "segment_start_reasoning=%s segment_start_content=%s",
+                    run_id,
+                    rounds,
+                    _dp_ui,
+                    finish_reason,
+                    n_content_delta,
+                    n_reasoning_delta,
+                    reasoning_chars,
+                    len(assistant_text),
+                    n_segment_start_reasoning,
+                    n_segment_start_content,
+                )
             trace_collapsed = _collapse_agent_round_trace(trace_parts)
             _agent_stream_debug_append(
                 {
@@ -1725,16 +1776,12 @@ def _run_agent_llm_tool_loop(
                         _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION,
                     }
                     terminal_idxs = [
-                        i
-                        for i in sorted_idx
-                        if parts[i].get("name") in _plan_terminal_tools
+                        i for i in sorted_idx if parts[i].get("name") in _plan_terminal_tools
                     ]
                     if len(terminal_idxs) > 1:
                         yield {
                             "type": "error",
-                            "detail": (
-                                "at most one plan/clarification tool per round"
-                            ),
+                            "detail": ("at most one plan/clarification tool per round"),
                         }
                         return
                     if len(terminal_idxs) == 1:
@@ -1743,21 +1790,14 @@ def _run_agent_llm_tool_loop(
                         if tix != sorted_idx[-1]:
                             yield {
                                 "type": "error",
-                                "detail": (
-                                    f"{tname} must be the last "
-                                    "tool call in the round"
-                                ),
+                                "detail": (f"{tname} must be the last tool call in the round"),
                             }
                             return
-                        if any(
-                            parts[j].get("name") in mutation_allowlist
-                            for j in sorted_idx
-                        ):
+                        if any(parts[j].get("name") in mutation_allowlist for j in sorted_idx):
                             yield {
                                 "type": "error",
                                 "detail": (
-                                    f"cannot combine {tname} "
-                                    "with mutation tools in the same round"
+                                    f"cannot combine {tname} with mutation tools in the same round"
                                 ),
                             }
                             return
@@ -1833,8 +1873,7 @@ def _run_agent_llm_tool_loop(
                         and agent_chat_mode == "plan_discover"
                     ):
                         logger.info(
-                            "agent_chat plan_clarification_validating run_id=%s "
-                            "args_wire_chars=%d",
+                            "agent_chat plan_clarification_validating run_id=%s args_wire_chars=%d",
                             run_id,
                             len(args_wire),
                         )
@@ -1848,12 +1887,12 @@ def _run_agent_llm_tool_loop(
                                 args_wire[:300],
                             )
                             _clarification_retries += 1
-                            if _clarification_retries > _MAX_CLARIFICATION_RETRIES:
+                            if _clarification_retries > _max_clarification_retries:
                                 yield {
                                     "type": "error",
                                     "detail": (
                                         "plan clarification validation failed after "
-                                        f"{_MAX_CLARIFICATION_RETRIES} retries: {verr}"
+                                        f"{_max_clarification_retries} retries: {verr}"
                                     ),
                                 }
                                 return
@@ -1882,7 +1921,7 @@ def _run_agent_llm_tool_loop(
                                 run_id,
                                 rounds,
                                 _clarification_retries,
-                                _MAX_CLARIFICATION_RETRIES,
+                                _max_clarification_retries,
                             )
                             break  # clarification is always last; outer loop retries
                         cid = str(uuid.uuid4())
@@ -1931,13 +1970,9 @@ def _run_agent_llm_tool_loop(
                             cid,
                             tid,
                         )
-                    elif (
-                        name == _HOF_BUILTIN_PRESENT_PLAN
-                        and agent_chat_mode == "plan_discover"
-                    ):
+                    elif name == _HOF_BUILTIN_PRESENT_PLAN and agent_chat_mode == "plan_discover":
                         logger.info(
-                            "agent_chat plan_proposal_validating run_id=%s "
-                            "args_wire_chars=%d",
+                            "agent_chat plan_proposal_validating run_id=%s args_wire_chars=%d",
                             run_id,
                             len(args_wire),
                         )
@@ -1984,8 +2019,7 @@ def _run_agent_llm_tool_loop(
                             "structured_plan": proposal,
                         }
                         logger.info(
-                            "agent_chat plan_proposal_accepted run_id=%s round=%d "
-                            "steps=%d",
+                            "agent_chat plan_proposal_accepted run_id=%s round=%d steps=%d",
                             run_id,
                             rounds,
                             len(proposal.get("steps", [])),
@@ -2122,13 +2156,18 @@ def _run_agent_llm_tool_loop(
                 if plan_proposal_halt is not None:
                     delete_agent_run(run_id)
                     plan_md = plan_proposal_halt["markdown"]
+                    plan_run_id = str(uuid.uuid4())
                     plan_final: dict[str, Any] = {
                         "type": "final",
                         "reply": plan_md,
                         "tool_rounds_used": rounds,
                         "model": model,
                         "mode": "plan",
+                        "plan_run_id": plan_run_id,
                         "structured_plan": plan_proposal_halt["structured_plan"],
+                        # Clients must not treat assistant_delta as plan body during discovery:
+                        # markdown is derived server-side from validated tool args, not streamed.
+                        "plan_text_source": "structured_tool",
                     }
                     if final_extras:
                         for k, v in final_extras.items():
@@ -2136,8 +2175,7 @@ def _run_agent_llm_tool_loop(
                                 plan_final[k] = v
                     yield plan_final
                     logger.info(
-                        "agent_chat plan_proposal_final run_id=%s round=%d "
-                        "reply_chars=%d",
+                        "agent_chat plan_proposal_final run_id=%s round=%d reply_chars=%d",
                         run_id,
                         rounds,
                         len(plan_md),
@@ -2145,9 +2183,7 @@ def _run_agent_llm_tool_loop(
                     return
                 if plan_clarify_halt is not None:
                     store_extras = (
-                        plan_resume_final_extras
-                        if plan_resume_final_extras is not None
-                        else {}
+                        plan_resume_final_extras if plan_resume_final_extras is not None else {}
                     )
                     save_agent_run(
                         run_id,
@@ -2227,6 +2263,31 @@ def _run_agent_llm_tool_loop(
                         pending_ids,
                     )
                     return
+                # Explore phase often ends with read-only tool calls (no assistant prose-only
+                # round). In that case ``discover_explore_complete`` below never runs because
+                # ``finish_reason == tool_calls`` skips it. Mark explore done after any tool
+                # round that did not yet call plan/clarification builtins so the next
+                # ``phase: model`` emits ``discover_phase: clarify`` (UI: "Generating questions").
+                if (
+                    agent_chat_mode == "plan_discover"
+                    and discover_explore_allowlist is not None
+                    and not _discover_explored
+                ):
+                    _plan_terminal = {
+                        _HOF_BUILTIN_PRESENT_PLAN,
+                        _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION,
+                    }
+                    tool_names = {str(parts[i].get("name") or "") for i in sorted_idx}
+                    tool_names.discard("")
+                    if tool_names and not (tool_names & _plan_terminal):
+                        _discover_explored = True
+                        logger.info(
+                            "agent_chat discover_explore_complete_via_tools run_id=%s "
+                            "round=%d tools=%s",
+                            run_id,
+                            rounds,
+                            sorted(tool_names),
+                        )
                 continue
 
             text = assistant_text.strip()
@@ -2243,8 +2304,7 @@ def _run_agent_llm_tool_loop(
                     {"role": "assistant", "content": text if text else ""},
                 )
                 logger.info(
-                    "agent_chat discover_explore_complete run_id=%s round=%d "
-                    "text_chars=%d",
+                    "agent_chat discover_explore_complete run_id=%s round=%d text_chars=%d",
                     run_id,
                     rounds,
                     len(text),
@@ -2274,8 +2334,7 @@ def _run_agent_llm_tool_loop(
                 )
                 reasoning = ReasoningConfig.off()
                 logger.info(
-                    "agent_chat discover_text_retry run_id=%s round=%d "
-                    "text_chars=%d",
+                    "agent_chat discover_text_retry run_id=%s round=%d text_chars=%d",
                     run_id,
                     rounds,
                     len(text),
@@ -2297,6 +2356,8 @@ def _run_agent_llm_tool_loop(
             }
             if final_extras:
                 final_ev.update(final_extras)
+                if final_extras.get("mode") == "plan":
+                    final_ev["plan_run_id"] = str(uuid.uuid4())
             yield final_ev
             _agent_stream_debug_append(
                 {
@@ -2427,15 +2488,15 @@ def _run_agent_chat_stream(
     discover_explore_tools: list[dict[str, Any]] | None = None
     if chat_mode == "plan_discover":
         system_content = (
-            _AGENT_CHAT_PLAN_DISCOVER_PREFIX
-            + system_content
-            + _AGENT_CHAT_PLAN_DISCOVER_SUFFIX
+            _AGENT_CHAT_PLAN_DISCOVER_PREFIX + system_content + _AGENT_CHAT_PLAN_DISCOVER_SUFFIX
         )
         discover_explore_allowlist, discover_explore_tools = _build_discover_tools(
-            policy, phase="explore",
+            policy,
+            phase="explore",
         )
         loop_allowlist, loop_tools = _build_discover_tools(
-            policy, phase="clarify",
+            policy,
+            phase="clarify",
         )
         final_extras: dict[str, Any] | None = {"mode": "plan"}
         plan_resume_final_extras = {"mode": "plan"}
@@ -2733,9 +2794,7 @@ def _run_agent_resume_stream(
         if snap_live is not None:
             try:
                 raw_live = snap_live()
-                baseline_ids = sorted(
-                    str(x).strip() for x in (raw_live or []) if str(x).strip()
-                )
+                baseline_ids = sorted(str(x).strip() for x in (raw_live or []) if str(x).strip())
             except Exception:
                 logger.debug(
                     "inbox pending baseline snapshot failed",
@@ -2833,9 +2892,7 @@ def _run_agent_resume_plan_clarification_stream(
         yield {"type": "error", "detail": "Invalid saved clarification state"}
         return
 
-    sel_map, other_text_map, aerr = _validate_clarification_answers(
-        qnorm, answers or []
-    )
+    sel_map, other_text_map, aerr = _validate_clarification_answers(qnorm, answers or [])
     if aerr is not None:
         yield {"type": "error", "detail": aerr}
         return
@@ -2878,7 +2935,8 @@ def _run_agent_resume_plan_clarification_stream(
         plan_resume_final_extras = {"mode": "plan"}
 
     discover_allowlist, tools = _build_discover_tools(
-        policy, phase="propose",
+        policy,
+        phase="propose",
     )
 
     try:
@@ -2887,9 +2945,7 @@ def _run_agent_resume_plan_clarification_stream(
         yield {"type": "error", "detail": exc.detail}
         return
 
-    summary = _clarification_answer_summary_for_model(
-        qnorm, sel_map, other_text_map
-    )
+    summary = _clarification_answer_summary_for_model(qnorm, sel_map, other_text_map)
     payload = {
         "answered": True,
         "selections": sel_map,
@@ -2933,6 +2989,7 @@ def _run_agent_resume_plan_clarification_stream(
         final_extras=plan_resume_final_extras,
         agent_chat_mode=resume_chat_mode,
         plan_resume_final_extras=plan_resume_final_extras,
+        discover_post_clarification_resume=True,
     )
 
 
@@ -3062,10 +3119,7 @@ def _run_agent_resume_inbox_stream(
                 "detail": msg or f"Inbox watch {desc.watch_id!r} is still pending review",
             }
             return
-        summary_lines.append(
-            msg
-            or f"{desc.record_type} {desc.record_id}: inbox review completed."
-        )
+        summary_lines.append(msg or f"{desc.record_type} {desc.record_id}: inbox review completed.")
 
     oa_messages = run["oa_messages"]
     if not isinstance(oa_messages, list):
@@ -3100,11 +3154,7 @@ def _run_agent_resume_inbox_stream(
 
     scan_resume_fn = policy.inbox_scan_after_inbox_resume
     baseline_raw = run.get("inbox_pending_baseline_ids")
-    if (
-        scan_resume_fn is not None
-        and isinstance(baseline_raw, list)
-        and baseline_raw
-    ):
+    if scan_resume_fn is not None and isinstance(baseline_raw, list) and baseline_raw:
         baseline_f = frozenset(str(x).strip() for x in baseline_raw if str(x).strip())
         try:
             extra_watches, updated_baseline = scan_resume_fn(descriptors, baseline_f)

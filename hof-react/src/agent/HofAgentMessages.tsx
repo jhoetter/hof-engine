@@ -15,6 +15,7 @@ import { useHofAgentChat } from "./hofAgentChatContext";
 import type { ThreadItem } from "./hofAgentChatModel";
 import { HofAgentPlanClarificationCard } from "./HofAgentPlanClarificationCard";
 import { HofAgentPlanCard } from "./HofAgentPlanCard";
+import { visiblePlanMarkdownPreview } from "./planMarkdownTodos";
 
 export type HofAgentMessagesProps = {
   /** Outer scroll container (flex child, overflow). */
@@ -115,6 +116,10 @@ export function HofAgentMessages({
     streamingReasoningLabel,
   } = useHofAgentChat();
 
+  const planDraftVisible =
+    planPhase === "generating"
+      ? visiblePlanMarkdownPreview(planText)
+      : planText;
   const planCardPhase:
     | "generating"
     | "ready"
@@ -125,11 +130,14 @@ export function HofAgentMessages({
     planPhase === "executing" ||
     planPhase === "done"
       ? planPhase
-      : planPhase === "generating" && planText.trim().length > 0
+      : planPhase === "generating" && planDraftVisible.trim().length > 0
         ? "generating"
         : null;
   const showPlanCard =
-    planCardPhase !== null && planText.trim().length > 0;
+    planCardPhase !== null &&
+    (planPhase === "generating"
+      ? planDraftVisible.trim().length > 0
+      : planText.trim().length > 0);
   const showAnswerSummary = planClarificationSubmittedSummary.length > 0;
 
   const liveBlocksEl =
@@ -246,11 +254,40 @@ export function HofAgentMessages({
     </>
   ) : null;
 
+  /** While the plan streams in after clarification, keep live rows above the plan card so the status line is not below the plan. */
+  const planDraftStreamingAnchored =
+    hasPlanRunAnchor && planPhase === "generating" && busy;
+
+  /**
+   * True while the plan draft is streaming and no run anchor exists yet
+   * (planRunId is only set when the server's ``final`` event arrives).
+   * During this window live blocks are suppressed, so the early indicator
+   * must be hoisted above the plan card.
+   */
+  const planDraftStreamingUnanchored =
+    !hasPlanRunAnchor && planPhase === "generating" && busy;
+
+  /**
+   * Plan-discover phase (“Generating questions”, “Exploring”, …) uses the same compact shimmer
+   * row as “Thinking” in the live reasoning peek (and the early row before the first NDJSON row).
+   */
+  const earlyIndicatorEl =
+    busy && liveBlocks.length === 0 ? (
+      <div className="pl-1">
+        <AgentEarlyThinkingIndicator
+          label={streamingReasoningLabel ?? undefined}
+        />
+      </div>
+    ) : null;
+
   const threadList = (
     <>
       {hasPlanRunAnchor ? (
         <>
           {renderThreadItems(thread.slice(0, planRunAnchorIdx + 1))}
+          {/* Hoist indicator above plan chrome when no live blocks exist yet. */}
+          {earlyIndicatorEl}
+          {planDraftStreamingAnchored ? liveBlocksEl : null}
           {inlineChromeEl}
           {renderThreadItems(thread.slice(planRunAnchorIdx + 1))}
         </>
@@ -258,20 +295,22 @@ export function HofAgentMessages({
         <>
           {renderThreadItems(thread)}
           {answerSummaryEl}
+          {/* Hoist indicator + live blocks above plan card during plan draft so
+              "Preparing plan" never appears below the plan content. */}
+          {planDraftStreamingUnanchored ? earlyIndicatorEl : null}
+          {planDraftStreamingUnanchored ? liveBlocksEl : null}
           {planCardEl}
           {planPhase === "clarifying" && planClarificationBarrier
             ? clarificationCardEl
             : null}
         </>
       )}
-      {liveBlocksEl}
-      {liveBlocks.length === 0 && busy ? (
-        <div className="pl-1">
-          <AgentEarlyThinkingIndicator
-            label={streamingReasoningLabel ?? undefined}
-          />
-        </div>
-      ) : null}
+      {hasPlanRunAnchor && !planDraftStreamingAnchored ? liveBlocksEl : null}
+      {/* Bottom live blocks + early indicator for non-plan-draft, non-anchored runs. */}
+      {!hasPlanRunAnchor && !planDraftStreamingUnanchored ? liveBlocksEl : null}
+      {!hasPlanRunAnchor && !planDraftStreamingUnanchored
+        ? earlyIndicatorEl
+        : null}
     </>
   );
 

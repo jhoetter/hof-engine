@@ -32,6 +32,11 @@ import type {
   ThreadItem,
 } from "./hofAgentChatModel";
 import {
+  agentChatDebugNdjson,
+  agentChatDebugLog,
+  isAgentChatDebugEnabled,
+} from "./agentChatDebug";
+import {
   applyStreamEventWithDedupe,
   barrierMatchesAnyThreadOrLiveBlocks,
   collectThreadAttachments,
@@ -39,6 +44,7 @@ import {
   coerceRunId,
   finalizeLiveBlocksAfterUserStop,
   inboxReviewBarrierFromStreamEvent,
+  inferAssistantUiLane,
   mergePendingIdLists,
   mutationPendingIdsFromBlocks,
   newId,
@@ -46,10 +52,13 @@ import {
   normalizeAgentCliDisplayLine,
   parsePlanClarificationBarrierFromTerm,
   PLAN_EXECUTE_USER_MARKER,
-  shouldSuppressLiveBlockDuringPlanDiscover,
   toolResultAwaitingUserConfirmation,
 } from "./hofAgentChatModel";
 import { parseStructuredPlan } from "./planMarkdownTodos";
+import {
+  computePlanDiscoverStatusLabel,
+  discoverPhaseToEagerLabel,
+} from "./planDiscoverStatusLabel";
 import {
   applyPlanTodoWireResolution,
   mergePlanTodoDoneIndices,
@@ -81,6 +90,21 @@ function pendingDetailsFromMutationPendingEvent(
     ...(arguments_json !== undefined ? { arguments_json } : {}),
     ...(hasPv ? { preview: (ev as { preview: unknown }).preview } : {}),
   };
+}
+
+/**
+ * After ``streamHofFunction`` resolves, the last ``onEvent`` updates and the
+ * try-block ``setState`` calls may not have been committed yet. If we clear
+ * ``busy`` synchronously in ``finally``, React can skip painting a frame where
+ * ``busy`` and plan-discover status are both set before paint.
+ */
+function scheduleAgentStreamIdleCleanup(effect: () => void): void {
+  const st = globalThis.setTimeout;
+  if (typeof st === "function") {
+    st(effect, 0);
+  } else {
+    queueMicrotask(effect);
+  }
 }
 
 function approvalBarrierItemFromDetails(
@@ -233,6 +257,7 @@ function applyLiveBlocksTail(
   thinkingEpisodeStartedAtRef: { current: number | null },
   liveBlocksRef: { current: LiveBlock[] },
   setLiveBlocks: Dispatch<SetStateAction<LiveBlock[]>>,
+  reasoningLabelRef?: { current: string | null },
 ): void {
   setLiveBlocks((prev) => {
     const et = typeof evForBlocks.type === "string" ? evForBlocks.type : "";
@@ -240,6 +265,9 @@ function applyLiveBlocksTail(
       assistantStreamPhase: assistantStreamPhaseRef.current,
       thinkingEpisodeStartedAtMs: thinkingEpisodeStartedAtRef.current,
       ...(et === "assistant_done" ? { assistantDoneClockMs: Date.now() } : {}),
+      ...(et === "assistant_done" && reasoningLabelRef?.current
+        ? { reasoningLabel: reasoningLabelRef.current }
+        : {}),
     });
     liveBlocksRef.current = next;
     return next;
@@ -366,7 +394,7 @@ export type HofAgentChatContextValue = {
   executePlan: () => void;
   /**
    * While the run is busy, optional label for the streaming reasoning shimmer
-   * (replaces default ``Thinking``), e.g. ``Generating questions`` or ``Preparing plan``.
+   * (replaces default ``Thinking``). Derived only via ``computePlanDiscoverStatusLabel``.
    */
   streamingReasoningLabel: string | null;
 };
@@ -465,14 +493,26 @@ export function HofAgentChatProvider({
   const [planClarificationSubmittedSummary, setPlanClarificationSubmittedSummary] =
     useState<{ prompt: string; selectedLabels: string[] }[]>([]);
   const [planTodoDoneIndices, setPlanTodoDoneIndices] = useState<number[]>([]);
+  /**
+   * From NDJSON ``phase`` + ``discover_phase`` (plan_discover only):
+   * ``explore`` | ``clarify`` | ``propose`` (after ``agent_resume_plan_clarification``).
+   * Drives "Generating questions" when ``clarify``.
+   */
+  const [discoverStreamPhase, setDiscoverStreamPhase] = useState<
+    "explore" | "clarify" | "propose" | null
+  >(null);
   const planTextRef = useRef("");
-  const planDraftStreamingActiveRef = useRef(false);
-  const planDraftBufferRef = useRef("");
+  /** Set when a builtin plan tool call is detected; drives "Generating questions" / "Preparing plan" labels. */
+  const [planBuiltinToolActive, setPlanBuiltinToolActive] = useState<
+    "clarification" | "plan" | null
+  >(null);
   const chatRequestModeRef = useRef<AgentChatRequestMode>(
     initialAgentMode === "plan" ? "plan" : "instant",
   );
   /** True after Execute plan until stream ends with ``final`` or ``error`` (survives ``awaiting_confirmation``). */
   const planExecuteActiveRef = useRef(false);
+  /** Mirror of ``streamingReasoningLabel`` for stamping onto blocks inside ``setLiveBlocks`` updaters. */
+  const reasoningLabelRef = useRef<string | null>(null);
 
   useEffect(() => {
     planTextRef.current = planText;
@@ -815,9 +855,7 @@ export function HofAgentChatProvider({
       liveBlocksRef.current = [];
       setLiveBlocks([]);
       currentAgentRunIdRef.current = "";
-      planDraftStreamingActiveRef.current = false;
       if (effectiveMode === "plan") {
-        planDraftBufferRef.current = "";
         setPlanText("");
       }
       const msgs = threadToApiMessages(items);
@@ -859,6 +897,7 @@ export function HofAgentChatProvider({
               setPlanTodoDoneIndices,
             );
             let evForBlocks = evfb;
+            agentChatDebugNdjson(typ, ev as Record<string, unknown>);
             if (
               typ === "final" ||
               typ === "awaiting_confirmation" ||
@@ -868,48 +907,69 @@ export function HofAgentChatProvider({
             ) {
               lastTerminalStreamEventRef.current = ev;
             }
+            // Do not clear on ``awaiting_plan_clarification``: it arrives in the same tick as
+            // ``tool_call`` for ``hof_builtin_present_plan_clarification`` and would wipe
+            // ``planBuiltinToolActive`` before render (no "Generating questions" label).
+            if (
+              typ === "final" ||
+              typ === "awaiting_confirmation" ||
+              typ === "awaiting_inbox_review" ||
+              typ === "error"
+            ) {
+              setPlanBuiltinToolActive(null);
+            }
             if (typ === "run_start") {
               assistantStreamPhaseRef.current = null;
               pendingDetailsRef.current.clear();
               mutationPendingIdsThisRunRef.current = [];
               currentAgentRunIdRef.current = coerceRunId(ev.run_id);
+              setPlanBuiltinToolActive(null);
               setApprovalBarrier(null);
               setApprovalDecisions({});
               setInboxReviewBarrier(null);
               setInboxResumeError(null);
               setProviderWaitNotice(null);
+              setDiscoverStreamPhase(null);
+              reasoningLabelRef.current = null;
               updateThinkingEpisodeStart(Date.now());
             }
             if (effectiveMode === "plan" && typ === "tool_call") {
-              planDraftBufferRef.current = "";
               setPlanText("");
             }
-            if (
-              planDraftStreamingActiveRef.current &&
-              effectiveMode !== "plan_execute" &&
-              typ === "assistant_delta"
-            ) {
-              const chunk =
-                typeof (ev as { text?: unknown }).text === "string"
-                  ? (ev as { text: string }).text
+            if (effectiveMode === "plan" && typ === "tool_call") {
+              const toolName =
+                typeof (ev as { name?: unknown }).name === "string"
+                  ? (ev as { name: string }).name
                   : "";
-              if (chunk) {
-                planDraftBufferRef.current += chunk;
-                setPlanText(planDraftBufferRef.current);
+              if (toolName === "hof_builtin_present_plan_clarification") {
+                setPlanBuiltinToolActive("clarification");
+                reasoningLabelRef.current = "Generating questions";
+              } else if (toolName === "hof_builtin_present_plan") {
+                setPlanBuiltinToolActive("plan");
+                reasoningLabelRef.current = "Preparing plan";
               }
-            }
-            if (
-              typ === "final" ||
-              typ === "awaiting_plan_clarification" ||
-              typ === "error"
-            ) {
-              planDraftStreamingActiveRef.current = false;
             }
             updateProviderWaitFromStreamType(typ, ev, setProviderWaitNotice);
             if (typ === "phase") {
               const ph = typeof ev.phase === "string" ? ev.phase : "";
               if (ph === "model") {
+                // Do not clear ``planBuiltinToolActive`` on ``discover_phase: explore`` — the
+                // server may emit explore while the clarification builtin is still building; the
+                // lane is cleared when ``awaiting_plan_clarification`` applies the barrier.
                 updateThinkingEpisodeStart(Date.now());
+                const dp = (ev as { discover_phase?: unknown }).discover_phase;
+                if (
+                  dp === "explore" ||
+                  dp === "clarify" ||
+                  dp === "propose"
+                ) {
+                  setDiscoverStreamPhase(dp);
+                  // Do not stamp ``explore`` on the ref: ``tool_call`` may still be clarification;
+                  // ``computePlanDiscoverStatusLabel`` + render sync own the label.
+                  if (dp === "clarify" || dp === "propose") {
+                    reasoningLabelRef.current = discoverPhaseToEagerLabel(dp);
+                  }
+                }
               }
               if (ph === "model" || ph === "summary") {
                 assistantStreamPhaseRef.current = ph;
@@ -972,19 +1032,14 @@ export function HofAgentChatProvider({
                 setApprovalDecisions({});
               }
             }
-            const suppressPlanDiscoverBlocks =
-              planDraftStreamingActiveRef.current &&
-              effectiveMode !== "plan_execute" &&
-              shouldSuppressLiveBlockDuringPlanDiscover(evForBlocks);
-            if (!suppressPlanDiscoverBlocks) {
-              applyLiveBlocksTail(
-                evForBlocks,
-                assistantStreamPhaseRef,
-                thinkingEpisodeStartedAtRef,
-                liveBlocksRef,
-                setLiveBlocks,
-              );
-            }
+            applyLiveBlocksTail(
+              evForBlocks,
+              assistantStreamPhaseRef,
+              thinkingEpisodeStartedAtRef,
+              liveBlocksRef,
+              setLiveBlocks,
+              reasoningLabelRef,
+            );
           },
         });
         if (myId !== reqIdRef.current) {
@@ -1065,6 +1120,7 @@ export function HofAgentChatProvider({
             setPlanClarificationSubmittedSummary([]);
             setPlanClarificationBarrier(barrier);
             setPlanPhase("clarifying");
+            setPlanBuiltinToolActive(null);
           }
           if (doneBlocks.length > 0) {
             flushLiveToThread(structuredClone(doneBlocks));
@@ -1110,12 +1166,18 @@ export function HofAgentChatProvider({
         liveBlocksRef.current = [];
         setLiveBlocks([]);
       } finally {
-        if (myId === reqIdRef.current) {
+        const cleanupId = myId;
+        scheduleAgentStreamIdleCleanup(() => {
+          if (cleanupId !== reqIdRef.current) {
+            return;
+          }
           setBusy(false);
+          setDiscoverStreamPhase(null);
+          setPlanBuiltinToolActive(null);
           updateThinkingEpisodeStart(null);
           sendingRef.current = false;
           setProviderWaitNotice(null);
-        }
+        });
       }
     },
     [
@@ -1154,8 +1216,6 @@ export function HofAgentChatProvider({
       setPlanClarificationSubmittedSummary(summary);
       setPlanClarificationBarrier(null);
       setPlanPhase("generating");
-      planDraftStreamingActiveRef.current = true;
-      planDraftBufferRef.current = "";
       setPlanText("");
       const myId = ++reqIdRef.current;
       abortRef.current?.abort();
@@ -1188,19 +1248,33 @@ export function HofAgentChatProvider({
               planTextRef,
               setPlanTodoDoneIndices,
             );
+            agentChatDebugNdjson(typ, ev as Record<string, unknown>);
             if (
               typ === "final" ||
               typ === "awaiting_plan_clarification" ||
               typ === "error"
             ) {
               lastTerminalStreamEventRef.current = ev;
-              planDraftStreamingActiveRef.current = false;
+            }
+            if (typ === "final" || typ === "error") {
+              setPlanBuiltinToolActive(null);
             }
             updateProviderWaitFromStreamType(typ, ev, setProviderWaitNotice);
             if (typ === "phase") {
               const ph = typeof ev.phase === "string" ? ev.phase : "";
               if (ph === "model") {
                 updateThinkingEpisodeStart(Date.now());
+                const dp = (ev as { discover_phase?: unknown }).discover_phase;
+                if (
+                  dp === "explore" ||
+                  dp === "clarify" ||
+                  dp === "propose"
+                ) {
+                  setDiscoverStreamPhase(dp);
+                  if (dp === "clarify" || dp === "propose") {
+                    reasoningLabelRef.current = discoverPhaseToEagerLabel(dp);
+                  }
+                }
               }
               if (ph === "model" || ph === "summary") {
                 assistantStreamPhaseRef.current = ph;
@@ -1208,37 +1282,35 @@ export function HofAgentChatProvider({
             }
             if (typ === "run_start" || typ === "resume_start") {
               currentAgentRunIdRef.current = coerceRunId(ev.run_id);
+              setDiscoverStreamPhase(null);
+              setPlanBuiltinToolActive(null);
+              reasoningLabelRef.current = null;
               updateThinkingEpisodeStart(Date.now());
             }
             if (typ === "tool_call") {
-              planDraftBufferRef.current = "";
-              setPlanText("");
-            }
-            if (
-              planDraftStreamingActiveRef.current &&
-              typ === "assistant_delta"
-            ) {
-              const chunk =
-                typeof (ev as { text?: unknown }).text === "string"
-                  ? (ev as { text: string }).text
+              const toolName =
+                typeof (ev as { name?: unknown }).name === "string"
+                  ? (ev as { name: string }).name
                   : "";
-              if (chunk) {
-                planDraftBufferRef.current += chunk;
-                setPlanText(planDraftBufferRef.current);
+              if (toolName === "hof_builtin_present_plan_clarification") {
+                setPlanBuiltinToolActive("clarification");
+                reasoningLabelRef.current = "Generating questions";
+              } else if (toolName === "hof_builtin_present_plan") {
+                setPlanBuiltinToolActive("plan");
+                reasoningLabelRef.current = "Preparing plan";
               }
             }
-            const suppressPlanResumeBlocks =
-              planDraftStreamingActiveRef.current &&
-              shouldSuppressLiveBlockDuringPlanDiscover(evForBlocks);
-            if (!suppressPlanResumeBlocks) {
-              applyLiveBlocksTail(
-                evForBlocks,
-                assistantStreamPhaseRef,
-                thinkingEpisodeStartedAtRef,
-                liveBlocksRef,
-                setLiveBlocks,
-              );
-            }
+            // Plan markdown for ``hof_builtin_present_plan`` is not streamed as assistant_delta:
+            // the engine validates tool args and emits ``final`` with ``structured_plan``.
+            // Stream all assistant/reasoning into live blocks until ``final``.
+            applyLiveBlocksTail(
+              evForBlocks,
+              assistantStreamPhaseRef,
+              thinkingEpisodeStartedAtRef,
+              liveBlocksRef,
+              setLiveBlocks,
+              reasoningLabelRef,
+            );
           },
         });
         if (myId !== reqIdRef.current) {
@@ -1270,6 +1342,7 @@ export function HofAgentChatProvider({
             setPlanClarificationSubmittedSummary([]);
             setPlanClarificationBarrier(barrier);
             setPlanPhase("clarifying");
+            setPlanBuiltinToolActive(null);
           }
           if (doneBlocks.length > 0) {
             flushLiveToThread(structuredClone(doneBlocks));
@@ -1294,11 +1367,17 @@ export function HofAgentChatProvider({
           { kind: "error", id: newId(), detail: msg } as LiveBlock,
         ]);
       } finally {
-        if (myId === reqIdRef.current) {
+        const cleanupId = myId;
+        scheduleAgentStreamIdleCleanup(() => {
+          if (cleanupId !== reqIdRef.current) {
+            return;
+          }
           setBusy(false);
+          setDiscoverStreamPhase(null);
+          setPlanBuiltinToolActive(null);
           updateThinkingEpisodeStart(null);
           setProviderWaitNotice(null);
-        }
+        });
       }
     },
     [
@@ -1384,6 +1463,7 @@ export function HofAgentChatProvider({
             setPlanTodoDoneIndices,
           );
           let evForBlocks = evfb;
+          agentChatDebugNdjson(rtyp, ev as Record<string, unknown>);
           if (
             rtyp === "final" ||
             rtyp === "awaiting_confirmation" ||
@@ -1392,6 +1472,14 @@ export function HofAgentChatProvider({
             rtyp === "error"
           ) {
             lastTerminalStreamEventRef.current = ev;
+          }
+          if (
+            rtyp === "final" ||
+            rtyp === "awaiting_confirmation" ||
+            rtyp === "awaiting_inbox_review" ||
+            rtyp === "error"
+          ) {
+            setPlanBuiltinToolActive(null);
           }
           if (rtyp === "resume_start") {
             resumeMergeContinuationRef.current =
@@ -1403,6 +1491,9 @@ export function HofAgentChatProvider({
             setInboxReviewBarrier(null);
             setInboxResumeError(null);
             setProviderWaitNotice(null);
+            setDiscoverStreamPhase(null);
+            setPlanBuiltinToolActive(null);
+            reasoningLabelRef.current = null;
             updateThinkingEpisodeStart(Date.now());
           }
           updateProviderWaitFromStreamType(rtyp, ev, setProviderWaitNotice);
@@ -1410,9 +1501,33 @@ export function HofAgentChatProvider({
             const ph = typeof ev.phase === "string" ? ev.phase : "";
             if (ph === "model") {
               updateThinkingEpisodeStart(Date.now());
+              const dp = (ev as { discover_phase?: unknown }).discover_phase;
+              if (
+                dp === "explore" ||
+                dp === "clarify" ||
+                dp === "propose"
+              ) {
+                setDiscoverStreamPhase(dp);
+                if (dp === "clarify" || dp === "propose") {
+                  reasoningLabelRef.current = discoverPhaseToEagerLabel(dp);
+                }
+              }
             }
             if (ph === "model" || ph === "summary") {
               assistantStreamPhaseRef.current = ph;
+            }
+          }
+          if (rtyp === "tool_call") {
+            const toolName =
+              typeof (ev as { name?: unknown }).name === "string"
+                ? (ev as { name: string }).name
+                : "";
+            if (toolName === "hof_builtin_present_plan_clarification") {
+              setPlanBuiltinToolActive("clarification");
+              reasoningLabelRef.current = "Generating questions";
+            } else if (toolName === "hof_builtin_present_plan") {
+              setPlanBuiltinToolActive("plan");
+              reasoningLabelRef.current = "Preparing plan";
             }
           }
           if (rtyp === "mutation_pending") {
@@ -1477,6 +1592,7 @@ export function HofAgentChatProvider({
             thinkingEpisodeStartedAtRef,
             liveBlocksRef,
             setLiveBlocks,
+            reasoningLabelRef,
           );
         },
       });
@@ -1575,11 +1691,17 @@ export function HofAgentChatProvider({
       liveBlocksRef.current = [];
       setLiveBlocks([]);
     } finally {
-      if (myId === reqIdRef.current) {
+      const cleanupId = myId;
+      scheduleAgentStreamIdleCleanup(() => {
+        if (cleanupId !== reqIdRef.current) {
+          return;
+        }
         setBusy(false);
+        setDiscoverStreamPhase(null);
+        setPlanBuiltinToolActive(null);
         updateThinkingEpisodeStart(null);
         setProviderWaitNotice(null);
-      }
+      });
     }
   }, [
     applyPlanExecuteStreamCompletion,
@@ -1629,6 +1751,7 @@ export function HofAgentChatProvider({
               setPlanTodoDoneIndices,
             );
             let evForBlocks = evfb;
+            agentChatDebugNdjson(rtyp, ev as Record<string, unknown>);
             if (
               rtyp === "final" ||
               rtyp === "awaiting_confirmation" ||
@@ -1728,6 +1851,7 @@ export function HofAgentChatProvider({
               thinkingEpisodeStartedAtRef,
               liveBlocksRef,
               setLiveBlocks,
+              reasoningLabelRef,
             );
           },
         });
@@ -1822,11 +1946,17 @@ export function HofAgentChatProvider({
         liveBlocksRef.current = [];
         setLiveBlocks([]);
       } finally {
-        if (myId === reqIdRef.current) {
+        const cleanupId = myId;
+        scheduleAgentStreamIdleCleanup(() => {
+          if (cleanupId !== reqIdRef.current) {
+            return;
+          }
           setBusy(false);
+          setDiscoverStreamPhase(null);
+          setPlanBuiltinToolActive(null);
           updateThinkingEpisodeStart(null);
           setProviderWaitNotice(null);
-        }
+        });
       }
     },
     [
@@ -2054,18 +2184,69 @@ export function HofAgentChatProvider({
 
   const conversationEmpty = thread.length === 0 && liveBlocks.length === 0;
 
-  const streamingReasoningLabel = useMemo(() => {
-    if (!busy) {
-      return null;
+  const streamingReasoningLabel = useMemo(
+    () =>
+      computePlanDiscoverStatusLabel({
+        busy,
+        agentMode,
+        discoverStreamPhase,
+        planPhase,
+        planBuiltinLane: planBuiltinToolActive,
+      }),
+    [busy, agentMode, discoverStreamPhase, planPhase, planBuiltinToolActive],
+  );
+
+  reasoningLabelRef.current = streamingReasoningLabel;
+
+  useEffect(() => {
+    if (!isAgentChatDebugEnabled()) {
+      return;
     }
-    if (planPhase === "generating") {
-      return "Preparing plan";
+    const lastAssistant = [...liveBlocks]
+      .reverse()
+      .find((b) => b.kind === "assistant");
+    if (lastAssistant?.kind !== "assistant") {
+      agentChatDebugLog("ui_snapshot", {
+        busy,
+        streamingReasoningLabel,
+        discoverStreamPhase,
+        planBuiltinToolActive,
+        planPhase,
+        agentMode,
+        liveBlocksCount: liveBlocks.length,
+        lastAssistant: null,
+      });
+      return;
     }
-    if (agentMode === "plan" && planPhase === null) {
-      return "Generating questions";
-    }
-    return null;
-  }, [busy, planPhase, agentMode]);
+    agentChatDebugLog("ui_snapshot", {
+      busy,
+      streamingReasoningLabel,
+      discoverStreamPhase,
+      planBuiltinToolActive,
+      planPhase,
+      agentMode,
+      liveBlocksCount: liveBlocks.length,
+      lastAssistant: {
+        streaming: lastAssistant.streaming,
+        finishReason: lastAssistant.finishReason,
+        streamTextRole: lastAssistant.streamTextRole,
+        streamPhase: lastAssistant.streamPhase,
+        uiLane: lastAssistant.uiLane,
+        inferredLane: inferAssistantUiLane(lastAssistant),
+        textLen: lastAssistant.text.length,
+        segmentsCount: lastAssistant.streamSegments?.length ?? 0,
+        reasoningLabel: lastAssistant.reasoningLabel,
+      },
+    });
+  }, [
+    liveBlocks,
+    busy,
+    streamingReasoningLabel,
+    discoverStreamPhase,
+    planBuiltinToolActive,
+    planPhase,
+    agentMode,
+  ]);
 
   const value = useMemo<HofAgentChatContextValue>(
     () => ({

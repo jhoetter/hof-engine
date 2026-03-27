@@ -110,7 +110,5 @@ def build_function_input_schema(metadata: Any) -> type[BaseModel]:
                     default_val = None
             fields[param.name] = (py_type | None, default_val)
 
-    model_name = (
-        f"{metadata.name.replace('_', ' ').title().replace(' ', '')}InputSchema"
-    )
+    model_name = f"{metadata.name.replace('_', ' ').title().replace(' ', '')}InputSchema"
     return create_model(model_name, **fields)

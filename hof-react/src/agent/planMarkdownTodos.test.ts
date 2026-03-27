@@ -4,6 +4,7 @@ import {
   parseStructuredPlan,
   preferPlanTaskListBody,
   sliceMarkdownFromFirstTaskListLine,
+  visiblePlanMarkdownPreview,
 } from "./planMarkdownTodos";
 
 describe("sliceMarkdownFromFirstTaskListLine", () => {
@@ -26,6 +27,28 @@ describe("sliceMarkdownFromFirstTaskListLine", () => {
 
   it("handles bullet variants", () => {
     expect(sliceMarkdownFromFirstTaskListLine("* [ ] One")).toBe("* [ ] One");
+  });
+});
+
+describe("visiblePlanMarkdownPreview", () => {
+  it("returns empty until a heading or task line exists", () => {
+    expect(visiblePlanMarkdownPreview("Perfekt! Ich erstelle nun einen Plan.")).toBe(
+      "",
+    );
+    expect(visiblePlanMarkdownPreview("No structure yet ")).toBe("");
+  });
+
+  it("keeps from first markdown heading", () => {
+    const raw =
+      "Intro sentence.\n\n# Abschreibungsplan\n\n- [ ] One\n- [ ] Two";
+    expect(visiblePlanMarkdownPreview(raw)).toBe(
+      "# Abschreibungsplan\n\n- [ ] One\n- [ ] Two",
+    );
+  });
+
+  it("falls back to first task line when there is no heading", () => {
+    const raw = "Short intro\n\n- [ ] First\n- [ ] Second";
+    expect(visiblePlanMarkdownPreview(raw)).toBe("- [ ] First\n- [ ] Second");
   });
 });
 

@@ -598,7 +598,9 @@ def hof_builtin_calculate(
     ),
 )
 def hof_builtin_present_plan(
-    title: str, description: str, steps: list,
+    title: str,
+    description: str,
+    steps: list,
 ) -> dict[str, Any]:
     """Intercepted by the stream loop; this body is never reached.
 
@@ -629,10 +631,11 @@ def hof_builtin_present_plan_clarification(questions: list) -> dict[str, Any]:
 
     ``questions`` is validated server-side via
     :class:`~hof.agent.plan_types.PlanClarificationQuestion`.
-    Required shape: ``{id, prompt, options: [{id, label}], allow_multiple}``.
+    Required shape: ``{id, prompt, options: [{id, label, is_other?}], allow_multiple}``.
     ``key``/``label``/``hint`` are accepted as aliases for ``id``/``prompt``.
     ``options`` (at least 2) is **required** — omitting it causes a validation
     error returned to the model so it can retry with correct choices.
+    If no option has ``is_other: true``, the server appends ``Other / specify``.
     """
     return {"status": "intercepted"}
 

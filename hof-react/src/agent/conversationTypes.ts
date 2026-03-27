@@ -22,7 +22,7 @@ export type AgentConversationDraftV1 = {
 export type PlanClarificationQuestion = {
   id: string;
   prompt: string;
-  options: { id: string; label: string }[];
+  options: { id: string; label: string; is_other?: boolean }[];
   allow_multiple: boolean;
 };
 

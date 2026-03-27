@@ -99,7 +99,8 @@ def split_agent_tool_display_metadata(arguments_json: str) -> tuple[str, str | N
     """Split UI-only display title from tool arguments JSON.
 
     Returns ``(arguments_json_for_wire_and_execute, display_title_or_none)``.
-    On invalid JSON, returns the original string and ``None`` (caller may fall back to CLI formatting).
+    On invalid JSON, returns the original string and ``None`` (caller may fall back to CLI
+    formatting).
     """
     raw = (arguments_json or "").strip() or "{}"
     try:
@@ -228,10 +229,13 @@ def openai_tool_specs(allowlist: frozenset[str]) -> list[dict[str, Any]]:
             "type": "string",
             "maxLength": AGENT_TOOL_DISPLAY_TITLE_MAX_CHARS,
             "description": (
-                "Optional. One short phrase for the assistant UI tool row: **what you are doing** plus "
-                "**which target** (e.g. 'Registering receipt: Rechnung.pdf', 'Loading expense #3'). "
-                "When calling the same tool several times in parallel, make each title **distinct** "
-                "(use row #, id snippet, or filename). A bare filename alone is weak — include the action. "
+                "Optional. One short phrase for the assistant UI tool row: **what you are doing** "
+                "plus **which target** (e.g. 'Registering receipt: Rechnung.pdf', "
+                "'Loading expense #3'). "
+                "When calling the same tool several times in parallel, make each title "
+                "**distinct** "
+                "(use row #, id snippet, or filename). A bare filename alone is weak — include the "
+                "action. "
                 "Not passed to the function implementation."
             ),
         }

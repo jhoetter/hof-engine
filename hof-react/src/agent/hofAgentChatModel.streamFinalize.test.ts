@@ -4,6 +4,8 @@ import {
   compactBlocksForHistory,
   confirmationFooterIconsFromOutcomes,
   finalizeLiveBlocksAfterUserStop,
+  finalizePlanFromTerminalEvent,
+  inferAssistantUiLane,
 } from "./hofAgentChatModel";
 import type { LiveBlock } from "./hofAgentChatModel";
 
@@ -270,5 +272,107 @@ describe("applyStreamEvent streaming caret / structured steps", () => {
     ];
     const out = finalizeLiveBlocksAfterUserStop(blocks);
     expect(out.filter((b) => b.kind === "assistant").length).toBe(0);
+  });
+});
+
+describe("finalizePlanFromTerminalEvent", () => {
+  it("uses server plan_run_id when present", () => {
+    const r = finalizePlanFromTerminalEvent(
+      {
+        type: "final",
+        mode: "plan",
+        plan_run_id: "server-plan-uuid-1",
+        structured_plan: {
+          title: "T",
+          description: "",
+          steps: [{ label: "S" }],
+        },
+      },
+      [],
+    );
+    expect(r.planRunId).toBe("server-plan-uuid-1");
+    expect(r.planText).toContain("# T");
+  });
+
+  it("falls back to a new id when plan_run_id is missing", () => {
+    const r = finalizePlanFromTerminalEvent(
+      {
+        type: "final",
+        mode: "plan",
+        structured_plan: {
+          title: "T",
+          description: "",
+          steps: [{ label: "S" }],
+        },
+      },
+      [],
+    );
+    expect(r.planRunId.length).toBeGreaterThan(8);
+  });
+});
+
+describe("inferAssistantUiLane (tool_calls turns)", () => {
+  const base = {
+    kind: "assistant" as const,
+    id: "a1",
+    text: "Hier ist eine kurze Zusammenfassung der Ausgaben. Bevor ich einen Plan erstelle, brauche ich noch Infos.",
+    streaming: false,
+    streamPhase: "model" as const,
+    finishReason: "tool_calls",
+    uiLane: "thinking" as const,
+  };
+
+  it("infers reply when prose was streamed as content (not Thought)", () => {
+    expect(
+      inferAssistantUiLane({
+        ...base,
+        streamTextRole: "content",
+      }),
+    ).toBe("reply");
+  });
+
+  it("infers reply for mixed reasoning+assistant before tools", () => {
+    expect(
+      inferAssistantUiLane({
+        ...base,
+        streamTextRole: "mixed",
+      }),
+    ).toBe("reply");
+  });
+
+  it("infers reply when segment stream has a content segment", () => {
+    expect(
+      inferAssistantUiLane({
+        ...base,
+        streamTextRole: "reasoning",
+        streamSegments: [
+          { kind: "reasoning", text: "Short." },
+          {
+            kind: "content",
+            text: "Visible prose before the clarification tool.",
+          },
+        ],
+      }),
+    ).toBe("reply");
+  });
+
+  it("infers reply for long reasoning-only flat text (prose in reasoning channel)", () => {
+    expect(
+      inferAssistantUiLane({
+        ...base,
+        streamTextRole: "reasoning",
+        text: `${"x".repeat(80)} before tools`,
+      }),
+    ).toBe("reply");
+  });
+
+  it("keeps thinking for short reasoning-only before tools", () => {
+    expect(
+      inferAssistantUiLane({
+        ...base,
+        streamTextRole: "reasoning",
+        text: "Short",
+      }),
+    ).toBe("thinking");
   });
 });

@@ -109,6 +109,10 @@ These **read-only** tools are always part of the effective allowlist (`AgentPoli
 
 They appear in `GET /api/agent/tools` like any other registered function once discovery has run (same as the dev server and CLI bootstrap).
 
+## Plan discovery (`plan_discover`)
+
+When the model calls **`hof_builtin_present_plan`**, the engine validates JSON arguments, converts them to markdown with `plan_proposal_to_markdown`, and emits **`final`** with **`mode: "plan"`**, **`structured_plan`**, **`reply`** (same markdown), and **`plan_text_source": "structured_tool"`**. The plan body is **not** streamed token-by-token as `assistant_delta`; clients should populate the plan UI from **`final`** only. Pre-final `assistant_delta` lines are normal chat/reasoning content (same segment as any other tool round).
+
 ## State
 
 Pending runs and mutation placeholders are stored in **Redis** when `REDIS_URL` is set; otherwise **in-process** memory (not safe across multiple workers).

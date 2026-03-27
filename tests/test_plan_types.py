@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 
-from hof.agent.plan_types import parse_plan_clarification_questions
+from hof.agent.plan_types import (
+    parse_plan_clarification_questions,
+    validate_plan_clarification_answers,
+)
 
 
 def test_parse_plan_clarification_rejects_missing_options() -> None:
@@ -84,3 +87,61 @@ def test_parse_plan_clarification_still_accepts_canonical_shape() -> None:
     assert out is not None
     assert out[0]["id"] == "q1"
     assert out[0]["prompt"] == "Pick one"
+    opts = out[0]["options"]
+    assert len(opts) == 3
+    assert any(o.get("is_other") for o in opts)
+    assert any(o["label"] == "Other / specify" for o in opts)
+
+
+def test_validate_plan_clarification_answers_uses_is_other_flag() -> None:
+    questions = [
+        {
+            "id": "q1",
+            "prompt": "Pick",
+            "options": [
+                {"id": "a", "label": "A", "is_other": False},
+                {"id": "custom", "label": "Custom", "is_other": True},
+            ],
+            "allow_multiple": False,
+        },
+    ]
+    sel, other, err = validate_plan_clarification_answers(
+        questions,
+        [
+            {
+                "question_id": "q1",
+                "selected_option_ids": ["custom"],
+                "other_text": "details",
+            },
+        ],
+    )
+    assert err is None
+    assert sel == {"q1": ["custom"]}
+    assert other == {"q1": "details"}
+
+
+def test_validate_plan_clarification_answers_uses_is_other_false() -> None:
+    """Option id without ``other`` substring does not require other_text when not is_other."""
+    questions = [
+        {
+            "id": "q1",
+            "prompt": "Pick",
+            "options": [
+                {"id": "a", "label": "A", "is_other": False},
+                {"id": "custom", "label": "Custom", "is_other": False},
+            ],
+            "allow_multiple": False,
+        },
+    ]
+    sel, other, err = validate_plan_clarification_answers(
+        questions,
+        [
+            {
+                "question_id": "q1",
+                "selected_option_ids": ["custom"],
+            },
+        ],
+    )
+    assert err is None
+    assert sel == {"q1": ["custom"]}
+    assert other == {}

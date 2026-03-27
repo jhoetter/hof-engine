@@ -13,6 +13,14 @@ function optionIdLooksOther(optionId: string): boolean {
   return optionId.toLowerCase().includes("other");
 }
 
+/** Prefer server ``is_other``; fall back to id heuristics for older snapshots. */
+function optionIsOther(o: { id: string; is_other?: boolean }): boolean {
+  if (typeof o.is_other === "boolean") {
+    return o.is_other;
+  }
+  return optionIdLooksOther(o.id);
+}
+
 function letterLabel(index: number): string {
   if (index < 0 || index > 25) {
     return "?";
@@ -89,7 +97,10 @@ export function HofAgentPlanClarificationCard({
       if (!s || s.size < 1) {
         return false;
       }
-      const hasOtherSelected = [...s].some((oid) => optionIdLooksOther(oid));
+      const hasOtherSelected = [...s].some((oid) => {
+        const opt = qu.options.find((x) => x.id === oid);
+        return opt ? optionIsOther(opt) : optionIdLooksOther(oid);
+      });
       if (hasOtherSelected) {
         const t = (otherTexts[qu.id] ?? "").trim();
         if (!t) {
@@ -108,7 +119,10 @@ export function HofAgentPlanClarificationCard({
     if (!s || s.size < 1) {
       return false;
     }
-    const hasOtherSelected = [...s].some((oid) => optionIdLooksOther(oid));
+    const hasOtherSelected = [...s].some((oid) => {
+      const opt = q.options.find((x) => x.id === oid);
+      return opt ? optionIsOther(opt) : optionIdLooksOther(oid);
+    });
     if (hasOtherSelected) {
       const t = (otherTexts[q.id] ?? "").trim();
       if (!t) {
@@ -124,7 +138,10 @@ export function HofAgentPlanClarificationCard({
     }
     const answers: PlanClarificationAnswerWire[] = questions.map((qu) => {
       const sel = Array.from(selected.get(qu.id) ?? []);
-      const hasOtherSelected = sel.some((oid) => optionIdLooksOther(oid));
+      const hasOtherSelected = sel.some((oid) => {
+        const opt = qu.options.find((x) => x.id === oid);
+        return opt ? optionIsOther(opt) : optionIdLooksOther(oid);
+      });
       const ot = (otherTexts[qu.id] ?? "").trim();
       const base: PlanClarificationAnswerWire = {
         question_id: qu.id,
@@ -181,12 +198,11 @@ export function HofAgentPlanClarificationCard({
 
   const allow = Boolean(q.allow_multiple);
   const qSelected = selected.get(q.id) ?? new Set();
-  const hasOtherSelected = [...qSelected].some((oid) =>
-    optionIdLooksOther(oid),
-  );
-  const questionHasOtherOption = q.options.some((o) =>
-    optionIdLooksOther(o.id),
-  );
+  const hasOtherSelected = [...qSelected].some((oid) => {
+    const opt = q.options.find((x) => x.id === oid);
+    return opt ? optionIsOther(opt) : optionIdLooksOther(oid);
+  });
+  const questionHasOtherOption = q.options.some((o) => optionIsOther(o));
 
   return (
     <div className="rounded-lg border border-border bg-surface p-3 shadow-sm">

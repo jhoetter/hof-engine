@@ -7,6 +7,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from hof.agent.sandbox.config import SandboxConfig
+from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
+
 # (raw attachments from client) -> (normalized list, error message or None)
 NormalizeAttachmentsFn = Callable[[Any], tuple[list[dict[str, str]], str | None]]
 # normalized attachment list -> system prompt fragment
@@ -135,7 +138,9 @@ def post_apply_review_hint_to_wire(hint: PostApplyReviewHint) -> dict[str, Any]:
     return pr
 
 
-def mutation_preview_to_wire(result: MutationPreviewResult | dict[str, Any]) -> dict[str, Any]:
+def mutation_preview_to_wire(
+    result: MutationPreviewResult | dict[str, Any],
+) -> dict[str, Any]:
     """Serialize preview for NDJSON stream, tool placeholder, and model JSON (JSON-serializable)."""
     if isinstance(result, MutationPreviewResult):
         d: dict[str, Any] = {"summary": result.summary}
@@ -292,9 +297,19 @@ class AgentPolicy:
     inbox_scan_after_mutations: InboxScanAfterMutationsFn | None = None
     # Optional: after inbox verify, new pending rows (e.g. expense_review after receipt HITL).
     inbox_scan_after_inbox_resume: InboxScanAfterInboxResumeFn | None = None
+    # Optional: Docker terminal pool; when ``terminal_only_dispatch``, domain tools are not exposed
+    # to the model — only ``hof_builtin_terminal_exec`` and ``builtins_when_terminal_only``.
+    sandbox: SandboxConfig | None = None
 
     def effective_allowlist(self) -> frozenset[str]:
-        return frozenset(self.allowlist_read | self.allowlist_mutation | BUILTIN_AGENT_TOOL_NAMES)
+        sc = self.sandbox.with_env_overrides() if self.sandbox is not None else None
+        if sc is not None and sc.enabled and sc.terminal_only_dispatch:
+            term = frozenset({HOF_BUILTIN_TERMINAL_EXEC})
+            return frozenset(sc.builtins_when_terminal_only) | term
+        base = frozenset(self.allowlist_read | self.allowlist_mutation | BUILTIN_AGENT_TOOL_NAMES)
+        if sc is not None and sc.enabled and not sc.terminal_only_dispatch:
+            return base | frozenset({HOF_BUILTIN_TERMINAL_EXEC})
+        return base
 
     def rationale_for(self, function_name: str) -> str | None:
         key = (function_name or "").strip()

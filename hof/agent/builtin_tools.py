@@ -28,6 +28,9 @@ from simpleeval import (
     IterableTooLong,
 )
 
+from hof.agent.sandbox.context import resolve_sandbox_run_state
+from hof.agent.sandbox.token import mint_sandbox_bearer_token
+from hof.agent.tooling import get_tool_execution_run_id
 from hof.functions import function
 
 logger = logging.getLogger(__name__)
@@ -344,7 +347,10 @@ def _parse_values_input(raw: Any) -> tuple[list[Any] | None, str | None]:
     if raw is None:
         return None, None
     if isinstance(raw, bool):
-        return None, "values must be a list, string of numbers, or a single number, not boolean"
+        return (
+            None,
+            "values must be a list, string of numbers, or a single number, not boolean",
+        )
     if isinstance(raw, Real):
         return [raw], None
     if isinstance(raw, tuple):
@@ -371,7 +377,10 @@ def _parse_values_input(raw: Any) -> tuple[list[Any] | None, str | None]:
         if not parts:
             return None, "could not parse values as a list of numbers"
         return parts, None
-    return None, f"values must be a list, tuple, string, or number, not {type(raw).__name__}"
+    return (
+        None,
+        f"values must be a list, tuple, string, or number, not {type(raw).__name__}",
+    )
 
 
 def _normalize_agg_values(values: list[Any]) -> tuple[list[float] | None, str | None]:
@@ -445,7 +454,13 @@ _calc_evaluator: EvalWithCompoundTypes | None = None
 def _get_calc_evaluator() -> EvalWithCompoundTypes:
     global _calc_evaluator
     if _calc_evaluator is None:
-        safe_names = {"True": True, "False": False, "None": None, "pi": math.pi, "e": math.e}
+        safe_names = {
+            "True": True,
+            "False": False,
+            "None": None,
+            "pi": math.pi,
+            "e": math.e,
+        }
         safe_functions = {
             "int": int,
             "float": float,
@@ -598,7 +613,9 @@ def hof_builtin_calculate(
     ),
 )
 def hof_builtin_present_plan(
-    title: str, description: str, steps: list,
+    title: str,
+    description: str,
+    steps: list,
 ) -> dict[str, Any]:
     """Intercepted by the stream loop; this body is never reached.
 
@@ -657,3 +674,120 @@ def hof_builtin_update_plan_todo_state(done_indices: list) -> dict[str, Any]:
         except (TypeError, ValueError):
             continue
     return {"done_indices": idxs}
+
+
+def _sandbox_api_environment() -> dict[str, str]:
+    from hof.agent.policy import try_get_agent_policy
+    from hof.agent.sandbox.config import SandboxConfig
+
+    policy = try_get_agent_policy()
+    sc = getattr(policy, "sandbox", None)
+    if not isinstance(sc, SandboxConfig):
+        return {}
+    sc = sc.with_env_overrides()
+    env: dict[str, str] = {}
+    base = (sc.api_base_url or "").strip()
+    if not base:
+        # Same vars apps often use for the Hof API (no HOF_SANDBOX_* required).
+        for key in ("HOF_API_BASE", "VITE_HOF_API", "HOF_SANDBOX_API_BASE_URL"):
+            cand = (os.environ.get(key) or "").strip()
+            if cand:
+                base = cand
+                break
+    if not base:
+        try:
+            from hof.config import get_config
+
+            cfg = get_config()
+            port = getattr(cfg, "port", 8001)
+            base = f"http://127.0.0.1:{port}"
+        except Exception:
+            base = "http://127.0.0.1:8001"
+    env["API_BASE_URL"] = base.rstrip("/")
+    tok = (sc.api_token or "").strip()
+    if not tok:
+        tok = (os.environ.get("HOF_SANDBOX_API_TOKEN") or os.environ.get("HOF_TOKEN") or "").strip()
+    if tok:
+        env["API_TOKEN"] = tok
+    else:
+        minted = mint_sandbox_bearer_token()
+        if minted:
+            env["API_TOKEN"] = minted
+        else:
+            # Fallback when ``jwt_secret_key`` is unset: HTTP Basic (``HOF_ADMIN_PASSWORD``).
+            basic_pw = (
+                os.environ.get("HOF_SANDBOX_BASIC_PASSWORD")
+                or os.environ.get("HOF_ADMIN_PASSWORD")
+                or ""
+            ).strip()
+            if basic_pw:
+                try:
+                    from hof.config import get_config
+
+                    cfg = get_config()
+                    default_user = (
+                        getattr(cfg, "admin_username", None) or "admin"
+                    ).strip() or "admin"
+                except Exception:
+                    default_user = "admin"
+                env["HOF_BASIC_USER"] = (
+                    os.environ.get("HOF_SANDBOX_BASIC_USER") or ""
+                ).strip() or default_user
+                env["HOF_BASIC_PASSWORD"] = basic_pw
+    return env
+
+
+@function(
+    name="hof_builtin_terminal_exec",
+    tool_summary=(
+        "Run a shell command in the isolated sandbox container (workspace under /workspace). "
+        "Use CLI skills and curl against API_BASE_URL with API_TOKEN when configured."
+    ),
+    when_to_use=(
+        "For piping, Python scripts, pip install, jq, and calling generated skill CLIs — "
+        "the only way to reach app data when terminal-only dispatch is enabled."
+    ),
+    when_not_to_use="Never for direct JSON tool calls to domain functions; those are not exposed.",
+)
+def hof_builtin_terminal_exec(command: str) -> dict[str, Any]:
+    """Execute ``command`` via ``docker exec`` in a pooled container (see ``hof.agent.sandbox``)."""
+    from hof.agent.policy import try_get_agent_policy
+    from hof.agent.sandbox.config import SandboxConfig
+    from hof.agent.sandbox.context import get_sandbox_run
+    from hof.agent.sandbox.pool import get_container_pool
+    from hof.agent.sandbox.session import create_session_for_run
+
+    policy = try_get_agent_policy()
+    sc = getattr(policy, "sandbox", None)
+    if not isinstance(sc, SandboxConfig):
+        return {"error": "sandbox is not configured on AgentPolicy"}
+    sc = sc.with_env_overrides()
+    if not sc.enabled:
+        return {
+            "error": (
+                "sandbox is disabled — set AgentPolicy.sandbox.enabled=True in configure_agent, "
+                "or optional env HOF_SANDBOX_ENABLED=1"
+            )
+        }
+    tool_rid = get_tool_execution_run_id()
+    run = resolve_sandbox_run_state(tool_rid)
+    if run is None:
+        logger.warning(
+            "hof_builtin_terminal_exec: missing sandbox state (tool_run_id=%r ctx_var=%s)",
+            tool_rid,
+            get_sandbox_run() is not None,
+        )
+        return {"error": "sandbox run context is not set"}
+    if run.terminal_session is None:
+        pool = get_container_pool(sc)
+        env = _sandbox_api_environment()
+        run.terminal_session = create_session_for_run(
+            pool,
+            workdir="/workspace",
+            environment=env,
+            max_output_chars=sc.max_output_chars,
+            max_timeout_sec=sc.max_exec_timeout_sec,
+        )
+    cmd = (command or "").strip() or "true"
+    result = run.terminal_session.exec_command(cmd)
+    return {"exit_code": result.exit_code, "output": result.output}

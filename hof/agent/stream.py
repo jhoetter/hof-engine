@@ -25,6 +25,15 @@ from hof.agent.policy import (
     mutation_preview_to_wire,
     post_apply_review_hint_to_wire,
 )
+from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
+from hof.agent.sandbox.context import (
+    bind_sandbox_run,
+    get_sandbox_run,
+    release_bound_terminal_session,
+    reset_sandbox_run,
+    set_sandbox_run,
+    unbind_sandbox_run,
+)
 from hof.agent.state import (
     delete_agent_run,
     delete_pending,
@@ -46,6 +55,53 @@ from hof.agent.tooling import (
 from hof.config import get_config
 
 logger = logging.getLogger(__name__)
+
+
+def _cli_line_cap_for_tool(name: str, base: int) -> int:
+    """Long ``hof_builtin_terminal_exec`` commands need a higher cap than generic tools."""
+    if name == HOF_BUILTIN_TERMINAL_EXEC:
+        return max(base, 12_000)
+    return base
+
+
+def _args_wire_emit_cap_chars(name: str) -> int:
+    """NDJSON ``tool_call.arguments`` is capped for safety; terminal scripts need more room."""
+    if name == HOF_BUILTIN_TERMINAL_EXEC:
+        return 120_000
+    return 2000
+
+
+def _maybe_wrap_sandbox(
+    policy: AgentPolicy,
+    run_id: str,
+    loop_gen: Iterator[dict[str, Any]],
+) -> Iterator[dict[str, Any]]:
+    """Bind sandbox terminal session to this run (release container when the loop ends)."""
+    sc = policy.sandbox.with_env_overrides() if policy.sandbox is not None else None
+    if sc is not None and sc.enabled:
+        token = set_sandbox_run(run_id=run_id, user_id=run_id, policy=policy)
+        st = get_sandbox_run()
+        if st is not None:
+            bind_sandbox_run(run_id, st)
+            logger.info(
+                "sandbox: bound run_id=%s (thread-safe table + ContextVar)",
+                run_id,
+            )
+        try:
+            yield from loop_gen
+        finally:
+            release_bound_terminal_session(run_id=run_id)
+            unbind_sandbox_run(run_id)
+            try:
+                reset_sandbox_run(token)
+            except ValueError:
+                # Token may be from another context (e.g. streaming thread); table unbind wins.
+                logger.debug(
+                    "sandbox: skipped ContextVar reset (different execution context)",
+                )
+    else:
+        yield from loop_gen
+
 
 _HOF_BUILTIN_PRESENT_PLAN = "hof_builtin_present_plan"
 _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION = "hof_builtin_present_plan_clarification"
@@ -248,7 +304,9 @@ def _iter_stream_agent_turn_with_engine_retries(
             if not _provider_error_eligible_for_engine_stream_retry(exc):
                 raise
             if attempt + 1 >= max_attempts:
-                raise _AgentStreamTurnExhaustedError(exc, attempts=max_attempts) from exc
+                raise _AgentStreamTurnExhaustedError(
+                    exc, attempts=max_attempts
+                ) from exc
             wait = _engine_stream_retry_sleep_seconds(exc)
             yield AgentRateLimitWait(
                 seconds=wait,
@@ -334,9 +392,11 @@ def _agent_stream_error_event(
         "type": "error",
         "detail": detail,
         "error_category": cat_key,
-        "retryable": False
-        if engine_turn_retries_exhausted
-        else bool(getattr(exc, "retryable", False)),
+        "retryable": (
+            False
+            if engine_turn_retries_exhausted
+            else bool(getattr(exc, "retryable", False))
+        ),
     }
     http_status = getattr(f, "http_status", None)
     if http_status is not None:
@@ -659,7 +719,8 @@ def _resolve_agent_reasoning_config(backend: str | None = None) -> ReasoningConf
     if mode_src in ("fallback",):
         if extras:
             msg = (
-                "AGENT_REASONING_OPENAI_EXTRAS is not allowed when AGENT_REASONING_MODE is fallback"
+                "AGENT_REASONING_OPENAI_EXTRAS is not allowed when "
+                "AGENT_REASONING_MODE is fallback"
             )
             raise ValueError(msg)
         if backend_norm == "anthropic":
@@ -667,16 +728,22 @@ def _resolve_agent_reasoning_config(backend: str | None = None) -> ReasoningConf
                 "FALLBACK reasoning is not recommended for Anthropic; "
                 "using native mode with provider thinking instead (see AGENT_ANTHROPIC_THINKING)"
             )
-            return ReasoningConfig.native(anthropic_thinking=_resolve_anthropic_thinking_kw())
+            return ReasoningConfig.native(
+                anthropic_thinking=_resolve_anthropic_thinking_kw()
+            )
         return ReasoningConfig(mode=ReasoningMode.FALLBACK)
     if mode_src not in ("native", "", "on", "true", "1", "yes"):
-        msg = f"Unknown agent reasoning mode: {mode_src!r} (use native, off, or fallback)"
+        msg = (
+            f"Unknown agent reasoning mode: {mode_src!r} (use native, off, or fallback)"
+        )
         raise ValueError(msg)
     if backend_norm == "anthropic":
         if extras:
             msg = "AGENT_REASONING_OPENAI_EXTRAS is not used when AGENT_LLM_BACKEND=anthropic"
             raise ValueError(msg)
-        return ReasoningConfig.native(anthropic_thinking=_resolve_anthropic_thinking_kw())
+        return ReasoningConfig.native(
+            anthropic_thinking=_resolve_anthropic_thinking_kw()
+        )
     # OpenAI (default backend): "native" in config means "show thinking for every turn".
     # Chat Completions on gpt-4o-class models usually emit no reasoning_delta; llm-markdown
     # FALLBACK always streams a planning/thinking lane. Opt into true Chat Completions native
@@ -738,7 +805,9 @@ def _resolve_agent_max_completion_tokens() -> int:
         c = get_config()
         n = int(getattr(c, "agent_max_completion_tokens", 16_384))
         if n > 0:
-            return max(_AGENT_COMPLETION_TOKENS_FLOOR, min(n, _AGENT_COMPLETION_TOKENS_CAP))
+            return max(
+                _AGENT_COMPLETION_TOKENS_FLOOR, min(n, _AGENT_COMPLETION_TOKENS_CAP)
+            )
     except Exception:
         pass
     return 16_384
@@ -851,7 +920,20 @@ def _build_discover_tools(
     - **clarify:** Like explore plus ``hof_builtin_present_plan_clarification``;
       ``hof_builtin_present_plan`` stays unavailable until resume after answers.
     - **propose:** Full read set plus all builtins (used after clarification resume).
+
+    With **terminal-only** sandbox dispatch, domain reads are omitted; the effective
+    allowlist is :meth:`AgentPolicy.effective_allowlist` minus phase excludes.
     """
+    sc = policy.sandbox.with_env_overrides() if policy.sandbox is not None else None
+    if sc is not None and sc.enabled and sc.terminal_only_dispatch:
+        eff = policy.effective_allowlist()
+        if phase == "explore":
+            allowlist = frozenset(eff - _DISCOVER_EXCLUDE_FROM_EXPLORE)
+        elif phase == "clarify":
+            allowlist = frozenset(eff - {_HOF_BUILTIN_PRESENT_PLAN})
+        else:
+            allowlist = eff
+        return allowlist, openai_tool_specs(allowlist)
     base_read = policy.allowlist_read
     builtins_all = BUILTIN_AGENT_TOOL_NAMES
     if phase == "explore":
@@ -881,7 +963,7 @@ _AGENT_CHAT_PLAN_EXECUTE_SUFFIX = (
     "- Pass `done_indices` as a JSON array of integers: the **0-based indices** of every checklist "
     "row that is **complete so far** (same top-to-bottom order as the `- [ ]` lines in "
     "the approved plan below). Example: after finishing the first two tasks, call with "
-    "`{\"done_indices\": [0, 1]}`; after the third, `{\"done_indices\": [0, 1, 2]}`.\n"
+    '`{"done_indices": [0, 1]}`; after the third, `{"done_indices": [0, 1, 2]}`.\n'
     "- Call the tool **multiple times per turn** if you complete several steps in one round.\n"
     "- Do not rely on editing markdown checkboxes — only this tool updates the UI.\n"
     "Also briefly note progress in your visible replies.\n"
@@ -928,8 +1010,8 @@ _AGENT_CHAT_PLAN_DISCOVER_FINAL_LOCK = (
     "**For Plan discovery, this section applies on top of the general instructions above.**\n"
     "Until the user has submitted the clarification questionnaire, your visible output is **only** "
     "short orientation: restate the goal, note what you checked with tools, and what still needs a "
-    "decision. **Then call** `hof_builtin_present_plan_clarification` with concrete multiple-choice "
-    "questions.\n"
+    "decision. **Then call** `hof_builtin_present_plan_clarification` with concrete "
+    "multiple-choice questions.\n"
     "**Reserve for plan execution (after the user approves a plan):** full markdown tables, "
     "line-by-line expense listings, depreciation schedules, totals, and narrative reports. "
     "**During discovery,** one or two numbers to phrase a question are fine; comprehensive answers "
@@ -996,11 +1078,17 @@ def collect_agent_chat_from_stream(
             r = int(ev.get("round") or 0)
             ph = str(ev.get("phase") or "")
             if ph == "model":
-                legacy.append({"type": "thinking", "detail": f"Round {r}: calling model…"})
+                legacy.append(
+                    {"type": "thinking", "detail": f"Round {r}: calling model…"}
+                )
             elif ph == "tools":
-                legacy.append({"type": "thinking", "detail": f"Round {r}: executing tools…"})
+                legacy.append(
+                    {"type": "thinking", "detail": f"Round {r}: executing tools…"}
+                )
             elif ph == "summary":
-                legacy.append({"type": "thinking", "detail": f"Round {r}: confirmation reply…"})
+                legacy.append(
+                    {"type": "thinking", "detail": f"Round {r}: confirmation reply…"}
+                )
         elif t == "segment_start":
             continue
         elif t == "assistant_delta" or t == "reasoning_delta":
@@ -1084,14 +1172,18 @@ def collect_agent_chat_from_stream(
                 "awaiting_plan_clarification": True,
                 "run_id": str(ev.get("run_id") or ""),
                 "clarification_id": str(ev.get("clarification_id") or ""),
-                "questions": ev.get("questions") if isinstance(ev.get("questions"), list) else [],
+                "questions": (
+                    ev.get("questions") if isinstance(ev.get("questions"), list) else []
+                ),
                 "reply": "",
                 "events": legacy,
                 "tool_rounds_used": rounds,
                 "model": model_out,
             }
         elif t == "resume_start":
-            legacy.append({"type": "thinking", "detail": "Continuing after confirmation…"})
+            legacy.append(
+                {"type": "thinking", "detail": "Continuing after confirmation…"}
+            )
         elif t == "final":
             reply = str(ev.get("reply") or "").strip()
             rounds = int(ev.get("tool_rounds_used") or rounds)
@@ -1270,7 +1362,11 @@ def _stream_inbox_review_summary_for_ui(
     if mode == "static":
         text = _inbox_review_static_message_from_wires(wires)
         oa_messages.append({"role": "user", "content": user_content})
-        yield {"type": "phase", "round": start_round + 1, "phase": "inbox_review_summary"}
+        yield {
+            "type": "phase",
+            "round": start_round + 1,
+            "phase": "inbox_review_summary",
+        }
         yield {"type": "assistant_delta", "text": text}
         yield {"type": "assistant_done", "finish_reason": "stop"}
         oa_messages.append({"role": "assistant", "content": text})
@@ -1287,7 +1383,13 @@ def _stream_inbox_review_summary_for_ui(
         return
 
     oa_messages.append({"role": "user", "content": user_content})
-    read_allowlist = frozenset(policy.allowlist_read | BUILTIN_AGENT_TOOL_NAMES)
+    sc_inbox = (
+        policy.sandbox.with_env_overrides() if policy.sandbox is not None else None
+    )
+    if sc_inbox is not None and sc_inbox.enabled and sc_inbox.terminal_only_dispatch:
+        read_allowlist = policy.effective_allowlist()
+    else:
+        read_allowlist = frozenset(policy.allowlist_read | BUILTIN_AGENT_TOOL_NAMES)
     read_tools = openai_tool_specs(read_allowlist)
 
     from llm_markdown.agent_stream import (
@@ -1363,8 +1465,11 @@ def _stream_inbox_review_summary_for_ui(
             return
 
         if finish_reason != "tool_calls":
-            final_text = assistant_text.strip() or _inbox_review_static_message_from_wires(
-                wires,
+            final_text = (
+                assistant_text.strip()
+                or _inbox_review_static_message_from_wires(
+                    wires,
+                )
             )
             if not assistant_text.strip():
                 yield {"type": "assistant_delta", "text": final_text}
@@ -1393,7 +1498,11 @@ def _stream_inbox_review_summary_for_ui(
             oa_messages.append({"role": "assistant", "content": fb})
             return
 
-        yield {"type": "phase", "round": phase_round, "phase": "inbox_review_summary_tools"}
+        yield {
+            "type": "phase",
+            "round": phase_round,
+            "phase": "inbox_review_summary_tools",
+        }
         sorted_idx = sorted(parts.keys())
         tool_calls_payload: list[dict[str, Any]] = []
         for idx in sorted_idx:
@@ -1422,11 +1531,13 @@ def _stream_inbox_review_summary_for_ui(
             args_raw = tc["arguments"] or "{}"
             args_wire, display_title = split_agent_tool_display_metadata(args_raw)
             tid = tc["id"] or f"call_{idx}"
-            cli = format_cli_line(name, args_wire, max_cli_line_chars=max_cli_line_chars)
+            cap = _cli_line_cap_for_tool(name, max_cli_line_chars)
+            cli = format_cli_line(name, args_wire, max_cli_line_chars=cap)
+            arg_cap = _args_wire_emit_cap_chars(name)
             tc_ev: dict[str, Any] = {
                 "type": "tool_call",
                 "name": name,
-                "arguments": args_wire[:2000],
+                "arguments": args_wire[:arg_cap],
                 "cli_line": cli,
                 "tool_call_id": tid,
             }
@@ -1441,6 +1552,7 @@ def _stream_inbox_review_summary_for_ui(
                 args_wire,
                 read_allowlist,
                 max_tool_output_chars=max_tool_output_chars,
+                run_id=run_id,
             )
             ok, status_code = tool_result_status_for_ui(out_json)
             tr_out: dict[str, Any] = {
@@ -1692,13 +1804,9 @@ def _run_agent_llm_tool_loop(
                 and not _discover_explored
             )
             active_allowlist = (
-                discover_explore_allowlist
-                if _in_discover_explore
-                else allowlist
+                discover_explore_allowlist if _in_discover_explore else allowlist
             )
-            active_tools = (
-                discover_explore_tools if _in_discover_explore else tools
-            )
+            active_tools = discover_explore_tools if _in_discover_explore else tools
             st_tools = active_tools if len(active_tools) > 0 else None
             if st_tools is not None and agent_chat_mode == "plan_discover":
                 st_tool_choice: str | dict[str, str] | None = "auto"
@@ -1835,9 +1943,7 @@ def _run_agent_llm_tool_loop(
                     if len(terminal_idxs) > 1:
                         yield {
                             "type": "error",
-                            "detail": (
-                                "at most one plan/clarification tool per round"
-                            ),
+                            "detail": ("at most one plan/clarification tool per round"),
                         }
                         return
                     if len(terminal_idxs) == 1:
@@ -1894,13 +2000,17 @@ def _run_agent_llm_tool_loop(
                     tc = parts[idx]
                     name = tc["name"]
                     args_raw = tc["arguments"] or "{}"
-                    args_wire, display_title = split_agent_tool_display_metadata(args_raw)
+                    args_wire, display_title = split_agent_tool_display_metadata(
+                        args_raw
+                    )
                     tid = tc["id"] or f"call_{idx}"
-                    cli = format_cli_line(name, args_wire, max_cli_line_chars=max_cli_line_chars)
+                    cap = _cli_line_cap_for_tool(name, max_cli_line_chars)
+                    cli = format_cli_line(name, args_wire, max_cli_line_chars=cap)
+                    arg_cap = _args_wire_emit_cap_chars(name)
                     tc_ev: dict[str, Any] = {
                         "type": "tool_call",
                         "name": name,
-                        "arguments": args_wire[:2000],
+                        "arguments": args_wire[:arg_cap],
                         "cli_line": cli,
                         "tool_call_id": tid,
                     }
@@ -1941,7 +2051,9 @@ def _run_agent_llm_tool_loop(
                             run_id,
                             len(args_wire),
                         )
-                        qs, verr = _parse_and_validate_plan_clarification_questions(args_wire)
+                        qs, verr = _parse_and_validate_plan_clarification_questions(
+                            args_wire
+                        )
                         if verr is not None:
                             logger.warning(
                                 "agent_chat plan_clarification_validation_error "
@@ -2162,6 +2274,7 @@ def _run_agent_llm_tool_loop(
                             args_wire,
                             active_allowlist,
                             max_tool_output_chars=max_tool_output_chars,
+                            run_id=run_id,
                         )
                         ok, status_code = tool_result_status_for_ui(out_json)
                         logger.info(
@@ -2349,10 +2462,7 @@ def _run_agent_llm_tool_loop(
                         _HOF_BUILTIN_PRESENT_PLAN,
                         _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION,
                     }
-                    tool_names = {
-                        str(parts[i].get("name") or "")
-                        for i in sorted_idx
-                    }
+                    tool_names = {str(parts[i].get("name") or "") for i in sorted_idx}
                     tool_names.discard("")
                     if tool_names and not (tool_names & _plan_terminal):
                         _discover_explored = True
@@ -2518,7 +2628,9 @@ def _run_agent_chat_stream(
     plan_text: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield NDJSON-shaped dicts."""
-    max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = _agent_limits()
+    max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = (
+        _agent_limits()
+    )
 
     norm_fn = policy.normalize_attachments or default_normalize_attachments
     att_norm, att_err = norm_fn(attachments)
@@ -2571,10 +2683,12 @@ def _run_agent_chat_stream(
             + _AGENT_CHAT_PLAN_DISCOVER_FINAL_LOCK
         )
         discover_explore_allowlist, discover_explore_tools = _build_discover_tools(
-            policy, phase="explore",
+            policy,
+            phase="explore",
         )
         loop_allowlist, loop_tools = _build_discover_tools(
-            policy, phase="clarify",
+            policy,
+            phase="clarify",
         )
         final_extras: dict[str, Any] | None = {"mode": "plan"}
         plan_resume_final_extras = {"mode": "plan"}
@@ -2606,25 +2720,29 @@ def _run_agent_chat_stream(
         chat_mode,
     )
 
-    yield from _run_agent_llm_tool_loop(
-        provider,
-        model,
+    yield from _maybe_wrap_sandbox(
         policy,
-        loop_allowlist,
-        loop_tools,
-        oa_messages,
-        0,
         run_id,
-        lm_backend=lm_backend,
-        reasoning=reasoning,
-        max_rounds=max_rounds,
-        max_tool_output_chars=max_tool_output_chars,
-        max_cli_line_chars=max_cli_line_chars,
-        final_extras=final_extras,
-        agent_chat_mode=chat_mode,
-        plan_resume_final_extras=plan_resume_final_extras,
-        discover_explore_allowlist=discover_explore_allowlist,
-        discover_explore_tools=discover_explore_tools,
+        _run_agent_llm_tool_loop(
+            provider,
+            model,
+            policy,
+            loop_allowlist,
+            loop_tools,
+            oa_messages,
+            0,
+            run_id,
+            lm_backend=lm_backend,
+            reasoning=reasoning,
+            max_rounds=max_rounds,
+            max_tool_output_chars=max_tool_output_chars,
+            max_cli_line_chars=max_cli_line_chars,
+            final_extras=final_extras,
+            agent_chat_mode=chat_mode,
+            plan_resume_final_extras=plan_resume_final_extras,
+            discover_explore_allowlist=discover_explore_allowlist,
+            discover_explore_tools=discover_explore_tools,
+        ),
     )
 
 
@@ -2645,7 +2763,9 @@ def _run_agent_resume_stream(
 
     run = load_agent_run(rid)
     if not run:
-        logger.warning("agent_resume_mutations rejected: unknown or expired run_id=%s", rid)
+        logger.warning(
+            "agent_resume_mutations rejected: unknown or expired run_id=%s", rid
+        )
         yield {
             "type": "error",
             "detail": "Unknown or expired run_id; start a new chat.",
@@ -2654,7 +2774,9 @@ def _run_agent_resume_stream(
 
     open_ids = [str(x) for x in (run.get("open_pending_ids") or []) if str(x).strip()]
     if not open_ids:
-        logger.warning("agent_resume_mutations rejected: no pending mutations run_id=%s", rid)
+        logger.warning(
+            "agent_resume_mutations rejected: no pending mutations run_id=%s", rid
+        )
         yield {"type": "error", "detail": "No pending mutations for this run."}
         return
 
@@ -2757,6 +2879,7 @@ def _run_agent_resume_stream(
                     args,
                     allowlist,
                     max_tool_output_chars=max_tool_output_chars,
+                    run_id=rid,
                 )
                 _ok, _code = tool_result_status_for_ui(out_json)
                 logger.info(
@@ -2907,21 +3030,25 @@ def _run_agent_resume_stream(
         len(open_ids),
     )
 
-    yield from _run_agent_llm_tool_loop(
-        provider,
-        model,
+    yield from _maybe_wrap_sandbox(
         policy,
-        allowlist,
-        tools,
-        oa_messages,
-        start_round,
         rid,
-        lm_backend=lm_backend,
-        reasoning=reasoning,
-        max_rounds=max_rounds,
-        max_tool_output_chars=max_tool_output_chars,
-        max_cli_line_chars=max_cli_line_chars,
-        agent_chat_mode=resume_chat_mode,
+        _run_agent_llm_tool_loop(
+            provider,
+            model,
+            policy,
+            allowlist,
+            tools,
+            oa_messages,
+            start_round,
+            rid,
+            lm_backend=lm_backend,
+            reasoning=reasoning,
+            max_rounds=max_rounds,
+            max_tool_output_chars=max_tool_output_chars,
+            max_cli_line_chars=max_cli_line_chars,
+            agent_chat_mode=resume_chat_mode,
+        ),
     )
 
 
@@ -2951,7 +3078,10 @@ def _run_agent_resume_plan_clarification_stream(
 
     open_cid = str(run.get("open_plan_clarification_id") or "").strip()
     if not open_cid or open_cid != cid:
-        yield {"type": "error", "detail": "No matching plan clarification gate for this run."}
+        yield {
+            "type": "error",
+            "detail": "No matching plan clarification gate for this run.",
+        }
         return
 
     pend = load_pending(cid)
@@ -3017,7 +3147,8 @@ def _run_agent_resume_plan_clarification_stream(
         plan_resume_final_extras = {"mode": "plan"}
 
     discover_allowlist, tools = _build_discover_tools(
-        policy, phase="propose",
+        policy,
+        phase="propose",
     )
 
     try:
@@ -3026,9 +3157,7 @@ def _run_agent_resume_plan_clarification_stream(
         yield {"type": "error", "detail": exc.detail}
         return
 
-    summary = _clarification_answer_summary_for_model(
-        qnorm, sel_map, other_text_map
-    )
+    summary = _clarification_answer_summary_for_model(qnorm, sel_map, other_text_map)
     payload = {
         "answered": True,
         "selections": sel_map,
@@ -3055,24 +3184,28 @@ def _run_agent_resume_plan_clarification_stream(
         cid,
     )
 
-    yield from _run_agent_llm_tool_loop(
-        provider,
-        model,
+    yield from _maybe_wrap_sandbox(
         policy,
-        discover_allowlist,
-        tools,
-        oa_messages,
-        start_round,
         rid,
-        lm_backend=lm_backend,
-        reasoning=reasoning,
-        max_rounds=max_rounds,
-        max_tool_output_chars=max_tool_output_chars,
-        max_cli_line_chars=max_cli_line_chars,
-        final_extras=plan_resume_final_extras,
-        agent_chat_mode=resume_chat_mode,
-        plan_resume_final_extras=plan_resume_final_extras,
-        discover_post_clarification_resume=True,
+        _run_agent_llm_tool_loop(
+            provider,
+            model,
+            policy,
+            discover_allowlist,
+            tools,
+            oa_messages,
+            start_round,
+            rid,
+            lm_backend=lm_backend,
+            reasoning=reasoning,
+            max_rounds=max_rounds,
+            max_tool_output_chars=max_tool_output_chars,
+            max_cli_line_chars=max_cli_line_chars,
+            final_extras=plan_resume_final_extras,
+            agent_chat_mode=resume_chat_mode,
+            plan_resume_final_extras=plan_resume_final_extras,
+            discover_post_clarification_resume=True,
+        ),
     )
 
 
@@ -3103,7 +3236,9 @@ def iter_agent_chat_stream(
     )
 
 
-def iter_agent_resume_stream(run_id: str, resolutions: list) -> Iterator[dict[str, Any]]:
+def iter_agent_resume_stream(
+    run_id: str, resolutions: list
+) -> Iterator[dict[str, Any]]:
     """Stream continued agent trace after mutation confirmation."""
     policy = get_agent_policy()
     yield from _run_agent_resume_stream(run_id, resolutions, policy=policy)
@@ -3199,12 +3334,12 @@ def _run_agent_resume_inbox_stream(
         if not ok:
             yield {
                 "type": "error",
-                "detail": msg or f"Inbox watch {desc.watch_id!r} is still pending review",
+                "detail": msg
+                or f"Inbox watch {desc.watch_id!r} is still pending review",
             }
             return
         summary_lines.append(
-            msg
-            or f"{desc.record_type} {desc.record_id}: inbox review completed."
+            msg or f"{desc.record_type} {desc.record_id}: inbox review completed."
         )
 
     oa_messages = run["oa_messages"]
@@ -3240,11 +3375,7 @@ def _run_agent_resume_inbox_stream(
 
     scan_resume_fn = policy.inbox_scan_after_inbox_resume
     baseline_raw = run.get("inbox_pending_baseline_ids")
-    if (
-        scan_resume_fn is not None
-        and isinstance(baseline_raw, list)
-        and baseline_raw
-    ):
+    if scan_resume_fn is not None and isinstance(baseline_raw, list) and baseline_raw:
         baseline_f = frozenset(str(x).strip() for x in baseline_raw if str(x).strip())
         try:
             extra_watches, updated_baseline = scan_resume_fn(descriptors, baseline_f)
@@ -3287,25 +3418,31 @@ def _run_agent_resume_inbox_stream(
         start_round,
     )
 
-    yield from _run_agent_llm_tool_loop(
-        provider,
-        model,
+    yield from _maybe_wrap_sandbox(
         policy,
-        allowlist,
-        tools,
-        oa_messages,
-        start_round,
         rid,
-        lm_backend=lm_backend,
-        reasoning=reasoning,
-        max_rounds=max_rounds,
-        max_tool_output_chars=max_tool_output_chars,
-        max_cli_line_chars=max_cli_line_chars,
-        agent_chat_mode=resume_chat_mode,
+        _run_agent_llm_tool_loop(
+            provider,
+            model,
+            policy,
+            allowlist,
+            tools,
+            oa_messages,
+            start_round,
+            rid,
+            lm_backend=lm_backend,
+            reasoning=reasoning,
+            max_rounds=max_rounds,
+            max_tool_output_chars=max_tool_output_chars,
+            max_cli_line_chars=max_cli_line_chars,
+            agent_chat_mode=resume_chat_mode,
+        ),
     )
 
 
-def iter_agent_resume_inbox_stream(run_id: str, resolutions: list) -> Iterator[dict[str, Any]]:
+def iter_agent_resume_inbox_stream(
+    run_id: str, resolutions: list
+) -> Iterator[dict[str, Any]]:
     """Stream trace after inbox review resolution (client assert + server verify)."""
     policy = get_agent_policy()
     yield from _run_agent_resume_inbox_stream(run_id, resolutions, policy=policy)

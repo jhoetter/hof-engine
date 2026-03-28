@@ -111,6 +111,48 @@ function RowsTableView({
   );
 }
 
+/** True for sandbox ``hof_builtin_terminal_exec`` JSON: ``exit_code`` + ``output`` string. */
+export function isTerminalExecPayload(
+  value: unknown,
+): value is { exit_code: number; output: string } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const o = value as Record<string, unknown>;
+  if (typeof o.exit_code !== "number" || !Number.isFinite(o.exit_code)) {
+    return false;
+  }
+  if (typeof o.output !== "string") {
+    return false;
+  }
+  return true;
+}
+
+/** Sandbox ``hof_builtin_terminal_exec`` return shape — show full stdout/stderr, not KV cell cap. */
+function TerminalExecResultView({
+  exitCode,
+  output,
+}: {
+  exitCode: number;
+  output: string;
+}) {
+  return (
+    <div className="min-w-0 max-w-full space-y-2">
+      <p className="font-mono text-[10px] text-secondary">
+        <span className="text-tertiary">exit code</span>{" "}
+        <span className="font-medium text-foreground">{exitCode}</span>
+      </p>
+      <pre className="max-h-[min(75vh,40rem)] min-h-0 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)] px-2.5 py-2 font-mono text-[10px] leading-snug text-secondary">
+        {output.length === 0 ? (
+          <span className="italic text-tertiary">(no output)</span>
+        ) : (
+          output
+        )}
+      </pre>
+    </div>
+  );
+}
+
 function KvTableView({ data }: { data: Record<string, unknown> }) {
   const keys = Object.keys(data).sort((a, b) => String(a).localeCompare(String(b)));
   if (keys.length === 0) {
@@ -203,6 +245,15 @@ export function FunctionResultDisplay({
           </p>
         ) : null}
       </div>,
+    );
+  }
+
+  if (isTerminalExecPayload(value)) {
+    return shell(
+      <TerminalExecResultView
+        exitCode={value.exit_code}
+        output={value.output}
+      />,
     );
   }
 

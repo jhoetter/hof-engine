@@ -78,7 +78,10 @@ export {
   resolvePlanTodoUpdateWireEvent,
   type PlanTodoWireResolution,
 } from "./agent/planTodoStream";
-export { FunctionResultDisplay } from "./agent/FunctionResultDisplay";
+export {
+  FunctionResultDisplay,
+  isTerminalExecPayload,
+} from "./agent/FunctionResultDisplay";
 export { useHofTable } from "./hooks/useHofTable";
 export { useHofFunction } from "./hooks/useHofFunction";
 export {

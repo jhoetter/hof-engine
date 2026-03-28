@@ -20,6 +20,7 @@ from hof.agent.plan_types import (
     parse_plan_proposal,
 )
 from hof.agent.policy import (
+    HOF_BUILTIN_TERMINAL_EXEC,
     AgentPolicy,
     ConfirmationSummaryMode,
     InboxReviewSummaryMode,
@@ -41,6 +42,7 @@ from hof.agent.policy import (
     post_apply_review_hint_to_wire,
     try_get_agent_policy,
 )
+from hof.agent.sandbox.config import SandboxConfig
 from hof.agent.stream import (
     collect_agent_chat_from_stream,
     default_attachments_system_note,
@@ -66,6 +68,7 @@ __all__ = [
     "AgentConversationStateV1",
     "AgentPolicy",
     "ConfirmationSummaryMode",
+    "HOF_BUILTIN_TERMINAL_EXEC",
     "InboxReviewSummaryMode",
     "InboxScanAfterInboxResumeFn",
     "InboxScanAfterMutationsFn",
@@ -76,6 +79,7 @@ __all__ = [
     "MutationPostApplyFn",
     "MutationPreviewResult",
     "PostApplyReviewHint",
+    "SandboxConfig",
     "VerifyInboxWatchFn",
     "inbox_watch_from_wire",
     "inbox_watch_to_wire",

@@ -28,14 +28,14 @@ export type PlanDiscoverTimerKind =
 
 export type PlanDiscoverUiState = {
   placement: PlanDiscoverPlacement;
-  /** Shimmer/tertiary label; null means generic "Thinking" for {@link above_live_stream}. */
+  /** Shimmer/tertiary label; null means generic "Thinking" for the `above_live_stream` placement. */
   label: string | null;
   timerKind: PlanDiscoverTimerKind | null;
 };
 
 /**
  * Derives **one** status row for plan mode: questionnaire and plan labels sit next to their cards
- * when those cards exist; otherwise the same semantic phase uses {@link above_live_stream} with
+ * when those cards exist; otherwise the same semantic phase uses the `above_live_stream` placement with
  * Thinking + the thinking-episode timer (no duplicate questionnaire copy above the stream).
  */
 export function computePlanDiscoverUiState(p: {

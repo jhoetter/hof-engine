@@ -177,7 +177,7 @@ describe("applyStreamEvent streaming caret / structured steps", () => {
     }
   });
 
-  it("compactBlocksForHistory drops inbox_review_required (no thread chrome)", () => {
+  it("compactBlocksForHistory drops inbox_review_required (no thread status row)", () => {
     const blocks: LiveBlock[] = [
       {
         kind: "assistant",

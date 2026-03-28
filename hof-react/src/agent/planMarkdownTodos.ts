@@ -54,7 +54,7 @@ export function preferPlanTaskListBody(markdown: string): string {
 /**
  * Markdown to show in the plan card **while streaming** after the plan builtin: drop intro prose
  * that the model may emit in the **same** assistant segment as the checklist (there is no separate
- * wire channel for “plan body” vs “preamble” — both are {@link AgentContentDelta} / ``assistant_delta``).
+ * wire channel for “plan body” vs “preamble” — both are `assistant_delta` wire events).
  * Prefer content from the first ``#`` heading; otherwise from the first GFM task line; otherwise
  * empty so the card stays minimal until structure appears.
  */

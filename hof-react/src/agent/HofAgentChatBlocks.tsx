@@ -1046,11 +1046,11 @@ function ReasoningStreamPeek({
   /** Shimmer “Thinking” label matches {@link AgentEarlyThinkingIndicator} (used where no popover is needed). */
   if (!text.trim() && !clean) {
     if (!streaming) {
-      const allowEmptyReasoningChrome =
+      const allowEmptyReasoningRow =
         reasoningElapsedMs != null ||
         thinkingEpisodeStartedAtMs != null ||
         Boolean(consolidatedContentForPopover?.trim());
-      if (!allowEmptyReasoningChrome) {
+      if (!allowEmptyReasoningRow) {
         return null;
       }
     } else if (
@@ -1065,21 +1065,21 @@ function ReasoningStreamPeek({
   }
 
   /** Empty primary reasoning text: duration row and/or consolidated reply popover. */
-  const primaryEmptyReasoningChrome = !streaming && !text.trim();
+  const primaryEmptyReasoning = !streaming && !text.trim();
   const consolidatedPopoverMd =
-    primaryEmptyReasoningChrome && consolidatedContentForPopover?.trim()
+    primaryEmptyReasoning && consolidatedContentForPopover?.trim()
       ? popoverMarkdownFromConsolidatedReply(consolidatedContentForPopover)
       : "";
 
   /** Prefer sanitized text; while streaming, raw ``text`` if sanitizer cleared partial output. */
   const streamingPopoverMarkdown =
-    !primaryEmptyReasoningChrome && streaming
+    !primaryEmptyReasoning && streaming
       ? clean.trim()
         ? clean
         : text.trim()
       : "";
   const settledPopoverMarkdown =
-    !primaryEmptyReasoningChrome && !streaming
+    !primaryEmptyReasoning && !streaming
       ? clean.trim() || text.trim()
       : "";
 
@@ -1138,7 +1138,7 @@ function ReasoningStreamPeek({
         onPointerEnter={cancelScheduledPopoverClose}
         onPointerLeave={schedulePopoverCloseAfterLeave}
       >
-        {primaryEmptyReasoningChrome ? (
+        {primaryEmptyReasoning ? (
           consolidatedPopoverMd.trim() ? (
             <AssistantMarkdown source={consolidatedPopoverMd} />
           ) : consolidatedContentForPopover?.trim() ? (

@@ -14,9 +14,8 @@ import type { ThreadItem } from "./hofAgentChatModel";
 import { HofAgentPlanClarificationCard } from "./HofAgentPlanClarificationCard";
 import { HofAgentPlanClarificationCardSkeleton } from "./HofAgentPlanClarificationCardSkeleton";
 import { HofAgentPlanCard } from "./HofAgentPlanCard";
-import { PlanCardSection } from "./PlanCardSection";
-import { PlanDiscoverChrome } from "./PlanDiscoverChrome";
-import { PlanQuestionnaireSection } from "./PlanQuestionnaireSection";
+import { AgentEarlyThinkingIndicator } from "./HofAgentChatBlocks";
+import { PlanSection } from "./PlanSection";
 import { computePlanDiscoverUiState } from "./planDiscoverUiReducer";
 import { visiblePlanMarkdownPreview } from "./planMarkdownTodos";
 import {
@@ -202,7 +201,7 @@ export function HofAgentMessages({
       settledFormatted = liveStreamElapsed.settledFormatted;
     }
     return (
-      <PlanDiscoverChrome
+      <AgentEarlyThinkingIndicator
         label={label ?? undefined}
         liveFormatted={liveFormatted}
         settledFormatted={settledFormatted}
@@ -341,7 +340,7 @@ export function HofAgentMessages({
 
   const planCardEl =
     showPlanCard && planCardPhase !== null ? (
-      <PlanCardSection chrome={planChromeEl}>
+      <PlanSection kind="plan" chrome={planChromeEl}>
         <HofAgentPlanCard
           planText={planText}
           onPlanTextChange={setPlanText}
@@ -350,13 +349,13 @@ export function HofAgentMessages({
           planTodoDoneIndices={planTodoDoneIndices}
           onExecutePlan={executePlan}
         />
-      </PlanCardSection>
+      </PlanSection>
     ) : null;
 
   /** Interactive questionnaire only (barrier present). */
   const clarificationActiveEl =
     planPhase === "clarifying" && planClarificationBarrier ? (
-      <PlanQuestionnaireSection chrome={questionnaireChromeEl}>
+      <PlanSection kind="questionnaire" chrome={questionnaireChromeEl}>
         <HofAgentPlanClarificationCard
           mode="active"
           key={planClarificationBarrier.clarificationId}
@@ -364,33 +363,29 @@ export function HofAgentMessages({
           busy={busy}
           onSubmit={submitPlanClarification}
         />
-      </PlanQuestionnaireSection>
+      </PlanSection>
     ) : null;
 
   /** Builtin running, barrier not yet on wire — chrome + skeleton in questionnaire slot. */
   const clarificationPendingEl =
     pendingQuestionnaireGeneration ? (
-      <PlanQuestionnaireSection chrome={questionnaireChromeEl}>
+      <PlanSection kind="questionnaire" chrome={questionnaireChromeEl}>
         <HofAgentPlanClarificationCardSkeleton />
-      </PlanQuestionnaireSection>
+      </PlanSection>
     ) : null;
-
-  const hasReviewSummary =
-    planClarificationSubmittedSummary.length > 0 &&
-    !(planPhase === "clarifying" && planClarificationBarrier);
 
   /**
    * Submitted clarification answers are fixed in the timeline **immediately after** persisted
    * thread prefix and **before** the live NDJSON tail. That keeps order identical while streaming,
    * after flush, and on reload — never interleaved below newer assistant deltas.
    */
-  const clarificationReviewEl = hasReviewSummary ? (
-    <PlanQuestionnaireSection chrome={questionnaireChromeEl}>
+  const clarificationReviewEl = hasClarificationReview ? (
+    <PlanSection kind="questionnaire" chrome={questionnaireChromeEl}>
       <HofAgentPlanClarificationCard
         mode="review"
         submittedSummary={planClarificationSubmittedSummary}
       />
-    </PlanQuestionnaireSection>
+    </PlanSection>
   ) : null;
 
   /** Plan chrome: pending skeleton, active questionnaire, plan card (submitted-choices review is rendered in ``threadList``). */
@@ -425,7 +420,7 @@ export function HofAgentMessages({
     <>
       {hasPlanRunAnchor ? (
         <>
-          {hasReviewSummary && discoverRunIdx >= 0 ? (
+          {hasClarificationReview && discoverRunIdx >= 0 ? (
             <>
               {renderThreadItems(thread.slice(0, discoverRunIdx + 1))}
               {clarificationReviewEl}
@@ -436,7 +431,7 @@ export function HofAgentMessages({
           ) : (
             <>
               {renderThreadItems(thread.slice(0, planRunAnchorIdx + 1))}
-              {hasReviewSummary ? clarificationReviewEl : null}
+              {hasClarificationReview ? clarificationReviewEl : null}
             </>
           )}
           {planOrClarificationChromeEl}
@@ -446,7 +441,7 @@ export function HofAgentMessages({
       ) : (
         <>
           {renderThreadItems(thread)}
-          {hasReviewSummary ? clarificationReviewEl : null}
+          {hasClarificationReview ? clarificationReviewEl : null}
           {/*
             Unanchored: ``planRunId`` is unset until ``final``, so this branch is active during
             discover / clarify / plan-prep streaming. Live stream sits above plan/questionnaire

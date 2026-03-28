@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  computePlanDiscoverUiState,
-  planDiscoverOwnerFromPlacement,
-} from "./planDiscoverUiReducer";
+import { computePlanDiscoverUiState } from "./planDiscoverUiReducer";
 
 describe("computePlanDiscoverUiState", () => {
   it("instant: none when idle", () => {
@@ -15,12 +12,7 @@ describe("computePlanDiscoverUiState", () => {
         showPlanCard: false,
         liveBlocksLength: 0,
       }),
-    ).toEqual({
-      placement: "none",
-      owner: "none",
-      label: null,
-      timerKind: null,
-    });
+    ).toEqual({ placement: "none", label: null, timerKind: null });
   });
 
   it("instant: above_live_stream + thinking_episode before first block", () => {
@@ -35,7 +27,6 @@ describe("computePlanDiscoverUiState", () => {
       }),
     ).toEqual({
       placement: "above_live_stream",
-      owner: "live_stream",
       label: null,
       timerKind: "thinking_episode",
     });
@@ -51,12 +42,7 @@ describe("computePlanDiscoverUiState", () => {
         showPlanCard: false,
         liveBlocksLength: 1,
       }),
-    ).toEqual({
-      placement: "none",
-      owner: "none",
-      label: null,
-      timerKind: null,
-    });
+    ).toEqual({ placement: "none", label: null, timerKind: null });
   });
 
   it("plan: questionnaire label above questionnaire when card visible", () => {
@@ -71,7 +57,6 @@ describe("computePlanDiscoverUiState", () => {
       }),
     ).toEqual({
       placement: "above_questionnaire",
-      owner: "questionnaire",
       label: "Generating questions",
       timerKind: "clarification_generation",
     });
@@ -90,7 +75,6 @@ describe("computePlanDiscoverUiState", () => {
       }),
     ).toEqual({
       placement: "above_live_stream",
-      owner: "live_stream",
       label: null,
       timerKind: "thinking_episode",
     });
@@ -109,7 +93,6 @@ describe("computePlanDiscoverUiState", () => {
       }),
     ).toEqual({
       placement: "above_questionnaire",
-      owner: "questionnaire",
       label: null,
       timerKind: "clarification_generation",
     });
@@ -127,7 +110,6 @@ describe("computePlanDiscoverUiState", () => {
       }),
     ).toEqual({
       placement: "above_plan",
-      owner: "plan",
       label: "Preparing plan",
       timerKind: "plan_preparation",
     });
@@ -145,7 +127,6 @@ describe("computePlanDiscoverUiState", () => {
       }),
     ).toEqual({
       placement: "above_live_stream",
-      owner: "live_stream",
       label: "Exploring",
       timerKind: "thinking_episode",
     });
@@ -161,12 +142,7 @@ describe("computePlanDiscoverUiState", () => {
         showPlanCard: true,
         liveBlocksLength: 3,
       }),
-    ).toEqual({
-      placement: "none",
-      owner: "none",
-      label: null,
-      timerKind: null,
-    });
+    ).toEqual({ placement: "none", label: null, timerKind: null });
   });
 
   it("plan: above_live_stream when busy with no label and no blocks yet (pre-execution)", () => {
@@ -181,21 +157,8 @@ describe("computePlanDiscoverUiState", () => {
       }),
     ).toEqual({
       placement: "above_live_stream",
-      owner: "live_stream",
       label: null,
       timerKind: "thinking_episode",
     });
-  });
-
-  it("owner matches placement for UI colocation", () => {
-    const s = computePlanDiscoverUiState({
-      agentMode: "plan",
-      busy: true,
-      displayLabel: "Generating questions",
-      hasQuestionnaireCard: true,
-      showPlanCard: false,
-      liveBlocksLength: 0,
-    });
-    expect(planDiscoverOwnerFromPlacement(s.placement)).toBe(s.owner);
   });
 });

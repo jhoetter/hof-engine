@@ -48,11 +48,6 @@ import {
 } from "./hofAgentChatModel";
 import { reasoningPhaseTickingLive } from "./assistantStreamSegments";
 import { useHofAgentChat } from "./hofAgentChatContext";
-import {
-  isLiveStreamPlanDiscoverStatusLabel,
-  isPlanCardPlanDiscoverStatusLabel,
-  isQuestionnairePlanDiscoverStatusLabel,
-} from "./planDiscoverStatusLabel";
 import type {
   ApprovalBarrier,
   AssistantStreamSegment,
@@ -66,7 +61,12 @@ import {
   useThinkingEpisodeElapsed,
 } from "./thinkingDuration";
 import { parseStructuredPlan } from "./planMarkdownTodos";
-import { settlePlanDiscoverLiveLabel } from "./planDiscoverStatusLabel";
+import {
+  isLiveStreamLabel,
+  isPlanCardLabel,
+  isQuestionnaireLabel,
+  settleLiveLabel,
+} from "./planDiscoverStatusLabel";
 
 function formatToolJsonForDialog(raw: string): string {
   const t = raw.trim();
@@ -738,10 +738,6 @@ function looksLikeJsonOrToolCallLine(t: string): boolean {
  * Strip HTML tags, markdown tables, bullet/numbered lists, headings, code fences,
  * and JSON-like lines (hallucinated tool payloads) — the thinking pane is plain analytical notes only.
  */
-/** Exported for unit tests; maps live plan-discover labels to past-tense rows. */
-export function settledReasoningLabel(streamingLabel: string): string {
-  return settlePlanDiscoverLiveLabel(streamingLabel);
-}
 
 function sanitizeReasoningText(raw: string): string {
   let s = raw;
@@ -930,7 +926,7 @@ function ReasoningStreamPeek({
   } | null>(null);
   const { thinkingEpisodeStartedAtMs, streamingReasoningLabel, agentMode, busy } =
     useHofAgentChat();
-  /** Plan-discover copy is owned by {@link PlanDiscoverChrome}; peek stays generic in plan mode. */
+  /** Plan-discover copy is owned by {@link AgentEarlyThinkingIndicator} via {@link HofAgentMessages}; peek stays generic in plan mode. */
   const peekPlanDiscoverLabel =
     agentMode === "plan" ? null : streamingReasoningLabel;
   const { liveFormatted, settledFormatted } = useThinkingEpisodeElapsed(
@@ -1062,7 +1058,7 @@ function ReasoningStreamPeek({
       busy &&
       !consolidatedContentForPopover?.trim()
     ) {
-      /** Plan mode: {@link PlanDiscoverChrome} owns live discover labels; drop duplicate “Thinking” rows. */
+      /** Plan mode: {@link HofAgentMessages} owns live discover labels; drop duplicate “Thinking” rows. */
       return null;
     }
     // Streaming + empty (instant mode): keep button + popover (live text appears as tokens arrive).
@@ -1091,26 +1087,26 @@ function ReasoningStreamPeek({
     ? REASONING_THINKING_SHIMMER_LABEL_CLASS
     : "text-[11px] font-medium text-tertiary";
 
-  /** Plan mode: always “Thinking” in the reasoning lane; status lives on {@link PlanDiscoverChrome}. */
+  /** Plan mode: always “Thinking” in the reasoning lane; status lives on {@link HofAgentMessages}. */
   const streamingThinkingWord = peekPlanDiscoverLabel ?? "Thinking";
 
   const stampedTrimmed = reasoningLabelProp?.trim();
   const stampForPlanDiscoverChecks = stampedTrimmed ?? "";
   const stampedIsPlanDiscover =
     stampForPlanDiscoverChecks.length > 0 &&
-    (isQuestionnairePlanDiscoverStatusLabel(stampForPlanDiscoverChecks) ||
-      isPlanCardPlanDiscoverStatusLabel(stampForPlanDiscoverChecks) ||
-      isLiveStreamPlanDiscoverStatusLabel(stampForPlanDiscoverChecks));
+    (isQuestionnaireLabel(stampForPlanDiscoverChecks) ||
+      isPlanCardLabel(stampForPlanDiscoverChecks) ||
+      isLiveStreamLabel(stampForPlanDiscoverChecks));
 
   const settledButtonLabel =
     agentMode === "plan"
       ? stampedTrimmed && !stampedIsPlanDiscover
-        ? settledReasoningLabel(stampedTrimmed)
+        ? settleLiveLabel(stampedTrimmed)
         : "Thought"
       : stampedTrimmed
-        ? settledReasoningLabel(stampedTrimmed)
+        ? settleLiveLabel(stampedTrimmed)
         : assistantStreamOpen && peekPlanDiscoverLabel
-          ? settledReasoningLabel(peekPlanDiscoverLabel)
+          ? settleLiveLabel(peekPlanDiscoverLabel)
           : "Thought";
 
   const bodyClass =

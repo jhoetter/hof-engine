@@ -66,15 +66,11 @@ export {
   type StructuredPlan,
 } from "./agent/planMarkdownTodos";
 export {
-  computePlanDiscoverLiveLabel,
-  computePlanDiscoverStatusLabel,
-  discoverPhaseToEagerLabel,
-  resolvePlanDiscoverStatusDisplayLabel,
-  settlePlanDiscoverLiveLabel,
+  computeLiveLabel as computePlanDiscoverLiveLabel,
+  settleLiveLabel as settlePlanDiscoverLiveLabel,
   type PlanDiscoverBuiltinLane,
-  type PlanDiscoverStatusInput,
+  type PlanDiscoverLiveLabelInput,
 } from "./agent/planDiscoverStatusLabel";
-export { settledReasoningLabel } from "./agent/HofAgentChatBlocks";
 export {
   applyPlanTodoWireResolution,
   mergePlanTodoDoneIndices,

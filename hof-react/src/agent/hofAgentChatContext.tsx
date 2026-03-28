@@ -56,8 +56,9 @@ import {
 } from "./hofAgentChatModel";
 import { parseStructuredPlan } from "./planMarkdownTodos";
 import {
-  computePlanDiscoverLiveLabel,
-  settlePlanDiscoverLiveLabel,
+  computeLiveLabel,
+  discoverPhaseToLabel,
+  settleLiveLabel,
   type PlanDiscoverBuiltinLane,
 } from "./planDiscoverStatusLabel";
 import {
@@ -999,11 +1000,11 @@ export function HofAgentChatProvider({
                   : "";
               if (toolName === "hof_builtin_present_plan_clarification") {
                 setPlanBuiltinToolActive("clarification");
-                reasoningLabelRef.current = "Generating questions";
+                reasoningLabelRef.current = discoverPhaseToLabel("clarify");
                 setClarificationGenerationStartedAtMs(Date.now());
               } else if (toolName === "hof_builtin_present_plan") {
                 setPlanBuiltinToolActive("plan");
-                reasoningLabelRef.current = "Preparing plan";
+                reasoningLabelRef.current = discoverPhaseToLabel("propose");
                 setPlanPreparationStartedAtMs(Date.now());
               }
             }
@@ -1372,11 +1373,11 @@ export function HofAgentChatProvider({
                   : "";
               if (toolName === "hof_builtin_present_plan_clarification") {
                 setPlanBuiltinToolActive("clarification");
-                reasoningLabelRef.current = "Generating questions";
+                reasoningLabelRef.current = discoverPhaseToLabel("clarify");
                 setClarificationGenerationStartedAtMs(Date.now());
               } else if (toolName === "hof_builtin_present_plan") {
                 setPlanBuiltinToolActive("plan");
-                reasoningLabelRef.current = "Preparing plan";
+                reasoningLabelRef.current = discoverPhaseToLabel("propose");
                 setPlanPreparationStartedAtMs(Date.now());
               }
             }
@@ -1617,11 +1618,11 @@ export function HofAgentChatProvider({
                 : "";
             if (toolName === "hof_builtin_present_plan_clarification") {
               setPlanBuiltinToolActive("clarification");
-              reasoningLabelRef.current = "Generating questions";
+              reasoningLabelRef.current = discoverPhaseToLabel("clarify");
               setClarificationGenerationStartedAtMs(Date.now());
             } else if (toolName === "hof_builtin_present_plan") {
               setPlanBuiltinToolActive("plan");
-              reasoningLabelRef.current = "Preparing plan";
+              reasoningLabelRef.current = discoverPhaseToLabel("propose");
               setPlanPreparationStartedAtMs(Date.now());
             }
           }
@@ -2286,7 +2287,7 @@ export function HofAgentChatProvider({
 
   const livePlanDiscoverLabel = useMemo(
     () =>
-      computePlanDiscoverLiveLabel({
+      computeLiveLabel({
         agentMode,
         discoverStreamPhase,
         planPhase,
@@ -2310,7 +2311,7 @@ export function HofAgentChatProvider({
     }
     const live = planDiscoverLastLiveRef.current;
     if (live) {
-      setPersistedPlanDiscoverLabel(settlePlanDiscoverLiveLabel(live));
+      setPersistedPlanDiscoverLabel(settleLiveLabel(live));
     }
     planDiscoverLastLiveRef.current = null;
   }, [busy, agentMode]);
@@ -2324,7 +2325,7 @@ export function HofAgentChatProvider({
     }
     const pendingSettle = planDiscoverLastLiveRef.current;
     if (pendingSettle) {
-      return settlePlanDiscoverLiveLabel(pendingSettle);
+      return settleLiveLabel(pendingSettle);
     }
     return persistedPlanDiscoverLabel;
   }, [
@@ -2334,7 +2335,7 @@ export function HofAgentChatProvider({
     persistedPlanDiscoverLabel,
   ]);
 
-  // Plan-discover status is rendered only by {@link PlanDiscoverChrome} / {@link computePlanDiscoverUiState}.
+  // Plan-discover status is rendered by {@link HofAgentMessages} via {@link computePlanDiscoverUiState}.
   reasoningLabelRef.current = agentMode === "plan" ? null : streamingReasoningLabel;
 
   useEffect(() => {

@@ -1,17 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  computePlanDiscoverLiveLabel,
-  computePlanDiscoverStatusLabel,
-  discoverPhaseToEagerLabel,
-  isLiveStreamPlanDiscoverStatusLabel,
-  isPlanCardPlanDiscoverStatusLabel,
-  isQuestionnairePlanDiscoverStatusLabel,
-  resolvePlanDiscoverStatusDisplayLabel,
-  settlePlanDiscoverLiveLabel,
-  shouldSuppressPlanDiscoverStampedLabel,
+  computeLiveLabel,
+  discoverPhaseToLabel,
+  isLiveStreamLabel,
+  isPlanCardLabel,
+  isQuestionnaireLabel,
+  settleLiveLabel,
 } from "./planDiscoverStatusLabel";
 
-describe("computePlanDiscoverLiveLabel", () => {
+describe("computeLiveLabel", () => {
   const base = {
     agentMode: "plan" as const,
     planBuiltinLane: null,
@@ -19,7 +16,7 @@ describe("computePlanDiscoverLiveLabel", () => {
 
   it("returns null when not plan mode", () => {
     expect(
-      computePlanDiscoverLiveLabel({
+      computeLiveLabel({
         ...base,
         agentMode: "instant",
         discoverStreamPhase: "clarify",
@@ -30,21 +27,21 @@ describe("computePlanDiscoverLiveLabel", () => {
 
   it("maps discover phases", () => {
     expect(
-      computePlanDiscoverLiveLabel({
+      computeLiveLabel({
         ...base,
         discoverStreamPhase: "explore",
         planPhase: null,
       }),
     ).toBe("Exploring");
     expect(
-      computePlanDiscoverLiveLabel({
+      computeLiveLabel({
         ...base,
         discoverStreamPhase: "clarify",
         planPhase: null,
       }),
     ).toBe("Generating questions");
     expect(
-      computePlanDiscoverLiveLabel({
+      computeLiveLabel({
         ...base,
         discoverStreamPhase: "propose",
         planPhase: null,
@@ -52,9 +49,9 @@ describe("computePlanDiscoverLiveLabel", () => {
     ).toBe("Preparing plan");
   });
 
-  it("shows settled “Generated questions” while clarification questionnaire is on screen", () => {
+  it("shows settled \u201cGenerated questions\u201d while clarification questionnaire is on screen", () => {
     expect(
-      computePlanDiscoverLiveLabel({
+      computeLiveLabel({
         ...base,
         discoverStreamPhase: "clarify",
         planPhase: "clarifying",
@@ -64,7 +61,7 @@ describe("computePlanDiscoverLiveLabel", () => {
 
   it("uses generating phase for post-clarification plan wait", () => {
     expect(
-      computePlanDiscoverLiveLabel({
+      computeLiveLabel({
         ...base,
         discoverStreamPhase: "propose",
         planPhase: "generating",
@@ -74,7 +71,7 @@ describe("computePlanDiscoverLiveLabel", () => {
 
   it("falls back to builtin lane when discover phase missing", () => {
     expect(
-      computePlanDiscoverLiveLabel({
+      computeLiveLabel({
         ...base,
         discoverStreamPhase: null,
         planPhase: null,
@@ -82,7 +79,7 @@ describe("computePlanDiscoverLiveLabel", () => {
       }),
     ).toBe("Generating questions");
     expect(
-      computePlanDiscoverLiveLabel({
+      computeLiveLabel({
         ...base,
         discoverStreamPhase: null,
         planPhase: null,
@@ -93,7 +90,7 @@ describe("computePlanDiscoverLiveLabel", () => {
 
   it("builtin clarification lane wins over discover explore (server can lag)", () => {
     expect(
-      computePlanDiscoverLiveLabel({
+      computeLiveLabel({
         ...base,
         discoverStreamPhase: "explore",
         planPhase: null,
@@ -103,181 +100,41 @@ describe("computePlanDiscoverLiveLabel", () => {
   });
 });
 
-describe("computePlanDiscoverStatusLabel (legacy busy gate)", () => {
-  const base = {
-    busy: true,
-    agentMode: "plan" as const,
-    planBuiltinLane: null,
-  };
-
-  it("returns null when not busy or not plan mode", () => {
-    expect(
-      computePlanDiscoverStatusLabel({
-        ...base,
-        busy: false,
-        discoverStreamPhase: "clarify",
-        planPhase: null,
-      }),
-    ).toBe(null);
-    expect(
-      computePlanDiscoverStatusLabel({
-        ...base,
-        agentMode: "instant",
-        discoverStreamPhase: "clarify",
-        planPhase: null,
-      }),
-    ).toBe(null);
-  });
-
-  it("delegates to live label when busy", () => {
-    expect(
-      computePlanDiscoverStatusLabel({
-        ...base,
-        discoverStreamPhase: "explore",
-        planPhase: null,
-      }),
-    ).toBe("Exploring");
-  });
-});
-
-describe("resolvePlanDiscoverStatusDisplayLabel", () => {
-  const input = (
-    busy: boolean,
-    overrides: Partial<{
-      agentMode: "instant" | "plan";
-      discoverStreamPhase: "explore" | "clarify" | "propose" | null;
-      planPhase:
-        | null
-        | "generating"
-        | "clarifying"
-        | "ready"
-        | "executing"
-        | "done";
-      planBuiltinLane: "clarification" | "plan" | null;
-    }> = {},
-  ): import("./planDiscoverStatusLabel").PlanDiscoverStatusInput => ({
-    busy,
-    agentMode: "plan",
-    discoverStreamPhase: "explore",
-    planPhase: null,
-    planBuiltinLane: null,
-    ...overrides,
-  });
-
-  it("returns null when not plan mode", () => {
-    expect(
-      resolvePlanDiscoverStatusDisplayLabel(
-        input(true, { agentMode: "instant" }),
-        "Generated questions",
-      ),
-    ).toBe(null);
-  });
-
-  it("uses live label when busy", () => {
-    expect(
-      resolvePlanDiscoverStatusDisplayLabel(input(true), "Prepared plan"),
-    ).toBe("Exploring");
-  });
-
-  it("uses persisted when not busy", () => {
-    expect(
-      resolvePlanDiscoverStatusDisplayLabel(input(false), "Generated questions"),
-    ).toBe("Generated questions");
-  });
-
-  it("returns null when idle and no persisted label", () => {
-    expect(resolvePlanDiscoverStatusDisplayLabel(input(false), null)).toBe(null);
-  });
-});
-
-describe("settlePlanDiscoverLiveLabel", () => {
+describe("settleLiveLabel", () => {
   it("maps live strings to past tense", () => {
-    expect(settlePlanDiscoverLiveLabel("Exploring")).toBe("Explored");
-    expect(settlePlanDiscoverLiveLabel("Generating questions")).toBe(
+    expect(settleLiveLabel("Exploring")).toBe("Explored");
+    expect(settleLiveLabel("Generating questions")).toBe(
       "Generated questions",
     );
-    expect(settlePlanDiscoverLiveLabel("Preparing plan")).toBe("Prepared plan");
+    expect(settleLiveLabel("Preparing plan")).toBe("Prepared plan");
   });
 
   it("passes through unknown labels", () => {
-    expect(settlePlanDiscoverLiveLabel("Thinking")).toBe("Thinking");
+    expect(settleLiveLabel("Thinking")).toBe("Thinking");
   });
 });
 
-describe("discoverPhaseToEagerLabel", () => {
+describe("discoverPhaseToLabel", () => {
   it("matches discover segment strings", () => {
-    expect(discoverPhaseToEagerLabel("explore")).toBe("Exploring");
-    expect(discoverPhaseToEagerLabel("clarify")).toBe("Generating questions");
-    expect(discoverPhaseToEagerLabel("propose")).toBe("Preparing plan");
-    expect(discoverPhaseToEagerLabel(null)).toBe(null);
+    expect(discoverPhaseToLabel("explore")).toBe("Exploring");
+    expect(discoverPhaseToLabel("clarify")).toBe("Generating questions");
+    expect(discoverPhaseToLabel("propose")).toBe("Preparing plan");
+    expect(discoverPhaseToLabel(null)).toBe(null);
   });
 });
 
-describe("shouldSuppressPlanDiscoverStampedLabel", () => {
-  it("suppresses questionnaire labels when the questionnaire card is visible", () => {
-    expect(
-      shouldSuppressPlanDiscoverStampedLabel(
-        "Generated questions",
-        true,
-        false,
-      ),
-    ).toBe(true);
-    expect(
-      shouldSuppressPlanDiscoverStampedLabel(
-        "Generating questions",
-        true,
-        false,
-      ),
-    ).toBe(true);
-    expect(
-      shouldSuppressPlanDiscoverStampedLabel(
-        "Generated questions",
-        false,
-        false,
-      ),
-    ).toBe(false);
-  });
-
-  it("suppresses plan card labels when the plan card is visible", () => {
-    expect(
-      shouldSuppressPlanDiscoverStampedLabel("Prepared plan", false, true),
-    ).toBe(true);
-    expect(
-      shouldSuppressPlanDiscoverStampedLabel("Preparing plan", false, true),
-    ).toBe(true);
-    expect(
-      shouldSuppressPlanDiscoverStampedLabel("Prepared plan", false, false),
-    ).toBe(false);
-  });
-
-  it("returns false for empty label", () => {
-    expect(
-      shouldSuppressPlanDiscoverStampedLabel(undefined, true, true),
-    ).toBe(false);
-    expect(shouldSuppressPlanDiscoverStampedLabel("  ", true, true)).toBe(
-      false,
-    );
-  });
-});
-
-describe("plan-discover label classification", () => {
+describe("label classification", () => {
   it("classifies questionnaire vs plan card vs live stream labels", () => {
-    expect(isQuestionnairePlanDiscoverStatusLabel("Generating questions")).toBe(
-      true,
-    );
-    expect(isQuestionnairePlanDiscoverStatusLabel("Generated questions")).toBe(
-      true,
-    );
-    expect(isQuestionnairePlanDiscoverStatusLabel("Preparing plan")).toBe(false);
+    expect(isQuestionnaireLabel("Generating questions")).toBe(true);
+    expect(isQuestionnaireLabel("Generated questions")).toBe(true);
+    expect(isQuestionnaireLabel("Preparing plan")).toBe(false);
 
-    expect(isPlanCardPlanDiscoverStatusLabel("Preparing plan")).toBe(true);
-    expect(isPlanCardPlanDiscoverStatusLabel("Prepared plan")).toBe(true);
-    expect(isPlanCardPlanDiscoverStatusLabel("Exploring")).toBe(false);
+    expect(isPlanCardLabel("Preparing plan")).toBe(true);
+    expect(isPlanCardLabel("Prepared plan")).toBe(true);
+    expect(isPlanCardLabel("Exploring")).toBe(false);
 
-    expect(isLiveStreamPlanDiscoverStatusLabel("Exploring")).toBe(true);
-    expect(isLiveStreamPlanDiscoverStatusLabel("Explored")).toBe(true);
-    expect(isLiveStreamPlanDiscoverStatusLabel("Generating questions")).toBe(
-      false,
-    );
+    expect(isLiveStreamLabel("Exploring")).toBe(true);
+    expect(isLiveStreamLabel("Explored")).toBe(true);
+    expect(isLiveStreamLabel("Generating questions")).toBe(false);
   });
 });

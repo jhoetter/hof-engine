@@ -1,5 +1,5 @@
 /**
- * Plan mode (`agent_chat` with `mode: plan_discover`) — one status string for “what the agent is doing”.
+ * Plan mode (`agent_chat` with `mode: plan_discover`) — one status string for "what the agent is doing".
  *
  * **Source of truth:** server `discover_phase` on `{"type":"phase","phase":"model",...}` (see
  * `hof/agent/stream.py`). Observed `hof_builtin_present_plan_*` tool calls set ``planBuiltinLane``;
@@ -8,15 +8,11 @@
  *
  * This module is the only place that maps wire + UI phase → user-visible label. Do not duplicate
  * branching in `useMemo` elsewhere.
- *
- * **Persistence:** while ``busy`` is false, the UI shows {@link resolvePlanDiscoverStatusDisplayLabel}
- * with a settled string copied from the last live label at idle (see provider).
  */
 
 export type PlanDiscoverBuiltinLane = "clarification" | "plan" | null;
 
-export type PlanDiscoverStatusInput = {
-  busy: boolean;
+export type PlanDiscoverLiveLabelInput = {
   agentMode: "instant" | "plan";
   discoverStreamPhase: "explore" | "clarify" | "propose" | null;
   planPhase:
@@ -50,56 +46,22 @@ const PLAN_CARD_STATUS_LABELS = new Set<string>([
 const LIVE_STREAM_STATUS_LABELS = new Set<string>(["Exploring", "Explored"]);
 
 /** Shown next to the Questions card (active or review), not above the live assistant stream. */
-export function isQuestionnairePlanDiscoverStatusLabel(
-  label: string | null,
-): boolean {
+export function isQuestionnaireLabel(label: string | null): boolean {
   return label != null && QUESTIONNAIRE_STATUS_LABELS.has(label);
 }
 
 /** Shown next to the Plan card, not above the live assistant stream. */
-export function isPlanCardPlanDiscoverStatusLabel(
-  label: string | null,
-): boolean {
+export function isPlanCardLabel(label: string | null): boolean {
   return label != null && PLAN_CARD_STATUS_LABELS.has(label);
 }
 
 /** Shown above the live block list (explore / discovery prose). */
-export function isLiveStreamPlanDiscoverStatusLabel(
-  label: string | null,
-): boolean {
+export function isLiveStreamLabel(label: string | null): boolean {
   return label != null && LIVE_STREAM_STATUS_LABELS.has(label);
 }
 
-/**
- * When true, {@link ReasoningStreamPeek} should not repeat a stamped block ``reasoningLabel`` that
- * already appears on the questionnaire or plan card row.
- */
-export function shouldSuppressPlanDiscoverStampedLabel(
-  label: string | null | undefined,
-  questionnaireCardVisible: boolean,
-  planCardVisibleForPeek: boolean,
-): boolean {
-  const trimmed = label?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (
-    questionnaireCardVisible &&
-    isQuestionnairePlanDiscoverStatusLabel(trimmed)
-  ) {
-    return true;
-  }
-  if (planCardVisibleForPeek && isPlanCardPlanDiscoverStatusLabel(trimmed)) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * Past-tense label for the status row after a plan-discover phase settles.
- * Kept in sync with ``settledReasoningLabel`` in ``HofAgentChatBlocks``.
- */
-export function settlePlanDiscoverLiveLabel(streamingLabel: string): string {
+/** Past-tense label for the status row after a plan-discover phase settles. */
+export function settleLiveLabel(streamingLabel: string): string {
   return LIVE_TO_SETTLED[streamingLabel] ?? streamingLabel;
 }
 
@@ -108,8 +70,8 @@ export function settlePlanDiscoverLiveLabel(streamingLabel: string): string {
  * ``busy`` — callers should only use this while the request is in flight or in the same tick
  * before idle cleanup clears discover state.
  */
-export function computePlanDiscoverLiveLabel(
-  input: Omit<PlanDiscoverStatusInput, "busy">,
+export function computeLiveLabel(
+  input: PlanDiscoverLiveLabelInput,
 ): string | null {
   if (input.agentMode !== "plan") {
     return null;
@@ -117,7 +79,7 @@ export function computePlanDiscoverLiveLabel(
   const { planPhase, discoverStreamPhase } = input;
 
   if (planPhase === "clarifying") {
-    return settlePlanDiscoverLiveLabel("Generating questions");
+    return settleLiveLabel("Generating questions");
   }
   if (planPhase === "generating") {
     return "Preparing plan";
@@ -152,44 +114,11 @@ export function computePlanDiscoverLiveLabel(
 }
 
 /**
- * Label for plan-discover status (early row before first block; reasoning peek row; and during
- * reply streaming in ``AssistantSegmentedBody`` when reasoning is no longer live).
- * Returns `null` when no plan-discover-specific status applies.
- *
- * **Legacy:** only non-null while ``busy`` — use {@link computePlanDiscoverLiveLabel} +
- * {@link resolvePlanDiscoverStatusDisplayLabel} for settled idle labels.
+ * Maps a server ``discover_phase`` to the user-visible label string. Used to stamp
+ * ``reasoningLabelRef`` synchronously when the NDJSON event arrives, before React commits
+ * ``discoverStreamPhase`` state.
  */
-export function computePlanDiscoverStatusLabel(
-  input: PlanDiscoverStatusInput,
-): string | null {
-  if (!input.busy || input.agentMode !== "plan") {
-    return null;
-  }
-  return computePlanDiscoverLiveLabel(input);
-}
-
-/**
- * Display string: live while ``busy``; otherwise the last settled plan-discover label persisted by
- * the chat provider (cleared on ``run_start`` / ``resume_start`` / leaving plan mode).
- */
-export function resolvePlanDiscoverStatusDisplayLabel(
-  input: PlanDiscoverStatusInput,
-  persistedPlanDiscoverLabel: string | null,
-): string | null {
-  if (input.agentMode !== "plan") {
-    return null;
-  }
-  if (input.busy) {
-    return computePlanDiscoverLiveLabel(input);
-  }
-  return persistedPlanDiscoverLabel;
-}
-
-/**
- * Stamped synchronously on `phase: model` before React commits `discoverStreamPhase` state
- * (mirrors {@link computePlanDiscoverLiveLabel} for discover segments only).
- */
-export function discoverPhaseToEagerLabel(
+export function discoverPhaseToLabel(
   dp: "explore" | "clarify" | "propose" | null,
 ): string | null {
   switch (dp) {

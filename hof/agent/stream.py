@@ -196,7 +196,10 @@ def _user_message_transient_limit_without_exhausted_retries(f: Any) -> str:
             "Please wait a short moment and try again."
         )
     elif cv == "timeout":
-        msg = "The request timed out before I could finish this step. Please try again in a moment."
+        msg = (
+            "The request timed out before I could finish this step. "
+            "Please try again in a moment."
+        )
     else:
         msg = (
             "The AI service was temporarily unavailable before I could finish this step. "
@@ -774,7 +777,9 @@ def _resolve_provider(lm_backend: str, model: str) -> Any:
     else:
         api_key = _resolve_openai_api_key()
         if not api_key:
-            raise _ProviderSetupError("Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)")
+            raise _ProviderSetupError(
+                "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)"
+            )
         try:
             from llm_markdown.providers import OpenAIProvider
         except ImportError:
@@ -876,7 +881,7 @@ _AGENT_CHAT_PLAN_EXECUTE_SUFFIX = (
     "- Pass `done_indices` as a JSON array of integers: the **0-based indices** of every checklist "
     "row that is **complete so far** (same top-to-bottom order as the `- [ ]` lines in "
     "the approved plan below). Example: after finishing the first two tasks, call with "
-    '`{"done_indices": [0, 1]}`; after the third, `{"done_indices": [0, 1, 2]}`.\n'
+    "`{\"done_indices\": [0, 1]}`; after the third, `{\"done_indices\": [0, 1, 2]}`.\n"
     "- Call the tool **multiple times per turn** if you complete several steps in one round.\n"
     "- Do not rely on editing markdown checkboxes — only this tool updates the UI.\n"
     "Also briefly note progress in your visible replies.\n"
@@ -884,24 +889,51 @@ _AGENT_CHAT_PLAN_EXECUTE_SUFFIX = (
 
 _AGENT_CHAT_PLAN_DISCOVER_PREFIX = (
     "# Plan discovery mode\n\n"
-    "The user wants a plan they can review before anything is executed.\n\n"
-    "## How delivery works\n\n"
-    "The UI renders clarification questions and the approved plan from tool "
-    "calls (not from free-form assistant text for those steps).\n\n"
-    "## Workflow\n\n"
-    "1. First explore the request: use domain read tools as needed and reply "
-    "with a short visible summary or plan of attack (at least one assistant message).\n"
-    "2. Then call `hof_builtin_present_plan_clarification` to gather any "
-    "remaining user input on scope, preferences, or parameters.\n"
-    "3. After the user answers, use read tools as needed and call "
-    "`hof_builtin_present_plan` to propose a concrete plan.\n\n"
+    "The user wants a **reviewable plan** before any execution. Delivery happens in "
+    "three layers: explore → **clarification questionnaire** → **structured plan proposal**. "
+    "The UI shows questions and the plan from the built-in tools; treat those tools as the "
+    "official handoff points.\n\n"
+    "## Explore (first phase)\n\n"
+    "Use domain read tools to understand scope, counts, and constraints. "
+    "**Purpose:** inform what you will ask, not to deliver the final answer.\n\n"
+    "After tools, write **at least one** assistant message that is **short**: restate the goal "
+    "in your own words, note what you inspected, and what remains to decide. "
+    "Keep it to a brief orientation (roughly a small paragraph). "
+    "**Include detailed tables, full line-by-line listings, long reports, or exhaustive "
+    "figures only after** the user has answered clarification and approved a plan "
+    "(execution phase). During exploration, prefer high-level counts or one example if needed "
+    "to phrase questions.\n\n"
+    "## Clarify (second phase)\n\n"
+    "Call `hof_builtin_present_plan_clarification` with **concrete** multiple-choice "
+    "questions about anything that changes the plan (format, timeframe, scope, filters, "
+    "priorities). "
+    "Aim for questions that a product owner would expect before signing off. "
+    "This step **is** the user’s steering moment before you commit to steps.\n\n"
+    "## Propose (after the user submits answers)\n\n"
+    "Use reads if needed, then call `hof_builtin_present_plan` with title, description, "
+    "and checklist steps the user can approve.\n\n"
     "---\n\n"
 )
 
 _AGENT_CHAT_PLAN_DISCOVER_SUFFIX = (
-    "\n\n## Plan discovery\n"
-    "Explore with tools first, then question, then propose the plan via the "
-    "built-in tools above — the tools available in each phase enforce that order.\n"
+    "\n\n## Plan discovery (reminder)\n"
+    "Phase order: explore briefly → **`hof_builtin_present_plan_clarification`** → "
+    "(user answers) → **`hof_builtin_present_plan`**. "
+    "The active tool set matches that sequence; your visible prose should too: "
+    "orientation and questions first, rich deliverables after approval.\n"
+)
+
+_AGENT_CHAT_PLAN_DISCOVER_FINAL_LOCK = (
+    "\n\n## Planning mode — priority (read this section last)\n"
+    "**For Plan discovery, this section applies on top of the general instructions above.**\n"
+    "Until the user has submitted the clarification questionnaire, your visible output is **only** "
+    "short orientation: restate the goal, note what you checked with tools, and what still needs a "
+    "decision. **Then call** `hof_builtin_present_plan_clarification` with concrete multiple-choice "
+    "questions.\n"
+    "**Reserve for plan execution (after the user approves a plan):** full markdown tables, "
+    "line-by-line expense listings, depreciation schedules, totals, and narrative reports. "
+    "**During discovery,** one or two numbers to phrase a question are fine; comprehensive answers "
+    "are not.\n"
 )
 
 
@@ -1248,7 +1280,8 @@ def _stream_inbox_review_summary_for_ui(
         yield {
             "type": "error",
             "detail": (
-                f"invalid inbox_review_summary_mode={mode!r} (expected llm_stream, static, or none)"
+                f"invalid inbox_review_summary_mode={mode!r} "
+                "(expected llm_stream, static, or none)"
             ),
         }
         return
@@ -1613,12 +1646,25 @@ def _run_agent_llm_tool_loop(
                         "explore" if not _discover_explored else "clarify"
                     )
                 logger.info(
-                    "agent_chat ndjson_phase run_id=%s round=%d phase=model discover_phase=%s",
+                    "agent_chat ndjson_phase run_id=%s round=%d phase=model "
+                    "discover_phase=%s",
                     run_id,
                     rounds,
                     _phase_model["discover_phase"],
                 )
             yield _phase_model
+            # Explicit plan-discover subphase (additive; mirrors ``discover_phase`` on ``phase``).
+            if (
+                agent_chat_mode == "plan_discover"
+                and _phase_model.get("phase") == "model"
+                and "discover_phase" in _phase_model
+            ):
+                yield {
+                    "type": "plan_discover",
+                    "subphase": _phase_model["discover_phase"],
+                    "round": rounds,
+                    "ts_ms": int(time.time() * 1000),
+                }
 
             from llm_markdown.agent_stream import (
                 AgentContentDelta,
@@ -1645,8 +1691,14 @@ def _run_agent_llm_tool_loop(
                 and discover_explore_tools is not None
                 and not _discover_explored
             )
-            active_allowlist = discover_explore_allowlist if _in_discover_explore else allowlist
-            active_tools = discover_explore_tools if _in_discover_explore else tools
+            active_allowlist = (
+                discover_explore_allowlist
+                if _in_discover_explore
+                else allowlist
+            )
+            active_tools = (
+                discover_explore_tools if _in_discover_explore else tools
+            )
             st_tools = active_tools if len(active_tools) > 0 else None
             if st_tools is not None and agent_chat_mode == "plan_discover":
                 st_tool_choice: str | dict[str, str] | None = "auto"
@@ -1776,12 +1828,16 @@ def _run_agent_llm_tool_loop(
                         _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION,
                     }
                     terminal_idxs = [
-                        i for i in sorted_idx if parts[i].get("name") in _plan_terminal_tools
+                        i
+                        for i in sorted_idx
+                        if parts[i].get("name") in _plan_terminal_tools
                     ]
                     if len(terminal_idxs) > 1:
                         yield {
                             "type": "error",
-                            "detail": ("at most one plan/clarification tool per round"),
+                            "detail": (
+                                "at most one plan/clarification tool per round"
+                            ),
                         }
                         return
                     if len(terminal_idxs) == 1:
@@ -1790,14 +1846,21 @@ def _run_agent_llm_tool_loop(
                         if tix != sorted_idx[-1]:
                             yield {
                                 "type": "error",
-                                "detail": (f"{tname} must be the last tool call in the round"),
+                                "detail": (
+                                    f"{tname} must be the last "
+                                    "tool call in the round"
+                                ),
                             }
                             return
-                        if any(parts[j].get("name") in mutation_allowlist for j in sorted_idx):
+                        if any(
+                            parts[j].get("name") in mutation_allowlist
+                            for j in sorted_idx
+                        ):
                             yield {
                                 "type": "error",
                                 "detail": (
-                                    f"cannot combine {tname} with mutation tools in the same round"
+                                    f"cannot combine {tname} "
+                                    "with mutation tools in the same round"
                                 ),
                             }
                             return
@@ -1873,7 +1936,8 @@ def _run_agent_llm_tool_loop(
                         and agent_chat_mode == "plan_discover"
                     ):
                         logger.info(
-                            "agent_chat plan_clarification_validating run_id=%s args_wire_chars=%d",
+                            "agent_chat plan_clarification_validating run_id=%s "
+                            "args_wire_chars=%d",
                             run_id,
                             len(args_wire),
                         )
@@ -1970,9 +2034,13 @@ def _run_agent_llm_tool_loop(
                             cid,
                             tid,
                         )
-                    elif name == _HOF_BUILTIN_PRESENT_PLAN and agent_chat_mode == "plan_discover":
+                    elif (
+                        name == _HOF_BUILTIN_PRESENT_PLAN
+                        and agent_chat_mode == "plan_discover"
+                    ):
                         logger.info(
-                            "agent_chat plan_proposal_validating run_id=%s args_wire_chars=%d",
+                            "agent_chat plan_proposal_validating run_id=%s "
+                            "args_wire_chars=%d",
                             run_id,
                             len(args_wire),
                         )
@@ -2019,7 +2087,8 @@ def _run_agent_llm_tool_loop(
                             "structured_plan": proposal,
                         }
                         logger.info(
-                            "agent_chat plan_proposal_accepted run_id=%s round=%d steps=%d",
+                            "agent_chat plan_proposal_accepted run_id=%s round=%d "
+                            "steps=%d",
                             run_id,
                             rounds,
                             len(proposal.get("steps", [])),
@@ -2175,7 +2244,8 @@ def _run_agent_llm_tool_loop(
                                 plan_final[k] = v
                     yield plan_final
                     logger.info(
-                        "agent_chat plan_proposal_final run_id=%s round=%d reply_chars=%d",
+                        "agent_chat plan_proposal_final run_id=%s round=%d "
+                        "reply_chars=%d",
                         run_id,
                         rounds,
                         len(plan_md),
@@ -2183,7 +2253,9 @@ def _run_agent_llm_tool_loop(
                     return
                 if plan_clarify_halt is not None:
                     store_extras = (
-                        plan_resume_final_extras if plan_resume_final_extras is not None else {}
+                        plan_resume_final_extras
+                        if plan_resume_final_extras is not None
+                        else {}
                     )
                     save_agent_run(
                         run_id,
@@ -2277,7 +2349,10 @@ def _run_agent_llm_tool_loop(
                         _HOF_BUILTIN_PRESENT_PLAN,
                         _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION,
                     }
-                    tool_names = {str(parts[i].get("name") or "") for i in sorted_idx}
+                    tool_names = {
+                        str(parts[i].get("name") or "")
+                        for i in sorted_idx
+                    }
                     tool_names.discard("")
                     if tool_names and not (tool_names & _plan_terminal):
                         _discover_explored = True
@@ -2304,7 +2379,8 @@ def _run_agent_llm_tool_loop(
                     {"role": "assistant", "content": text if text else ""},
                 )
                 logger.info(
-                    "agent_chat discover_explore_complete run_id=%s round=%d text_chars=%d",
+                    "agent_chat discover_explore_complete run_id=%s round=%d "
+                    "text_chars=%d",
                     run_id,
                     rounds,
                     len(text),
@@ -2334,7 +2410,8 @@ def _run_agent_llm_tool_loop(
                 )
                 reasoning = ReasoningConfig.off()
                 logger.info(
-                    "agent_chat discover_text_retry run_id=%s round=%d text_chars=%d",
+                    "agent_chat discover_text_retry run_id=%s round=%d "
+                    "text_chars=%d",
                     run_id,
                     rounds,
                     len(text),
@@ -2488,15 +2565,16 @@ def _run_agent_chat_stream(
     discover_explore_tools: list[dict[str, Any]] | None = None
     if chat_mode == "plan_discover":
         system_content = (
-            _AGENT_CHAT_PLAN_DISCOVER_PREFIX + system_content + _AGENT_CHAT_PLAN_DISCOVER_SUFFIX
+            _AGENT_CHAT_PLAN_DISCOVER_PREFIX
+            + system_content
+            + _AGENT_CHAT_PLAN_DISCOVER_SUFFIX
+            + _AGENT_CHAT_PLAN_DISCOVER_FINAL_LOCK
         )
         discover_explore_allowlist, discover_explore_tools = _build_discover_tools(
-            policy,
-            phase="explore",
+            policy, phase="explore",
         )
         loop_allowlist, loop_tools = _build_discover_tools(
-            policy,
-            phase="clarify",
+            policy, phase="clarify",
         )
         final_extras: dict[str, Any] | None = {"mode": "plan"}
         plan_resume_final_extras = {"mode": "plan"}
@@ -2794,7 +2872,9 @@ def _run_agent_resume_stream(
         if snap_live is not None:
             try:
                 raw_live = snap_live()
-                baseline_ids = sorted(str(x).strip() for x in (raw_live or []) if str(x).strip())
+                baseline_ids = sorted(
+                    str(x).strip() for x in (raw_live or []) if str(x).strip()
+                )
             except Exception:
                 logger.debug(
                     "inbox pending baseline snapshot failed",
@@ -2892,7 +2972,9 @@ def _run_agent_resume_plan_clarification_stream(
         yield {"type": "error", "detail": "Invalid saved clarification state"}
         return
 
-    sel_map, other_text_map, aerr = _validate_clarification_answers(qnorm, answers or [])
+    sel_map, other_text_map, aerr = _validate_clarification_answers(
+        qnorm, answers or []
+    )
     if aerr is not None:
         yield {"type": "error", "detail": aerr}
         return
@@ -2935,8 +3017,7 @@ def _run_agent_resume_plan_clarification_stream(
         plan_resume_final_extras = {"mode": "plan"}
 
     discover_allowlist, tools = _build_discover_tools(
-        policy,
-        phase="propose",
+        policy, phase="propose",
     )
 
     try:
@@ -2945,7 +3026,9 @@ def _run_agent_resume_plan_clarification_stream(
         yield {"type": "error", "detail": exc.detail}
         return
 
-    summary = _clarification_answer_summary_for_model(qnorm, sel_map, other_text_map)
+    summary = _clarification_answer_summary_for_model(
+        qnorm, sel_map, other_text_map
+    )
     payload = {
         "answered": True,
         "selections": sel_map,
@@ -3119,7 +3202,10 @@ def _run_agent_resume_inbox_stream(
                 "detail": msg or f"Inbox watch {desc.watch_id!r} is still pending review",
             }
             return
-        summary_lines.append(msg or f"{desc.record_type} {desc.record_id}: inbox review completed.")
+        summary_lines.append(
+            msg
+            or f"{desc.record_type} {desc.record_id}: inbox review completed."
+        )
 
     oa_messages = run["oa_messages"]
     if not isinstance(oa_messages, list):
@@ -3154,7 +3240,11 @@ def _run_agent_resume_inbox_stream(
 
     scan_resume_fn = policy.inbox_scan_after_inbox_resume
     baseline_raw = run.get("inbox_pending_baseline_ids")
-    if scan_resume_fn is not None and isinstance(baseline_raw, list) and baseline_raw:
+    if (
+        scan_resume_fn is not None
+        and isinstance(baseline_raw, list)
+        and baseline_raw
+    ):
         baseline_f = frozenset(str(x).strip() for x in baseline_raw if str(x).strip())
         try:
             extra_watches, updated_baseline = scan_resume_fn(descriptors, baseline_f)

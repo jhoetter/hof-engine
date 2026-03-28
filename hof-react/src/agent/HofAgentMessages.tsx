@@ -1,21 +1,28 @@
 "use client";
 
 import { FileText } from "lucide-react";
-import {
-  AgentEarlyThinkingIndicator,
-  RunBlocksList,
-} from "./HofAgentChatBlocks";
+import { RunBlocksList } from "./HofAgentChatBlocks";
 import {
   CHAT_USER_BUBBLE_CLASS,
   PLAN_EXECUTE_USER_MARKER,
   userMessageDisplayText,
 } from "./hofAgentChatModel";
 import type { ReactNode } from "react";
+import { useMemo } from "react";
 import { useHofAgentChat } from "./hofAgentChatContext";
 import type { ThreadItem } from "./hofAgentChatModel";
 import { HofAgentPlanClarificationCard } from "./HofAgentPlanClarificationCard";
+import { HofAgentPlanClarificationCardSkeleton } from "./HofAgentPlanClarificationCardSkeleton";
 import { HofAgentPlanCard } from "./HofAgentPlanCard";
+import { PlanCardSection } from "./PlanCardSection";
+import { PlanDiscoverChrome } from "./PlanDiscoverChrome";
+import { PlanQuestionnaireSection } from "./PlanQuestionnaireSection";
+import { computePlanDiscoverUiState } from "./planDiscoverUiReducer";
 import { visiblePlanMarkdownPreview } from "./planMarkdownTodos";
+import {
+  formatDurationMsForUi,
+  useThinkingEpisodeElapsed,
+} from "./thinkingDuration";
 
 export type HofAgentMessagesProps = {
   /** Outer scroll container (flex child, overflow). */
@@ -58,39 +65,9 @@ function findPlanRunAnchorIndex(
   return -1;
 }
 
-function HofAgentAnswerSummaryCard({
-  rows,
-}: {
-  rows: readonly { prompt: string; selectedLabels: string[] }[];
-}) {
-  return (
-    <div className="pl-1">
-      <div className="rounded-lg border border-border bg-surface p-3 shadow-sm">
-        <p className="mb-2 text-[11px] font-medium text-secondary">
-          Your choices
-        </p>
-        <p className="mb-3 text-[11px] leading-snug text-tertiary">
-          What you selected in the questionnaire before the plan was drafted.
-        </p>
-        <ul className="space-y-3">
-          {rows.map((row, i) => (
-            <li key={i}>
-              <p className="text-[12px] text-secondary">{row.prompt}</p>
-              <p className="text-[13px] font-medium leading-snug text-foreground">
-                {row.selectedLabels.length > 0
-                  ? row.selectedLabels.join(", ")
-                  : "—"}
-              </p>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
-
 export function HofAgentMessages({
-  className = "min-h-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]",
+  className =
+    "min-h-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable] [overflow-anchor:none]",
   contentClassName = "mx-auto flex min-h-full w-full flex-col px-5 py-6 sm:px-6 sm:py-8",
   emptyStateFooter,
 }: HofAgentMessagesProps) {
@@ -114,6 +91,13 @@ export function HofAgentMessages({
     executePlan,
     planRunId,
     streamingReasoningLabel,
+    agentMode,
+    clarificationGenerationStartedAtMs,
+    clarificationVisibleAtMs,
+    planPreparationStartedAtMs,
+    thinkingEpisodeStartedAtMs,
+    planBuiltinLane,
+    discoverStreamPhase,
   } = useHofAgentChat();
 
   const planDraftVisible =
@@ -138,24 +122,164 @@ export function HofAgentMessages({
     (planPhase === "generating"
       ? planDraftVisible.trim().length > 0
       : planText.trim().length > 0);
-  const showAnswerSummary = planClarificationSubmittedSummary.length > 0;
 
-  const liveBlocksEl =
-    liveBlocks.length > 0 ? (
-      <div className="pl-1">
-        <RunBlocksList
-          blocks={liveBlocks}
-          barrier={approvalBarrier}
-          approvalDecisions={approvalDecisions}
-          setApprovalDecisions={setApprovalDecisions}
-          busy={busy}
-          mutationOutcomeByPendingId={mutationOutcomeByPendingId}
-        />
+  const hasClarificationActive =
+    planPhase === "clarifying" && planClarificationBarrier != null;
+  const hasClarificationReview =
+    planClarificationSubmittedSummary.length > 0 &&
+    !(planPhase === "clarifying" && planClarificationBarrier);
+  const hasQuestionnaireCard =
+    hasClarificationActive || hasClarificationReview;
+
+  /**
+   * Clarify subphase can arrive before ``tool_call``; require tool_call or some assistant output
+   * so the skeleton does not mount at the very start of a turn.
+   */
+  const pendingQuestionnaireGeneration =
+    planClarificationBarrier == null &&
+    busy &&
+    (planBuiltinLane === "clarification" || discoverStreamPhase === "clarify") &&
+    (planBuiltinLane === "clarification" || liveBlocks.length > 0);
+
+  const planDiscoverUi = computePlanDiscoverUiState({
+    agentMode,
+    busy,
+    displayLabel: streamingReasoningLabel,
+    hasQuestionnaireCard,
+    showPlanCard,
+    liveBlocksLength: liveBlocks.length,
+    pendingQuestionnaireGeneration,
+  });
+
+  const questionnaireElapsed = useThinkingEpisodeElapsed(
+    busy &&
+      planDiscoverUi.placement === "above_questionnaire" &&
+      planDiscoverUi.timerKind === "clarification_generation",
+    clarificationGenerationStartedAtMs,
+  );
+  const planCardElapsed = useThinkingEpisodeElapsed(
+    busy &&
+      planDiscoverUi.placement === "above_plan" &&
+      planDiscoverUi.timerKind === "plan_preparation",
+    planPreparationStartedAtMs,
+  );
+  const liveStreamElapsed = useThinkingEpisodeElapsed(
+    planDiscoverUi.placement === "above_live_stream" &&
+      planDiscoverUi.timerKind === "thinking_episode",
+    thinkingEpisodeStartedAtMs,
+  );
+
+  /**
+   * Wall-clock time from clarification tool start to barrier applied — matches what users expect
+   * for “Generated questions” more reliably than the episode hook alone (avoids “0 seconds”).
+   */
+  const questionnaireDurationFromWallClock =
+    clarificationGenerationStartedAtMs != null &&
+    clarificationVisibleAtMs != null &&
+    clarificationVisibleAtMs >= clarificationGenerationStartedAtMs
+      ? formatDurationMsForUi(
+          clarificationVisibleAtMs - clarificationGenerationStartedAtMs,
+        )
+      : null;
+
+  const planDiscoverChromeNode = useMemo(() => {
+    if (planDiscoverUi.placement === "none") {
+      return null;
+    }
+    let liveFormatted: string | null | undefined;
+    let settledFormatted: string | null | undefined;
+    const label = planDiscoverUi.label;
+    if (planDiscoverUi.placement === "above_questionnaire") {
+      liveFormatted = questionnaireElapsed.liveFormatted;
+      settledFormatted =
+        questionnaireDurationFromWallClock ??
+        questionnaireElapsed.settledFormatted;
+    } else if (planDiscoverUi.placement === "above_plan") {
+      liveFormatted = planCardElapsed.liveFormatted;
+      settledFormatted = planCardElapsed.settledFormatted;
+    } else {
+      liveFormatted = liveStreamElapsed.liveFormatted;
+      settledFormatted = liveStreamElapsed.settledFormatted;
+    }
+    return (
+      <PlanDiscoverChrome
+        label={label ?? undefined}
+        liveFormatted={liveFormatted}
+        settledFormatted={settledFormatted}
+      />
+    );
+  }, [
+    planDiscoverUi,
+    questionnaireElapsed.liveFormatted,
+    questionnaireElapsed.settledFormatted,
+    questionnaireDurationFromWallClock,
+    planCardElapsed.liveFormatted,
+    planCardElapsed.settledFormatted,
+    liveStreamElapsed.liveFormatted,
+    liveStreamElapsed.settledFormatted,
+  ]);
+
+  const liveStreamChromeEl =
+    planDiscoverUi.placement === "above_live_stream"
+      ? planDiscoverChromeNode
+      : null;
+  const questionnaireChromeEl =
+    planDiscoverUi.placement === "above_questionnaire"
+      ? planDiscoverChromeNode
+      : null;
+  const planChromeEl =
+    planDiscoverUi.placement === "above_plan" ? planDiscoverChromeNode : null;
+
+  /**
+   * Single column for live NDJSON stream: plan-discover chrome (when
+   * `placement === "above_live_stream"`) sits **directly above** {@link RunBlocksList} with
+   * `space-y-1` so it does not float one `space-y-5` step below the run / user row.
+   */
+  const liveStreamColumnEl = useMemo(() => {
+    if (liveStreamChromeEl == null && liveBlocks.length === 0) {
+      return null;
+    }
+    return (
+      <div className="space-y-1" data-hof-plan-live-stream-section="">
+        <div className="space-y-1 pl-1">
+          {liveStreamChromeEl}
+          {liveBlocks.length > 0 ? (
+            <RunBlocksList
+              blocks={liveBlocks}
+              barrier={approvalBarrier}
+              approvalDecisions={approvalDecisions}
+              setApprovalDecisions={setApprovalDecisions}
+              busy={busy}
+              mutationOutcomeByPendingId={mutationOutcomeByPendingId}
+            />
+          ) : null}
+        </div>
       </div>
-    ) : null;
+    );
+  }, [
+    liveStreamChromeEl,
+    liveBlocks,
+    approvalBarrier,
+    approvalDecisions,
+    setApprovalDecisions,
+    busy,
+    mutationOutcomeByPendingId,
+  ]);
 
   const planRunAnchorIdx = findPlanRunAnchorIndex(thread, planRunId);
   const hasPlanRunAnchor = planRunAnchorIdx >= 0;
+
+  /**
+   * When the plan anchor is the resume-plan-clarification run, the **discover** run sits earlier
+   * in the thread. The submitted-choices review card must be inserted between those two runs.
+   * ``discoverRunIdx`` is the last ``run`` item **before** ``planRunAnchorIdx``; -1 if none.
+   */
+  const discoverRunIdx = hasPlanRunAnchor
+    ? thread.slice(0, planRunAnchorIdx).reduce(
+        (acc, item, idx) => (item.kind === "run" ? idx : acc),
+        -1,
+      )
+    : -1;
 
   const renderThreadItems = (items: readonly ThreadItem[]) =>
     items.map((item) => {
@@ -215,13 +339,9 @@ export function HofAgentMessages({
       );
     });
 
-  const answerSummaryEl = showAnswerSummary ? (
-    <HofAgentAnswerSummaryCard rows={planClarificationSubmittedSummary} />
-  ) : null;
-
   const planCardEl =
     showPlanCard && planCardPhase !== null ? (
-      <div className="pl-1">
+      <PlanCardSection chrome={planChromeEl}>
         <HofAgentPlanCard
           planText={planText}
           onPlanTextChange={setPlanText}
@@ -230,87 +350,114 @@ export function HofAgentMessages({
           planTodoDoneIndices={planTodoDoneIndices}
           onExecutePlan={executePlan}
         />
-      </div>
+      </PlanCardSection>
     ) : null;
 
-  const clarificationCardEl =
+  /** Interactive questionnaire only (barrier present). */
+  const clarificationActiveEl =
     planPhase === "clarifying" && planClarificationBarrier ? (
-      <div className="pl-1">
+      <PlanQuestionnaireSection chrome={questionnaireChromeEl}>
         <HofAgentPlanClarificationCard
+          mode="active"
           key={planClarificationBarrier.clarificationId}
           questions={planClarificationBarrier.questions}
           busy={busy}
           onSubmit={submitPlanClarification}
         />
-      </div>
+      </PlanQuestionnaireSection>
     ) : null;
 
-  const inlineChromeEl = hasPlanRunAnchor ? (
+  /** Builtin running, barrier not yet on wire — chrome + skeleton in questionnaire slot. */
+  const clarificationPendingEl =
+    pendingQuestionnaireGeneration ? (
+      <PlanQuestionnaireSection chrome={questionnaireChromeEl}>
+        <HofAgentPlanClarificationCardSkeleton />
+      </PlanQuestionnaireSection>
+    ) : null;
+
+  const hasReviewSummary =
+    planClarificationSubmittedSummary.length > 0 &&
+    !(planPhase === "clarifying" && planClarificationBarrier);
+
+  /**
+   * Submitted clarification answers are fixed in the timeline **immediately after** persisted
+   * thread prefix and **before** the live NDJSON tail. That keeps order identical while streaming,
+   * after flush, and on reload — never interleaved below newer assistant deltas.
+   */
+  const clarificationReviewEl = hasReviewSummary ? (
+    <PlanQuestionnaireSection chrome={questionnaireChromeEl}>
+      <HofAgentPlanClarificationCard
+        mode="review"
+        submittedSummary={planClarificationSubmittedSummary}
+      />
+    </PlanQuestionnaireSection>
+  ) : null;
+
+  /** Plan chrome: pending skeleton, active questionnaire, plan card (submitted-choices review is rendered in ``threadList``). */
+  const planOrClarificationChromeEl = hasPlanRunAnchor ? (
     <>
-      {showAnswerSummary ? answerSummaryEl : null}
-      {planPhase === "clarifying" && planClarificationBarrier
-        ? clarificationCardEl
-        : planCardEl}
+      {clarificationPendingEl}
+      {clarificationActiveEl}
+      {!(planPhase === "clarifying" && planClarificationBarrier)
+        ? planCardEl
+        : null}
     </>
   ) : null;
 
-  /** While the plan streams in after clarification, keep live rows above the plan card so the status line is not below the plan. */
-  const planDraftStreamingAnchored =
-    hasPlanRunAnchor && planPhase === "generating" && busy;
-
   /**
-   * True while the plan draft is streaming and no run anchor exists yet
-   * (planRunId is only set when the server's ``final`` event arrives).
-   * During this window live blocks are suppressed, so the early indicator
-   * must be hoisted above the plan card.
+   * Stable visual order — identical during streaming, after flush, and on reload:
+   *
+   *   1. Discover run (explore / tools / first thought + reply)
+   *   2. Submitted Questions review (when present)
+   *   3. Plan-preparation run (second thought + reply)
+   *   4. Plan / questionnaire chrome (plan card, active questionnaire, skeleton)
+   *   5. Live stream (execution blocks, if any)
+   *   6. Remaining thread items (flushed execution run)
+   *
+   * **Anchored** branch: review card splits at ``discoverRunIdx``; plan card is a
+   * stable anchor **above** the execution live stream so it never drifts down.
+   *
+   * **Unanchored** branch (``planRunId`` null — active during discover/clarify
+   * streaming): live stream sits above plan/questionnaire chrome because the plan
+   * card and questionnaire only appear once those tools complete.
    */
-  const planDraftStreamingUnanchored =
-    !hasPlanRunAnchor && planPhase === "generating" && busy;
-
-  /**
-   * Plan-discover phase (“Generating questions”, “Exploring”, …) uses the same compact shimmer
-   * row as “Thinking” in the live reasoning peek (and the early row before the first NDJSON row).
-   */
-  const earlyIndicatorEl =
-    busy && liveBlocks.length === 0 ? (
-      <div className="pl-1">
-        <AgentEarlyThinkingIndicator
-          label={streamingReasoningLabel ?? undefined}
-        />
-      </div>
-    ) : null;
-
   const threadList = (
     <>
       {hasPlanRunAnchor ? (
         <>
-          {renderThreadItems(thread.slice(0, planRunAnchorIdx + 1))}
-          {/* Hoist indicator above plan chrome when no live blocks exist yet. */}
-          {earlyIndicatorEl}
-          {planDraftStreamingAnchored ? liveBlocksEl : null}
-          {inlineChromeEl}
+          {hasReviewSummary && discoverRunIdx >= 0 ? (
+            <>
+              {renderThreadItems(thread.slice(0, discoverRunIdx + 1))}
+              {clarificationReviewEl}
+              {renderThreadItems(
+                thread.slice(discoverRunIdx + 1, planRunAnchorIdx + 1),
+              )}
+            </>
+          ) : (
+            <>
+              {renderThreadItems(thread.slice(0, planRunAnchorIdx + 1))}
+              {hasReviewSummary ? clarificationReviewEl : null}
+            </>
+          )}
+          {planOrClarificationChromeEl}
+          {liveStreamColumnEl}
           {renderThreadItems(thread.slice(planRunAnchorIdx + 1))}
         </>
       ) : (
         <>
           {renderThreadItems(thread)}
-          {answerSummaryEl}
-          {/* Hoist indicator + live blocks above plan card during plan draft so
-              "Preparing plan" never appears below the plan content. */}
-          {planDraftStreamingUnanchored ? earlyIndicatorEl : null}
-          {planDraftStreamingUnanchored ? liveBlocksEl : null}
+          {hasReviewSummary ? clarificationReviewEl : null}
+          {/*
+            Unanchored: ``planRunId`` is unset until ``final``, so this branch is active during
+            discover / clarify / plan-prep streaming. Live stream sits above plan/questionnaire
+            chrome because those cards only appear once tool calls resolve.
+          */}
+          {liveStreamColumnEl}
           {planCardEl}
-          {planPhase === "clarifying" && planClarificationBarrier
-            ? clarificationCardEl
-            : null}
+          {clarificationPendingEl}
+          {clarificationActiveEl}
         </>
       )}
-      {hasPlanRunAnchor && !planDraftStreamingAnchored ? liveBlocksEl : null}
-      {/* Bottom live blocks + early indicator for non-plan-draft, non-anchored runs. */}
-      {!hasPlanRunAnchor && !planDraftStreamingUnanchored ? liveBlocksEl : null}
-      {!hasPlanRunAnchor && !planDraftStreamingUnanchored
-        ? earlyIndicatorEl
-        : null}
     </>
   );
 

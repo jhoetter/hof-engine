@@ -56,8 +56,9 @@ import {
 } from "./hofAgentChatModel";
 import { parseStructuredPlan } from "./planMarkdownTodos";
 import {
-  computePlanDiscoverStatusLabel,
-  discoverPhaseToEagerLabel,
+  computePlanDiscoverLiveLabel,
+  settlePlanDiscoverLiveLabel,
+  type PlanDiscoverBuiltinLane,
 } from "./planDiscoverStatusLabel";
 import {
   applyPlanTodoWireResolution,
@@ -393,10 +394,20 @@ export type HofAgentChatContextValue = {
   planTodoDoneIndices: readonly number[];
   executePlan: () => void;
   /**
-   * While the run is busy, optional label for the streaming reasoning shimmer
-   * (replaces default ``Thinking``). Derived only via ``computePlanDiscoverStatusLabel``.
+   * Plan-discover status row: live label while ``busy``, otherwise last settled label
+   * (``Explored`` / ``Generated questions`` / ``Prepared plan``) until the next run.
    */
   streamingReasoningLabel: string | null;
+  /** Monotonic time when ``hof_builtin_present_plan_clarification`` tool_call was seen (optional UI). */
+  clarificationGenerationStartedAtMs: number | null;
+  /** Monotonic time when the clarification barrier was applied (optional UI / elapsed-to-visible). */
+  clarificationVisibleAtMs: number | null;
+  /** Monotonic time when plan draft generation started (``planPhase === "generating"``); drives “Preparing plan” timer above Plan card. */
+  planPreparationStartedAtMs: number | null;
+  /** Server ``discover_phase`` on ``phase: model`` (plan-discover stream). */
+  discoverStreamPhase: "explore" | "clarify" | "propose" | null;
+  /** While ``hof_builtin_present_plan_clarification`` / ``hof_builtin_present_plan`` tool is active. */
+  planBuiltinLane: PlanDiscoverBuiltinLane;
 };
 
 const HofAgentChatContext = createContext<HofAgentChatContextValue | null>(
@@ -513,15 +524,55 @@ export function HofAgentChatProvider({
   const planExecuteActiveRef = useRef(false);
   /** Mirror of ``streamingReasoningLabel`` for stamping onto blocks inside ``setLiveBlocks`` updaters. */
   const reasoningLabelRef = useRef<string | null>(null);
+  const [persistedPlanDiscoverLabel, setPersistedPlanDiscoverLabel] = useState<
+    string | null
+  >(null);
+  const planDiscoverLastLiveRef = useRef<string | null>(null);
+  const [clarificationGenerationStartedAtMs, setClarificationGenerationStartedAtMs] =
+    useState<number | null>(null);
+  const [clarificationVisibleAtMs, setClarificationVisibleAtMs] = useState<
+    number | null
+  >(null);
+  const [planPreparationStartedAtMs, setPlanPreparationStartedAtMs] =
+    useState<number | null>(null);
+  const prevAgentModeRef = useRef<AgentMode>(initialAgentMode);
 
   useEffect(() => {
     planTextRef.current = planText;
   }, [planText]);
 
   useEffect(() => {
+    if (prevAgentModeRef.current === "plan" && agentMode === "instant") {
+      setPersistedPlanDiscoverLabel(null);
+      planDiscoverLastLiveRef.current = null;
+      setPlanPreparationStartedAtMs(null);
+    }
+    prevAgentModeRef.current = agentMode;
+  }, [agentMode]);
+
+  useEffect(() => {
     chatRequestModeRef.current =
       agentMode === "plan" ? "plan" : "instant";
   }, [agentMode]);
+
+  /** Start clarification timer when server enters clarify subphase (often before ``tool_call``). */
+  useEffect(() => {
+    if (agentMode !== "plan" || !busy) {
+      return;
+    }
+    if (discoverStreamPhase !== "clarify") {
+      return;
+    }
+    if (planClarificationBarrier != null) {
+      return;
+    }
+    setClarificationGenerationStartedAtMs((prev) => prev ?? Date.now());
+  }, [
+    agentMode,
+    busy,
+    discoverStreamPhase,
+    planClarificationBarrier,
+  ]);
 
   useEffect(() => {
     inboxReviewBarrierRef.current = inboxReviewBarrier;
@@ -931,6 +982,11 @@ export function HofAgentChatProvider({
               setProviderWaitNotice(null);
               setDiscoverStreamPhase(null);
               reasoningLabelRef.current = null;
+              setPersistedPlanDiscoverLabel(null);
+              planDiscoverLastLiveRef.current = null;
+              setClarificationGenerationStartedAtMs(null);
+              setClarificationVisibleAtMs(null);
+              setPlanPreparationStartedAtMs(null);
               updateThinkingEpisodeStart(Date.now());
             }
             if (effectiveMode === "plan" && typ === "tool_call") {
@@ -944,9 +1000,11 @@ export function HofAgentChatProvider({
               if (toolName === "hof_builtin_present_plan_clarification") {
                 setPlanBuiltinToolActive("clarification");
                 reasoningLabelRef.current = "Generating questions";
+                setClarificationGenerationStartedAtMs(Date.now());
               } else if (toolName === "hof_builtin_present_plan") {
                 setPlanBuiltinToolActive("plan");
                 reasoningLabelRef.current = "Preparing plan";
+                setPlanPreparationStartedAtMs(Date.now());
               }
             }
             updateProviderWaitFromStreamType(typ, ev, setProviderWaitNotice);
@@ -964,15 +1022,21 @@ export function HofAgentChatProvider({
                   dp === "propose"
                 ) {
                   setDiscoverStreamPhase(dp);
-                  // Do not stamp ``explore`` on the ref: ``tool_call`` may still be clarification;
-                  // ``computePlanDiscoverStatusLabel`` + render sync own the label.
-                  if (dp === "clarify" || dp === "propose") {
-                    reasoningLabelRef.current = discoverPhaseToEagerLabel(dp);
-                  }
                 }
               }
               if (ph === "model" || ph === "summary") {
                 assistantStreamPhaseRef.current = ph;
+              }
+            }
+            /** Explicit subphase (additive; mirrors ``discover_phase`` on ``phase`` for older servers). */
+            if (typ === "plan_discover") {
+              const sub = (ev as { subphase?: unknown }).subphase;
+              if (
+                sub === "explore" ||
+                sub === "clarify" ||
+                sub === "propose"
+              ) {
+                setDiscoverStreamPhase(sub);
               }
             }
             if (typ === "mutation_pending") {
@@ -1121,6 +1185,7 @@ export function HofAgentChatProvider({
             setPlanClarificationBarrier(barrier);
             setPlanPhase("clarifying");
             setPlanBuiltinToolActive(null);
+            setClarificationVisibleAtMs(Date.now());
           }
           if (doneBlocks.length > 0) {
             flushLiveToThread(structuredClone(doneBlocks));
@@ -1216,6 +1281,7 @@ export function HofAgentChatProvider({
       setPlanClarificationSubmittedSummary(summary);
       setPlanClarificationBarrier(null);
       setPlanPhase("generating");
+      setPlanPreparationStartedAtMs(Date.now());
       setPlanText("");
       const myId = ++reqIdRef.current;
       abortRef.current?.abort();
@@ -1271,13 +1337,20 @@ export function HofAgentChatProvider({
                   dp === "propose"
                 ) {
                   setDiscoverStreamPhase(dp);
-                  if (dp === "clarify" || dp === "propose") {
-                    reasoningLabelRef.current = discoverPhaseToEagerLabel(dp);
-                  }
                 }
               }
               if (ph === "model" || ph === "summary") {
                 assistantStreamPhaseRef.current = ph;
+              }
+            }
+            if (typ === "plan_discover") {
+              const sub = (ev as { subphase?: unknown }).subphase;
+              if (
+                sub === "explore" ||
+                sub === "clarify" ||
+                sub === "propose"
+              ) {
+                setDiscoverStreamPhase(sub);
               }
             }
             if (typ === "run_start" || typ === "resume_start") {
@@ -1285,6 +1358,11 @@ export function HofAgentChatProvider({
               setDiscoverStreamPhase(null);
               setPlanBuiltinToolActive(null);
               reasoningLabelRef.current = null;
+              setPersistedPlanDiscoverLabel(null);
+              planDiscoverLastLiveRef.current = null;
+              setClarificationGenerationStartedAtMs(null);
+              setClarificationVisibleAtMs(null);
+              setPlanPreparationStartedAtMs(null);
               updateThinkingEpisodeStart(Date.now());
             }
             if (typ === "tool_call") {
@@ -1295,9 +1373,11 @@ export function HofAgentChatProvider({
               if (toolName === "hof_builtin_present_plan_clarification") {
                 setPlanBuiltinToolActive("clarification");
                 reasoningLabelRef.current = "Generating questions";
+                setClarificationGenerationStartedAtMs(Date.now());
               } else if (toolName === "hof_builtin_present_plan") {
                 setPlanBuiltinToolActive("plan");
                 reasoningLabelRef.current = "Preparing plan";
+                setPlanPreparationStartedAtMs(Date.now());
               }
             }
             // Plan markdown for ``hof_builtin_present_plan`` is not streamed as assistant_delta:
@@ -1343,6 +1423,7 @@ export function HofAgentChatProvider({
             setPlanClarificationBarrier(barrier);
             setPlanPhase("clarifying");
             setPlanBuiltinToolActive(null);
+            setClarificationVisibleAtMs(Date.now());
           }
           if (doneBlocks.length > 0) {
             flushLiveToThread(structuredClone(doneBlocks));
@@ -1494,6 +1575,11 @@ export function HofAgentChatProvider({
             setDiscoverStreamPhase(null);
             setPlanBuiltinToolActive(null);
             reasoningLabelRef.current = null;
+            setPersistedPlanDiscoverLabel(null);
+            planDiscoverLastLiveRef.current = null;
+            setClarificationGenerationStartedAtMs(null);
+            setClarificationVisibleAtMs(null);
+            setPlanPreparationStartedAtMs(null);
             updateThinkingEpisodeStart(Date.now());
           }
           updateProviderWaitFromStreamType(rtyp, ev, setProviderWaitNotice);
@@ -1508,13 +1594,20 @@ export function HofAgentChatProvider({
                 dp === "propose"
               ) {
                 setDiscoverStreamPhase(dp);
-                if (dp === "clarify" || dp === "propose") {
-                  reasoningLabelRef.current = discoverPhaseToEagerLabel(dp);
-                }
               }
             }
             if (ph === "model" || ph === "summary") {
               assistantStreamPhaseRef.current = ph;
+            }
+          }
+          if (rtyp === "plan_discover") {
+            const sub = (ev as { subphase?: unknown }).subphase;
+            if (
+              sub === "explore" ||
+              sub === "clarify" ||
+              sub === "propose"
+            ) {
+              setDiscoverStreamPhase(sub);
             }
           }
           if (rtyp === "tool_call") {
@@ -1525,9 +1618,11 @@ export function HofAgentChatProvider({
             if (toolName === "hof_builtin_present_plan_clarification") {
               setPlanBuiltinToolActive("clarification");
               reasoningLabelRef.current = "Generating questions";
+              setClarificationGenerationStartedAtMs(Date.now());
             } else if (toolName === "hof_builtin_present_plan") {
               setPlanBuiltinToolActive("plan");
               reasoningLabelRef.current = "Preparing plan";
+              setPlanPreparationStartedAtMs(Date.now());
             }
           }
           if (rtyp === "mutation_pending") {
@@ -1776,6 +1871,11 @@ export function HofAgentChatProvider({
               setInboxReviewBarrier(null);
               setInboxResumeError(null);
               setProviderWaitNotice(null);
+              setPersistedPlanDiscoverLabel(null);
+              planDiscoverLastLiveRef.current = null;
+              setClarificationGenerationStartedAtMs(null);
+              setClarificationVisibleAtMs(null);
+              setPlanPreparationStartedAtMs(null);
               updateThinkingEpisodeStart(Date.now());
             }
             updateProviderWaitFromStreamType(rtyp, ev, setProviderWaitNotice);
@@ -2184,19 +2284,58 @@ export function HofAgentChatProvider({
 
   const conversationEmpty = thread.length === 0 && liveBlocks.length === 0;
 
-  const streamingReasoningLabel = useMemo(
+  const livePlanDiscoverLabel = useMemo(
     () =>
-      computePlanDiscoverStatusLabel({
-        busy,
+      computePlanDiscoverLiveLabel({
         agentMode,
         discoverStreamPhase,
         planPhase,
         planBuiltinLane: planBuiltinToolActive,
       }),
-    [busy, agentMode, discoverStreamPhase, planPhase, planBuiltinToolActive],
+    [agentMode, discoverStreamPhase, planPhase, planBuiltinToolActive],
   );
 
-  reasoningLabelRef.current = streamingReasoningLabel;
+  useLayoutEffect(() => {
+    if (agentMode !== "plan" || !busy) {
+      return;
+    }
+    if (livePlanDiscoverLabel) {
+      planDiscoverLastLiveRef.current = livePlanDiscoverLabel;
+    }
+  }, [agentMode, busy, livePlanDiscoverLabel]);
+
+  useLayoutEffect(() => {
+    if (busy || agentMode !== "plan") {
+      return;
+    }
+    const live = planDiscoverLastLiveRef.current;
+    if (live) {
+      setPersistedPlanDiscoverLabel(settlePlanDiscoverLiveLabel(live));
+    }
+    planDiscoverLastLiveRef.current = null;
+  }, [busy, agentMode]);
+
+  const streamingReasoningLabel = useMemo(() => {
+    if (agentMode !== "plan") {
+      return null;
+    }
+    if (busy) {
+      return livePlanDiscoverLabel;
+    }
+    const pendingSettle = planDiscoverLastLiveRef.current;
+    if (pendingSettle) {
+      return settlePlanDiscoverLiveLabel(pendingSettle);
+    }
+    return persistedPlanDiscoverLabel;
+  }, [
+    agentMode,
+    busy,
+    livePlanDiscoverLabel,
+    persistedPlanDiscoverLabel,
+  ]);
+
+  // Plan-discover status is rendered only by {@link PlanDiscoverChrome} / {@link computePlanDiscoverUiState}.
+  reasoningLabelRef.current = agentMode === "plan" ? null : streamingReasoningLabel;
 
   useEffect(() => {
     if (!isAgentChatDebugEnabled()) {
@@ -2290,6 +2429,11 @@ export function HofAgentChatProvider({
       planTodoDoneIndices,
       executePlan,
       streamingReasoningLabel,
+      clarificationGenerationStartedAtMs,
+      clarificationVisibleAtMs,
+      planPreparationStartedAtMs,
+      discoverStreamPhase,
+      planBuiltinLane: planBuiltinToolActive,
     }),
     [
       welcomeName,
@@ -2326,6 +2470,11 @@ export function HofAgentChatProvider({
       planTodoDoneIndices,
       executePlan,
       streamingReasoningLabel,
+      clarificationGenerationStartedAtMs,
+      clarificationVisibleAtMs,
+      planPreparationStartedAtMs,
+      discoverStreamPhase,
+      planBuiltinToolActive,
     ],
   );
 

@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+
 from llm_markdown.agent_stream import (
     AgentContentDelta,
     AgentMessageFinish,
@@ -28,14 +29,14 @@ from hof.agent.policy import (
 from hof.agent.state import load_agent_run, save_agent_run
 from hof.agent.stream import (
     _agent_stream_error_event,
-    _AgentStreamTurnExhaustedError,
-    _append_client_messages,
     _failure_category_value,
-    _iter_stream_agent_turn_with_engine_retries,
     _looks_like_llm_provider_error,
-    _mutation_preview_payload,
     _provider_error_eligible_for_engine_stream_retry,
     _provider_error_is_transient_for_log,
+    _AgentStreamTurnExhaustedError,
+    _append_client_messages,
+    _iter_stream_agent_turn_with_engine_retries,
+    _mutation_preview_payload,
     collect_agent_chat_from_stream,
     default_normalize_attachments,
     iter_agent_chat_stream,
@@ -98,6 +99,9 @@ def test_plan_discover_explore_text_then_clarify_tools(monkeypatch) -> None:
 
     finals = [e for e in ev if e.get("type") == "final"]
     assert len(finals) == 1
+    pds = [e for e in ev if e.get("type") == "plan_discover"]
+    assert pds, "explicit plan_discover NDJSON events (additive to phase.discover_phase)"
+    assert pds[0].get("subphase") == "explore"
     assert len(calls) == 2
     t1 = _tool_names_from_openai_specs(calls[0].get("tools"))
     t2 = _tool_names_from_openai_specs(calls[1].get("tools"))
@@ -479,7 +483,8 @@ def test_inbox_review_summary_llm_streams_before_awaiting_inbox(monkeypatch) -> 
     assert saved is not None
     msgs = saved.get("oa_messages") or []
     assert any(
-        m.get("role") == "assistant" and "Inbox" in str(m.get("content") or "")
+        m.get("role") == "assistant"
+        and "Inbox" in str(m.get("content") or "")
         for m in msgs
         if isinstance(m, dict)
     )
@@ -1276,7 +1281,10 @@ def test_agent_stream_error_event_duck_typed_maps_transient_detail() -> None:
 
 
 def test_failure_category_value_accepts_string_category() -> None:
-    assert _failure_category_value(SimpleNamespace(category="SERVER")) == "server"
+    assert (
+        _failure_category_value(SimpleNamespace(category="SERVER"))
+        == "server"
+    )
 
 
 def test_provider_error_transient_when_retryable_even_if_category_odd() -> None:
@@ -1406,7 +1414,9 @@ def test_iter_stream_agent_turn_retries_when_only_segment_start_before_error(
     )
     assert calls["n"] == 2
     assert any(isinstance(e, AgentRateLimitWait) for e in out)
-    assert any(isinstance(e, AgentContentDelta) and e.text == "ok" for e in out)
+    assert any(
+        isinstance(e, AgentContentDelta) and e.text == "ok" for e in out
+    )
 
 
 def test_iter_stream_agent_turn_engine_retries_then_succeeds(monkeypatch) -> None:

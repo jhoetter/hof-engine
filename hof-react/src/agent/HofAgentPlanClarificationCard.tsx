@@ -34,20 +34,70 @@ export type PlanClarificationAnswerWire = {
   other_text?: string;
 };
 
-export type HofAgentPlanClarificationCardProps = {
-  questions: PlanClarificationQuestion[];
-  busy: boolean;
-  onSubmit: (answers: PlanClarificationAnswerWire[]) => void;
-  /** Optional: e.g. dismiss or submit empty — host decides. */
-  onSkip?: () => void;
-};
+export type HofAgentPlanClarificationCardProps =
+  | {
+      mode: "active";
+      questions: PlanClarificationQuestion[];
+      busy: boolean;
+      onSubmit: (answers: PlanClarificationAnswerWire[]) => void;
+      onSkip?: () => void;
+    }
+  | {
+      mode: "review";
+      submittedSummary: readonly {
+        prompt: string;
+        selectedLabels: string[];
+      }[];
+    };
 
-export function HofAgentPlanClarificationCard({
+function HofAgentPlanClarificationCardReview({
+  submittedSummary,
+}: {
+  submittedSummary: readonly {
+    prompt: string;
+    selectedLabels: string[];
+  }[];
+}): ReactElement | null {
+  if (submittedSummary.length === 0) {
+    return null;
+  }
+  return (
+    <div
+      className="scroll-my-4 rounded-lg border border-border bg-surface p-3 shadow-sm [overflow-anchor:none] contain-layout"
+      data-hof-plan-clarification-card=""
+      data-hof-plan-clarification-mode="review"
+    >
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <p className="text-[13px] font-semibold text-foreground">Questions</p>
+        <span className="text-[11px] text-tertiary">Submitted</span>
+      </div>
+      <ul className="space-y-3">
+        {submittedSummary.map((row, i) => (
+          <li key={i}>
+            <p className="text-[12px] text-secondary">{row.prompt}</p>
+            <p className="text-[13px] font-medium leading-snug text-foreground">
+              {row.selectedLabels.length > 0
+                ? row.selectedLabels.join(", ")
+                : "—"}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function HofAgentPlanClarificationCardActive({
   questions,
   busy,
   onSubmit,
   onSkip,
-}: HofAgentPlanClarificationCardProps): ReactElement | null {
+}: {
+  questions: PlanClarificationQuestion[];
+  busy: boolean;
+  onSubmit: (answers: PlanClarificationAnswerWire[]) => void;
+  onSkip?: () => void;
+}): ReactElement | null {
   const initial = useMemo(() => {
     const m = new Map<string, Set<string>>();
     for (const q of questions) {
@@ -205,7 +255,11 @@ export function HofAgentPlanClarificationCard({
   const questionHasOtherOption = q.options.some((o) => optionIsOther(o));
 
   return (
-    <div className="rounded-lg border border-border bg-surface p-3 shadow-sm">
+    <div
+      className="scroll-my-4 rounded-lg border border-border bg-surface p-3 shadow-sm [overflow-anchor:none] contain-layout"
+      data-hof-plan-clarification-card=""
+      data-hof-plan-clarification-mode="active"
+    >
       <div className="mb-3 flex items-center justify-between gap-2">
         <p className="text-[13px] font-semibold text-foreground">Questions</p>
         {showPager ? (
@@ -233,7 +287,7 @@ export function HofAgentPlanClarificationCard({
               <label
                 key={o.id}
                 htmlFor={id}
-                className="flex cursor-pointer items-start gap-3 rounded-md border border-transparent px-2 py-2 hover:border-border hover:bg-hover"
+                className="flex min-h-[2.75rem] cursor-pointer items-start gap-3 rounded-md border border-transparent px-2 py-2 hover:border-border hover:bg-hover"
               >
                 <input
                   id={id}
@@ -320,5 +374,25 @@ export function HofAgentPlanClarificationCard({
         </div>
       </div>
     </div>
+  );
+}
+
+export function HofAgentPlanClarificationCard(
+  props: HofAgentPlanClarificationCardProps,
+): ReactElement | null {
+  if (props.mode === "review") {
+    return (
+      <HofAgentPlanClarificationCardReview
+        submittedSummary={props.submittedSummary}
+      />
+    );
+  }
+  return (
+    <HofAgentPlanClarificationCardActive
+      questions={props.questions}
+      busy={props.busy}
+      onSubmit={props.onSubmit}
+      onSkip={props.onSkip}
+    />
   );
 }

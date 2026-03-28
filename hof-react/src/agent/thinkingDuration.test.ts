@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDurationMs } from "./thinkingDuration";
+import { formatDurationMs, formatDurationMsForUi } from "./thinkingDuration";
 
 describe("formatDurationMs", () => {
   it("formats sub-minute", () => {
@@ -25,5 +25,13 @@ describe("formatDurationMs", () => {
 
   it("never goes negative", () => {
     expect(formatDurationMs(-500)).toBe("0 seconds");
+  });
+});
+
+describe("formatDurationMsForUi", () => {
+  it("omits sub-second durations", () => {
+    expect(formatDurationMsForUi(0)).toBeNull();
+    expect(formatDurationMsForUi(999)).toBeNull();
+    expect(formatDurationMsForUi(1000)).toBe("1 second");
   });
 });

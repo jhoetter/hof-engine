@@ -598,9 +598,7 @@ def hof_builtin_calculate(
     ),
 )
 def hof_builtin_present_plan(
-    title: str,
-    description: str,
-    steps: list,
+    title: str, description: str, steps: list,
 ) -> dict[str, Any]:
     """Intercepted by the stream loop; this body is never reached.
 
@@ -618,12 +616,15 @@ def hof_builtin_present_plan(
         "After calling this tool, STOP — do not write any assistant text."
     ),
     when_to_use=(
-        "When you need the user's input before you can produce a concrete plan. "
-        "Call this tool with your questions and then STOP (no text after the tool call)."
+        "In plan discovery, call this **after** your first exploration summary, whenever "
+        "the work could be scoped or delivered in more than one way. "
+        "Fill `questions` with 2–5 items (scope, format, timeframe, filters, priorities). "
+        "Use exploration tool results to write **specific** option labels. "
+        "Then STOP (no assistant text after the tool call)."
     ),
     when_not_to_use=(
-        "When you already have enough context to produce a plan — "
-        "use hof_builtin_present_plan instead."
+        "Use `hof_builtin_present_plan` instead once clarification answers are already in the "
+        "thread and you are ready to output the structured plan proposal."
     ),
 )
 def hof_builtin_present_plan_clarification(questions: list) -> dict[str, Any]:

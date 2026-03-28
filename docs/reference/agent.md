@@ -111,6 +111,8 @@ They appear in `GET /api/agent/tools` like any other registered function once di
 
 ## Plan discovery (`plan_discover`)
 
+System text (`_AGENT_CHAT_PLAN_DISCOVER_PREFIX` / suffix / `_AGENT_CHAT_PLAN_DISCOVER_FINAL_LOCK` in `hof/agent/stream.py`) instructs the model to **explore briefly** (reads inform questions, not full deliverables), then **`hof_builtin_present_plan_clarification`**, then after user answers **`hof_builtin_present_plan`**. The **final lock** block is appended last so it wins over app-specific “answer from tools” wording. Apps may add domain guidance in `system_prompt_intro` that aligns with that sequence.
+
 When the model calls **`hof_builtin_present_plan`**, the engine validates JSON arguments, converts them to markdown with `plan_proposal_to_markdown`, and emits **`final`** with **`mode: "plan"`**, **`structured_plan`**, **`reply`** (same markdown), and **`plan_text_source": "structured_tool"`**. The plan body is **not** streamed token-by-token as `assistant_delta`; clients should populate the plan UI from **`final`** only. Pre-final `assistant_delta` lines are normal chat/reasoning content (same segment as any other tool round).
 
 ## State

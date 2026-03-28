@@ -24,6 +24,18 @@ export function formatDurationMs(ms: number): string {
   return parts.join(" ");
 }
 
+/**
+ * Same as {@link formatDurationMs} but returns ``null`` when the duration is under one second,
+ * so the UI does not show a useless “(0 seconds)”.
+ */
+export function formatDurationMsForUi(ms: number): string | null {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 1) {
+    return null;
+  }
+  return formatDurationMs(ms);
+}
+
 export type ThinkingEpisodeElapsed = {
   /** Non-null while ``streaming`` and a start time is known. */
   liveFormatted: string | null;
@@ -61,7 +73,7 @@ export function useThinkingEpisodeElapsed(
     }
     const start = startRef.current;
     if (start != null) {
-      setSettledFormatted(formatDurationMs(Date.now() - start));
+      setSettledFormatted(formatDurationMsForUi(Date.now() - start));
     } else {
       setSettledFormatted(null);
     }
@@ -77,7 +89,7 @@ export function useThinkingEpisodeElapsed(
 
   let liveFormatted: string | null = null;
   if (streaming && startRef.current != null) {
-    liveFormatted = formatDurationMs(Date.now() - startRef.current);
+    liveFormatted = formatDurationMsForUi(Date.now() - startRef.current);
   }
 
   return { liveFormatted, settledFormatted };

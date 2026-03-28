@@ -48,6 +48,11 @@ import {
 } from "./hofAgentChatModel";
 import { reasoningPhaseTickingLive } from "./assistantStreamSegments";
 import { useHofAgentChat } from "./hofAgentChatContext";
+import {
+  isLiveStreamPlanDiscoverStatusLabel,
+  isPlanCardPlanDiscoverStatusLabel,
+  isQuestionnairePlanDiscoverStatusLabel,
+} from "./planDiscoverStatusLabel";
 import type {
   ApprovalBarrier,
   AssistantStreamSegment,
@@ -61,6 +66,7 @@ import {
   useThinkingEpisodeElapsed,
 } from "./thinkingDuration";
 import { parseStructuredPlan } from "./planMarkdownTodos";
+import { settlePlanDiscoverLiveLabel } from "./planDiscoverStatusLabel";
 
 function formatToolJsonForDialog(raw: string): string {
   const t = raw.trim();
@@ -732,13 +738,9 @@ function looksLikeJsonOrToolCallLine(t: string): boolean {
  * Strip HTML tags, markdown tables, bullet/numbered lists, headings, code fences,
  * and JSON-like lines (hallucinated tool payloads) — the thinking pane is plain analytical notes only.
  */
-const SETTLED_LABEL_MAP: Record<string, string> = {
-  "Generating questions": "Generated questions",
-  "Preparing plan": "Prepared plan",
-};
-
-function settledReasoningLabel(streamingLabel: string): string {
-  return SETTLED_LABEL_MAP[streamingLabel] ?? streamingLabel;
+/** Exported for unit tests; maps live plan-discover labels to past-tense rows. */
+export function settledReasoningLabel(streamingLabel: string): string {
+  return settlePlanDiscoverLiveLabel(streamingLabel);
 }
 
 function sanitizeReasoningText(raw: string): string {
@@ -824,6 +826,10 @@ export type AgentEarlyThinkingIndicatorProps = {
    * Omit to compute elapsed locally from {@link HofAgentChatContext}.
    */
   liveFormatted?: string | null;
+  /**
+   * Frozen duration after the episode ends (parent-owned); shown when {@link liveFormatted} is null.
+   */
+  settledFormatted?: string | null;
   /** Shimmer label (default ``Thinking``). Use e.g. ``Preparing plan`` during plan draft. */
   label?: string;
 };
@@ -834,13 +840,16 @@ export type AgentEarlyThinkingIndicatorProps = {
  */
 export function AgentEarlyThinkingIndicator({
   liveFormatted: liveFormattedFromParent,
+  settledFormatted: settledFormattedFromParent,
   label = "Thinking",
 }: AgentEarlyThinkingIndicatorProps = {}) {
   useEffect(() => {
     ensureReasoningShimmerKeyframes();
   }, []);
   const { thinkingEpisodeStartedAtMs } = useHofAgentChat();
-  const useInternalElapsed = liveFormattedFromParent === undefined;
+  const useInternalElapsed =
+    liveFormattedFromParent === undefined &&
+    settledFormattedFromParent === undefined;
   const internalElapsed = useThinkingEpisodeElapsed(
     useInternalElapsed,
     thinkingEpisodeStartedAtMs,
@@ -848,8 +857,13 @@ export function AgentEarlyThinkingIndicator({
   const liveFormatted = useInternalElapsed
     ? internalElapsed.liveFormatted
     : liveFormattedFromParent;
+  const settledFormatted = useInternalElapsed
+    ? internalElapsed.settledFormatted
+    : settledFormattedFromParent;
+  const durationFormatted = liveFormatted ?? settledFormatted ?? null;
+  const settledOnly = liveFormatted == null && settledFormatted != null;
   const ariaThinking =
-    liveFormatted != null ? `${label} (${liveFormatted})` : label;
+    durationFormatted != null ? `${label} (${durationFormatted})` : label;
   return (
     <div
       className={`${AGENT_CHAT_COLUMN_CLASS} font-sans`}
@@ -857,11 +871,19 @@ export function AgentEarlyThinkingIndicator({
       aria-live="polite"
       aria-label={ariaThinking}
     >
-      <span className={REASONING_THINKING_SHIMMER_LABEL_CLASS}>{label}</span>
-      {liveFormatted != null ? (
+      <span
+        className={
+          settledOnly
+            ? "text-[11px] font-medium text-tertiary"
+            : REASONING_THINKING_SHIMMER_LABEL_CLASS
+        }
+      >
+        {label}
+      </span>
+      {durationFormatted != null ? (
         <span className="text-[11px] font-medium text-tertiary">
           {" "}
-          ({liveFormatted})
+          ({durationFormatted})
         </span>
       ) : null}
     </div>
@@ -874,6 +896,7 @@ function ReasoningStreamPeek({
   reasoningElapsedMs,
   consolidatedContentForPopover,
   reasoningLabel: reasoningLabelProp,
+  assistantStreamOpen = false,
 }: {
   text: string;
   streaming: boolean;
@@ -886,6 +909,12 @@ function ReasoningStreamPeek({
   consolidatedContentForPopover?: string;
   /** Stamped label from the block (persists after flush). Overrides default "Thought" for settled rows. */
   reasoningLabel?: string;
+  /**
+   * True while the parent assistant HTTP stream is still open. When reasoning is no longer
+   * “live” but the block is not finalized yet, fall back to context ``streamingReasoningLabel``
+   * so plan-discover rows do not flash “Thought” before ``assistant_done`` stamps the block.
+   */
+  assistantStreamOpen?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const columnRef = useRef<HTMLDivElement>(null);
@@ -899,8 +928,11 @@ function ReasoningStreamPeek({
     left: number;
     width: number;
   } | null>(null);
-  const { thinkingEpisodeStartedAtMs, streamingReasoningLabel } =
+  const { thinkingEpisodeStartedAtMs, streamingReasoningLabel, agentMode, busy } =
     useHofAgentChat();
+  /** Plan-discover copy is owned by {@link PlanDiscoverChrome}; peek stays generic in plan mode. */
+  const peekPlanDiscoverLabel =
+    agentMode === "plan" ? null : streamingReasoningLabel;
   const { liveFormatted, settledFormatted } = useThinkingEpisodeElapsed(
     streaming,
     thinkingEpisodeStartedAtMs,
@@ -1025,8 +1057,15 @@ function ReasoningStreamPeek({
       if (!allowEmptyReasoningChrome) {
         return null;
       }
+    } else if (
+      agentMode === "plan" &&
+      busy &&
+      !consolidatedContentForPopover?.trim()
+    ) {
+      /** Plan mode: {@link PlanDiscoverChrome} owns live discover labels; drop duplicate “Thinking” rows. */
+      return null;
     }
-    // Streaming + empty: keep button + popover (live text appears as tokens arrive).
+    // Streaming + empty (instant mode): keep button + popover (live text appears as tokens arrive).
   }
 
   /** Empty primary reasoning text: duration row and/or consolidated reply popover. */
@@ -1052,8 +1091,27 @@ function ReasoningStreamPeek({
     ? REASONING_THINKING_SHIMMER_LABEL_CLASS
     : "text-[11px] font-medium text-tertiary";
 
-  /** Plan-discover phase uses the same shimmer row as “Thinking” (no separate banner). */
-  const streamingThinkingWord = streamingReasoningLabel ?? "Thinking";
+  /** Plan mode: always “Thinking” in the reasoning lane; status lives on {@link PlanDiscoverChrome}. */
+  const streamingThinkingWord = peekPlanDiscoverLabel ?? "Thinking";
+
+  const stampedTrimmed = reasoningLabelProp?.trim();
+  const stampForPlanDiscoverChecks = stampedTrimmed ?? "";
+  const stampedIsPlanDiscover =
+    stampForPlanDiscoverChecks.length > 0 &&
+    (isQuestionnairePlanDiscoverStatusLabel(stampForPlanDiscoverChecks) ||
+      isPlanCardPlanDiscoverStatusLabel(stampForPlanDiscoverChecks) ||
+      isLiveStreamPlanDiscoverStatusLabel(stampForPlanDiscoverChecks));
+
+  const settledButtonLabel =
+    agentMode === "plan"
+      ? stampedTrimmed && !stampedIsPlanDiscover
+        ? settledReasoningLabel(stampedTrimmed)
+        : "Thought"
+      : stampedTrimmed
+        ? settledReasoningLabel(stampedTrimmed)
+        : assistantStreamOpen && peekPlanDiscoverLabel
+          ? settledReasoningLabel(peekPlanDiscoverLabel)
+          : "Thought";
 
   const bodyClass =
     "font-sans text-[12px] leading-relaxed break-words whitespace-pre-wrap text-secondary";
@@ -1162,9 +1220,7 @@ function ReasoningStreamPeek({
             ) : (
               <>
                 <span className={thinkingLabelClass}>
-                  {reasoningLabelProp
-                    ? settledReasoningLabel(reasoningLabelProp)
-                    : "Thought"}
+                  {settledButtonLabel}
                 </span>
                 {effectiveSettled != null ? (
                   <span className="text-[11px] font-medium text-tertiary">
@@ -1217,6 +1273,7 @@ function AssistantModelStreamShell({
         streaming={wireStreaming}
         reasoningElapsedMs={reasoningElapsedMs}
         reasoningLabel={reasoningLabel}
+        assistantStreamOpen={wireStreaming}
       />
     );
   }
@@ -1230,6 +1287,7 @@ function AssistantModelStreamShell({
         streaming={true}
         reasoningElapsedMs={reasoningElapsedMs}
         reasoningLabel={reasoningLabel}
+        assistantStreamOpen={wireStreaming}
       />
     );
   }
@@ -1296,23 +1354,12 @@ function AssistantSegmentedBody({
     -1,
   );
 
-  const { thinkingEpisodeStartedAtMs, streamingReasoningLabel, agentMode } =
-    useHofAgentChat();
+  const { thinkingEpisodeStartedAtMs } = useHofAgentChat();
   const reasoningPhaseEndedAtRef = useRef<number | null>(null);
   const reasoningPhaseWasLiveRef = useRef(false);
   const anyReasoningLive = merged.some((_, idx) =>
     reasoningPhaseTickingLive(merged, idx, lastReasoningIndex, wireStreaming),
   );
-  const lastSeg = merged[merged.length - 1];
-  const contentStreamActive =
-    wireStreaming && lastSeg != null && lastSeg.kind === "content";
-  /** ``streamingReasoningLabel`` only appears on live ``ReasoningStreamPeek``; once reply tokens stream, show the same compact row here. */
-  const showPlanDiscoverDuringReply =
-    agentMode === "plan" &&
-    streamingReasoningLabel != null &&
-    contentStreamActive &&
-    !anyReasoningLive;
-  let planDiscoverInlineInserted = false;
   if (anyReasoningLive) {
     reasoningPhaseWasLiveRef.current = true;
     reasoningPhaseEndedAtRef.current = null;
@@ -1360,7 +1407,13 @@ function AssistantSegmentedBody({
       if (!s.text.trim()) {
         if (emptyReasoningPulse) {
           children.push(
-            <ReasoningStreamPeek key={`seg-r-${i}`} text="" streaming={true} reasoningLabel={reasoningLabel} />,
+            <ReasoningStreamPeek
+              key={`seg-r-${i}`}
+              text=""
+              streaming={true}
+              reasoningLabel={reasoningLabel}
+              assistantStreamOpen={wireStreaming}
+            />,
           );
           continue;
         }
@@ -1374,19 +1427,6 @@ function AssistantSegmentedBody({
           const elapsedForConsolidated = !wireStreaming
             ? persistedReasoningElapsedMs
             : capturedReasoningElapsedMs;
-          if (
-            showPlanDiscoverDuringReply &&
-            !planDiscoverInlineInserted &&
-            nextIsLast
-          ) {
-            children.push(
-              <AgentEarlyThinkingIndicator
-                key="plan-discover-inline"
-                label={streamingReasoningLabel ?? undefined}
-              />,
-            );
-            planDiscoverInlineInserted = true;
-          }
           children.push(
             <div key={`seg-rc-${i}`} className={contentClass}>
               <div className="mb-2">
@@ -1396,6 +1436,7 @@ function AssistantSegmentedBody({
                   reasoningElapsedMs={elapsedForConsolidated}
                   consolidatedContentForPopover={nextEmptyReasoning.text}
                   reasoningLabel={reasoningLabel}
+                  assistantStreamOpen={wireStreaming}
                 />
               </div>
               <AssistantMarkdown source={nextEmptyReasoning.text} />
@@ -1419,6 +1460,7 @@ function AssistantSegmentedBody({
               streaming={false}
               reasoningElapsedMs={persistedReasoningElapsedMs}
               reasoningLabel={reasoningLabel}
+              assistantStreamOpen={wireStreaming}
             />,
           );
           continue;
@@ -1438,6 +1480,7 @@ function AssistantSegmentedBody({
           streaming={reasoningPeekLive}
           reasoningElapsedMs={durationProp}
           reasoningLabel={reasoningLabel}
+          assistantStreamOpen={wireStreaming}
         />,
       );
       continue;
@@ -1448,19 +1491,6 @@ function AssistantSegmentedBody({
       continue;
     }
     if (!s.text.trim() && contentPulse) {
-      if (
-        showPlanDiscoverDuringReply &&
-        !planDiscoverInlineInserted &&
-        isLast
-      ) {
-        children.push(
-          <AgentEarlyThinkingIndicator
-            key="plan-discover-inline"
-            label={streamingReasoningLabel ?? undefined}
-          />,
-        );
-        planDiscoverInlineInserted = true;
-      }
       children.push(
         <div
           key={`seg-c-${i}`}
@@ -1472,19 +1502,6 @@ function AssistantSegmentedBody({
         </div>,
       );
       continue;
-    }
-    if (
-      showPlanDiscoverDuringReply &&
-      !planDiscoverInlineInserted &&
-      isLast
-    ) {
-      children.push(
-        <AgentEarlyThinkingIndicator
-          key="plan-discover-inline"
-          label={streamingReasoningLabel ?? undefined}
-        />,
-      );
-      planDiscoverInlineInserted = true;
     }
     children.push(
       <div key={`seg-c-${i}`} className={contentClass}>
@@ -1559,6 +1576,8 @@ export function LiveBlockView({
    */
   busy?: boolean;
 }) {
+  const { agentMode, planBuiltinLane, planClarificationBarrier } =
+    useHofAgentChat();
   if (b.kind === "thinking_skeleton") {
     return null;
   }
@@ -1595,8 +1614,15 @@ export function LiveBlockView({
     /** Require an in-flight agent request so hydrated/persisted `streaming: true` does not stick a caret. */
     const streamActive = busy && wireStreaming;
     /** Summary often stays `streaming` on the wire until `assistant_done`; hide the caret once any text exists. */
+    const suppressAssistCaretWhileClarifyBuiltin =
+      agentMode === "plan" &&
+      busy &&
+      planBuiltinLane === "clarification" &&
+      planClarificationBarrier == null;
     const streamCaretActive =
-      streamActive && !(isSummary && (anySegText || b.text.trim().length > 0));
+      streamActive &&
+      !(isSummary && (anySegText || b.text.trim().length > 0)) &&
+      !suppressAssistCaretWhileClarifyBuiltin;
     const persistedReasoningMs = b.reasoning_elapsed_ms;
 
     if (afterToolResult || isSummary) {

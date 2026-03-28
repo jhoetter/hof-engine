@@ -96,6 +96,9 @@ export function agentChatDebugNdjson(
     payload.phase = ev.phase;
     payload.discover_phase = ev.discover_phase;
     payload.round = ev.round;
+  } else if (typ === "plan_discover") {
+    payload.subphase = ev.subphase;
+    payload.round = ev.round;
   } else if (typ === "tool_call") {
     payload.name = ev.name;
     payload.tool_call_id = ev.tool_call_id;

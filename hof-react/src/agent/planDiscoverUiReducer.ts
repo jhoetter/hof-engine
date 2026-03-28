@@ -1,7 +1,7 @@
 /**
- * Single source of truth for **where** plan-discover chrome appears and **which timer** drives it.
- * Label resolution stays in {@link planDiscoverStatusLabel}; this layer only maps display strings +
- * UI flags → placement (one surface at a time).
+ * Single source of truth for **where** the plan-discover status row appears and **which timer**
+ * drives it. Label resolution stays in {@link planDiscoverStatusLabel}; this layer only maps
+ * display strings + UI flags → placement (one surface at a time).
  */
 
 import {
@@ -34,7 +34,7 @@ export type PlanDiscoverUiState = {
 };
 
 /**
- * Derives **one** chrome row for plan mode: questionnaire and plan labels sit next to their cards
+ * Derives **one** status row for plan mode: questionnaire and plan labels sit next to their cards
  * when those cards exist; otherwise the same semantic phase uses {@link above_live_stream} with
  * Thinking + the thinking-episode timer (no duplicate questionnaire copy above the stream).
  */
@@ -49,7 +49,7 @@ export function computePlanDiscoverUiState(p: {
   liveBlocksLength: number;
   /**
    * Clarify phase without barrier yet: builtin ``tool_call`` and/or server ``discover_phase:
-   * clarify`` — questionnaire-slot chrome + skeleton instead of live-stream chrome.
+   * clarify`` — questionnaire-slot status row + skeleton instead of live-stream status row.
    */
   pendingQuestionnaireGeneration?: boolean;
 }): PlanDiscoverUiState {

@@ -142,13 +142,12 @@ export function HofAgentMessages({
     (planBuiltinLane === "clarification" || liveBlocks.length > 0);
 
   /**
-   * Plan builtin running but plan text not yet streaming — show a plan card skeleton
-   * so the card slot is not empty while the user sees "Preparing plan".
+   * Plan draft not yet visible (`planPhase === "generating"` with empty preview) — show the plan
+   * card skeleton. This window starts as soon as clarification is submitted (lane may still be
+   * null until `hof_builtin_present_plan` tool_call arrives; do not gate on ``planBuiltinLane``).
    */
   const pendingPlanGeneration =
-    !showPlanCard &&
-    busy &&
-    planBuiltinLane === "plan";
+    planPhase === "generating" && !showPlanCard && busy;
 
   const planDiscoverUi = computePlanDiscoverUiState({
     agentMode,

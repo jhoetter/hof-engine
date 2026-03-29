@@ -2841,6 +2841,18 @@ def _run_agent_chat_stream(
         len(loop_tools),
         chat_mode,
     )
+    # Persist early so terminal sandbox ``curl`` can defer mutations via
+    # ``defer_mutation_if_terminal_agent_http`` (``load_agent_run`` must hit on first tool round).
+    save_agent_run(
+        run_id,
+        {
+            "oa_messages": oa_messages,
+            "model": model,
+            "llm_backend": lm_backend,
+            "rounds": 0,
+            "agent_chat_mode": chat_mode,
+        },
+    )
 
     yield from _maybe_wrap_sandbox(
         policy,

@@ -14,6 +14,27 @@ from hof.agent.state import (
 )
 
 
+def test_defer_mutation_skips_when_run_not_saved(monkeypatch):
+    """HTTP defer requires ``save_agent_run`` (stream persists at ``run_start``)."""
+    policy = AgentPolicy(
+        allowlist_read=frozenset(),
+        allowlist_mutation=frozenset({"create_widget"}),
+        system_prompt_intro="x",
+        sandbox=SandboxConfig(
+            enabled=True,
+            terminal_only_dispatch=True,
+        ),
+    )
+    monkeypatch.setattr("hof.agent.http_mutation_gate.try_get_agent_policy", lambda: policy)
+    out = defer_mutation_if_terminal_agent_http(
+        function_name="create_widget",
+        kwargs={"a": 1},
+        agent_run_id="11111111-1111-1111-1111-111111111111",
+        tool_call_id="tc1",
+    )
+    assert out is None
+
+
 def test_defer_mutation_skips_without_active_run(monkeypatch):
     policy = AgentPolicy(
         allowlist_read=frozenset(),

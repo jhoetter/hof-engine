@@ -2,6 +2,7 @@
 
 import {
   AlertTriangle,
+  List,
   Loader2,
   Mic,
   Paperclip,
@@ -37,6 +38,7 @@ import {
   useAgentVoiceTranscription,
   type AgentVoiceTranscriptionState,
 } from "./useAgentVoiceTranscription";
+import { useMenuDismiss } from "./useMenuDismiss";
 
 const DEFAULT_TRANSCRIBE_PROMPT =
   "Transcribe exactly what is said verbatim. Do not translate.";
@@ -86,6 +88,10 @@ const sendBtnClass =
 
 const MENU_ITEM_CLASS =
   "flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-hover";
+
+/** Ghost control aligned with {@link squareIconBtnClass}: transparent, hover surface. */
+const agentModeTriggerClass =
+  "inline-flex h-9 min-w-[6.5rem] shrink-0 items-center gap-2 rounded-md border-0 bg-transparent px-2 text-[11px] font-medium text-secondary transition-colors hover:bg-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40";
 
 /**
  * Do not put `flex` / `block` on `<dialog>`: Tailwind would override UA `display:none` when closed,
@@ -424,6 +430,8 @@ export function HofAgentComposer({
 
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const attachMenuRef = useRef<HTMLDivElement>(null);
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const modeMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const skillsDialogRef = useRef<HTMLDialogElement>(null);
   const [skillsLoading, setSkillsLoading] = useState(false);
@@ -440,6 +448,9 @@ export function HofAgentComposer({
       return;
     }
     el.style.height = "0px";
+    // Force reflow so scrollHeight reflects the shrunk content (otherwise it can
+    // stick to the previous multi-line height after deleting lines).
+    void el.offsetHeight;
     const next = Math.min(el.scrollHeight, textareaMaxHeightPx);
     el.style.height = `${Math.max(next, 36)}px`;
   }, [textareaMaxHeightPx]);
@@ -448,30 +459,8 @@ export function HofAgentComposer({
     syncTextareaHeight();
   }, [input, voiceInterim, syncTextareaHeight]);
 
-  useEffect(() => {
-    if (!attachMenuOpen) {
-      return;
-    }
-    const onDocDown = (e: MouseEvent) => {
-      if (
-        attachMenuRef.current &&
-        !attachMenuRef.current.contains(e.target as Node)
-      ) {
-        setAttachMenuOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setAttachMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onDocDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [attachMenuOpen]);
+  useMenuDismiss(attachMenuOpen, setAttachMenuOpen, attachMenuRef);
+  useMenuDismiss(modeMenuOpen, setModeMenuOpen, modeMenuRef);
 
   const openAttachPicker = () => {
     fileInputRef.current?.click();
@@ -663,7 +652,10 @@ export function HofAgentComposer({
               aria-label="Add to message"
               aria-expanded={attachMenuOpen}
               aria-haspopup="menu"
-              onClick={() => setAttachMenuOpen((o) => !o)}
+              onClick={() => {
+                setModeMenuOpen(false);
+                setAttachMenuOpen((o) => !o);
+              }}
             >
             {uploadBusy ? (
               <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
@@ -708,32 +700,70 @@ export function HofAgentComposer({
             </div>
           ) : null}
           </div>
-          <div className="relative flex shrink-0 items-center rounded-md border border-border bg-surface text-[11px] font-medium">
+          <div ref={modeMenuRef} className="relative shrink-0">
             <button
               type="button"
               disabled={busy}
-              onClick={() => setAgentMode("instant")}
-              className={`rounded-l-[5px] px-2 py-1 transition-colors ${
-                agentMode === "instant"
-                  ? "bg-foreground text-background"
-                  : "text-secondary hover:text-foreground"
-              }`}
+              aria-label="Agent mode"
+              aria-haspopup="menu"
+              aria-expanded={modeMenuOpen}
+              className={`${agentModeTriggerClass} ${modeMenuOpen ? "bg-hover text-foreground" : ""}`}
+              onClick={() => {
+                setAttachMenuOpen(false);
+                setModeMenuOpen((o) => !o);
+              }}
             >
-              <Sparkles className="mr-1 inline size-3" aria-hidden />
-              Instant
+              {agentMode === "instant" ? (
+                <Sparkles className="size-3 shrink-0" strokeWidth={2} aria-hidden />
+              ) : (
+                <List className="size-3 shrink-0" strokeWidth={2} aria-hidden />
+              )}
+              <span className="min-w-0 flex-1 text-left">
+                {agentMode === "instant" ? "Instant" : "Plan"}
+              </span>
             </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setAgentMode("plan")}
-              className={`rounded-r-[5px] px-2 py-1 transition-colors ${
-                agentMode === "plan"
-                  ? "bg-foreground text-background"
-                  : "text-secondary hover:text-foreground"
-              }`}
-            >
-              Plan
-            </button>
+            {modeMenuOpen ? (
+              <div
+                className="absolute bottom-full left-0 z-50 mb-1 min-w-[13rem] rounded-lg border border-border bg-background py-1 font-sans shadow-lg"
+                role="menu"
+                aria-label="Agent mode"
+              >
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={agentMode === "instant"}
+                  className={`${MENU_ITEM_CLASS} ${agentMode === "instant" ? "bg-hover" : ""}`}
+                  onClick={() => {
+                    setAgentMode("instant");
+                    setModeMenuOpen(false);
+                  }}
+                >
+                  <Sparkles
+                    className="size-4 shrink-0 text-secondary"
+                    strokeWidth={2}
+                    aria-hidden
+                  />
+                  <span>Instant</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={agentMode === "plan"}
+                  className={`${MENU_ITEM_CLASS} ${agentMode === "plan" ? "bg-hover" : ""}`}
+                  onClick={() => {
+                    setAgentMode("plan");
+                    setModeMenuOpen(false);
+                  }}
+                >
+                  <List
+                    className="size-4 shrink-0 text-secondary"
+                    strokeWidth={2}
+                    aria-hidden
+                  />
+                  <span>Plan</span>
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">

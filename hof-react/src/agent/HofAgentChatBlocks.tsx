@@ -23,7 +23,10 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { AssistantMarkdown } from "./AssistantMarkdown";
-import { FunctionResultDisplay } from "./FunctionResultDisplay";
+import {
+  FunctionResultDisplay,
+  isTerminalExecPayload,
+} from "./FunctionResultDisplay";
 import {
   AGENT_CHAT_COLUMN_CLASS,
   CHAT_ASSISTANT_REPLY_BUBBLE_CLASS,
@@ -80,6 +83,69 @@ function formatToolJsonForDialog(raw: string): string {
   }
 }
 
+const HOF_BUILTIN_TERMINAL_EXEC = "hof_builtin_terminal_exec";
+
+/** Max height for inline terminal command/output in the tool card (scroll inside `<pre>`). */
+const TERMINAL_INLINE_MAX_H = "max-h-[min(75vh,40rem)]";
+
+function TerminalToolCallInlineStandalone({ b }: { b: ToolCallBlock }) {
+  const title = toolCallRowTitle(b);
+  const terminalLine = toolCallCliLine(b).trim();
+  return (
+    <div className={AGENT_CHAT_COLUMN_CLASS}>
+      <div className="rounded-lg border border-border bg-surface/40 px-3 py-2.5 text-[12px] leading-snug">
+        <span className="block min-w-0 truncate font-medium text-foreground">
+          {title}
+        </span>
+        {terminalLine ? (
+          <div
+            className="mt-2 overflow-hidden rounded-md border border-border/60 bg-surface/30"
+            aria-label="Terminal command"
+          >
+            <pre
+              className={`${TERMINAL_INLINE_MAX_H} overflow-auto whitespace-pre-wrap break-all bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)] px-2.5 py-2 font-mono text-[10px] text-secondary`}
+            >
+              <span className="text-tertiary select-none" aria-hidden>
+                {"$ "}
+              </span>
+              {terminalLine}
+            </pre>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function TerminalToolResultInlineStandalone({
+  b,
+}: {
+  b: ToolResultBlock & {
+    data: { exit_code: number; output: string };
+  };
+}) {
+  const title = humanizeToolName(b.name);
+  const d = b.data;
+  return (
+    <div
+      className={`${AGENT_CHAT_COLUMN_CLASS} flex min-w-0 gap-2.5 pl-0.5 text-[12px] leading-snug`}
+    >
+      <span className="mt-0.5 shrink-0">
+        <ToolAggregatedStatusGlyph result={b} busy={false} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <span className="font-medium text-foreground">{title}</span>
+        <div
+          className="mt-2 min-w-0 max-w-full overflow-x-auto"
+          aria-label="Tool output"
+        >
+          <FunctionResultDisplay value={d} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Terminal-style command row (`$` + line); outer shell reads as input without a visible section title. */
 function ToolTerminalCommandRow({
   cliLine,
@@ -102,7 +168,9 @@ function ToolTerminalCommandRow({
         className={`overflow-hidden bg-surface/30 ${borderBottom ? "border-b border-border" : ""}`}
         aria-label="Tool command"
       >
-        <div className="flex w-full max-h-32 items-stretch overflow-hidden bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)]">
+        <div
+          className={`flex w-full ${TERMINAL_INLINE_MAX_H} items-stretch overflow-hidden bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)]`}
+        >
         <div
           className={`flex min-h-0 min-w-0 flex-1 items-center py-2 pl-3 ${showJsonBtn ? "pr-0" : "pr-3"}`}
         >
@@ -1917,6 +1985,9 @@ export function LiveBlockView({
     );
   }
   if (b.kind === "tool_call") {
+    if (b.name === HOF_BUILTIN_TERMINAL_EXEC) {
+      return <TerminalToolCallInlineStandalone b={b} />;
+    }
     const title = toolCallRowTitle(b);
     return (
       <div className={`${AGENT_CHAT_COLUMN_CLASS}`}>
@@ -1929,6 +2000,21 @@ export function LiveBlockView({
     );
   }
   if (b.kind === "tool_result") {
+    if (
+      b.name === HOF_BUILTIN_TERMINAL_EXEC &&
+      b.data !== undefined &&
+      isTerminalExecPayload(b.data)
+    ) {
+      return (
+        <TerminalToolResultInlineStandalone
+          b={
+            b as ToolResultBlock & {
+              data: { exit_code: number; output: string };
+            }
+          }
+        />
+      );
+    }
     const title = humanizeToolName(b.name);
     return (
       <div

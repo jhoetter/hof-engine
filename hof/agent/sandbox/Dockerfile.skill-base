@@ -1,0 +1,16 @@
+# Base image for agent terminal skills (extend in apps; copy generated skills/ to /usr/local/bin).
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash ca-certificates curl jq \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+    httpx openpyxl pandas pdfplumber plotly python-pptx requests weasyprint matplotlib
+
+RUN useradd --create-home --shell /bin/bash sandbox
+
+USER sandbox
+WORKDIR /workspace
+
+CMD ["sleep", "infinity"]

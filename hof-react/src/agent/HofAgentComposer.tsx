@@ -462,6 +462,31 @@ export function HofAgentComposer({
   useMenuDismiss(attachMenuOpen, setAttachMenuOpen, attachMenuRef);
   useMenuDismiss(modeMenuOpen, setModeMenuOpen, modeMenuRef);
 
+  useEffect(() => {
+    if (!modeMenuOpen) {
+      return;
+    }
+    const onDocDown = (e: MouseEvent) => {
+      if (
+        modeMenuRef.current &&
+        !modeMenuRef.current.contains(e.target as Node)
+      ) {
+        setModeMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setModeMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [modeMenuOpen]);
+
   const openAttachPicker = () => {
     fileInputRef.current?.click();
     setAttachMenuOpen(false);

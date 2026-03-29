@@ -4,14 +4,14 @@ check: lint test
 	@echo "All checks passed."
 
 lint:
-	ruff check hof/ tests/
-	ruff format --check hof/ tests/
+	uv run ruff check hof/ tests/
+	uv run ruff format --check hof/ tests/
 
 format:
-	ruff format hof/ tests/
+	uv run ruff format hof/ tests/
 
 test:
-	pytest tests/ -m "not integration" -v
+	uv run pytest tests/ -m "not integration" -v
 
 # -----------------------------------------------------------------------
 # dev-component — scaffold a fresh hof app and run it on port 8001

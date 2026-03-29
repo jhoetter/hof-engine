@@ -55,6 +55,7 @@ import type {
   ApprovalBarrier,
   AssistantStreamSegment,
   LiveBlock,
+  MutationAppliedBlock,
   MutationPendingBlock,
   ToolCallBlock,
   ToolResultBlock,
@@ -87,6 +88,47 @@ const HOF_BUILTIN_TERMINAL_EXEC = "hof_builtin_terminal_exec";
 
 /** Max height for inline terminal command/output in the tool card (scroll inside `<pre>`). */
 const TERMINAL_INLINE_MAX_H = "max-h-[min(75vh,40rem)]";
+
+/**
+ * Ground-truth hint from NDJSON `mutation_applied` (server `post_apply_review`), e.g. manager review inbox.
+ * Folded into {@link segmentLiveBlocks} tool groups; must render here — `LiveBlockView` skips `mutation_applied`
+ * to avoid duplicating a standalone row when grouped.
+ */
+export function PostApplyReviewHint({
+  postApplyReview,
+}: {
+  postApplyReview: MutationAppliedBlock["post_apply_review"];
+}) {
+  const { label, url, path } = postApplyReview;
+  const href = (url?.trim() || path?.trim() || "").trim() || undefined;
+  const openInNewTab = Boolean(url?.trim());
+  return (
+    <div
+      className="border-t border-border/60 px-3 py-2.5"
+      role="status"
+      aria-label="Post-apply review hint"
+    >
+      <p className="text-[10px] font-medium uppercase tracking-wide text-tertiary">
+        Review inbox
+      </p>
+      <p className="mt-1 text-[11px] leading-snug text-secondary">
+        {href ? (
+          <a
+            href={href}
+            className="font-medium text-[var(--color-accent)] underline underline-offset-2 hover:opacity-90"
+            target={openInNewTab ? "_blank" : undefined}
+            rel={openInNewTab ? "noopener noreferrer" : undefined}
+          >
+            {label}
+          </a>
+        ) : (
+          <span className="text-foreground">{label}</span>
+        )}
+      </p>
+    </div>
+  );
+}
+
 
 function TerminalToolCallInlineStandalone({ b }: { b: ToolCallBlock }) {
   const title = toolCallRowTitle(b);
@@ -431,6 +473,7 @@ export function ToolGroupCard({
   call,
   mutation,
   result,
+  mutationApplied,
   showApproval,
   approvalItemsForMutation,
   approvalDecisions,
@@ -442,6 +485,8 @@ export function ToolGroupCard({
   call: ToolCallBlock;
   mutation?: MutationPendingBlock;
   result?: ToolResultBlock;
+  /** Present when the mutation ran and the server sent `post_apply_review` (e.g. item in manager inbox). */
+  mutationApplied?: MutationAppliedBlock;
   showApproval: boolean;
   approvalItemsForMutation: {
     pendingId: string;
@@ -477,6 +522,9 @@ export function ToolGroupCard({
   /** Preview / summary inside the card (no placeholder copy while awaiting approval). */
   const showInnerBody = showResultBlock;
   const showMutationCmdDup = Boolean(mutation && cmd && !cmdDupOfLine);
+  const showPostApplyHint = Boolean(mutationApplied);
+  const toolBodyFooter =
+    showInnerBody || showPostApplyHint || showMutationCmdDup;
 
   return (
     <div
@@ -510,7 +558,7 @@ export function ToolGroupCard({
           <ToolTerminalCommandRow
             cliLine={line}
             argumentsStr={call.arguments}
-            borderBottom={Boolean(showInnerBody || showMutationCmdDup)}
+            borderBottom={Boolean(toolBodyFooter)}
           />
           {showInnerBody ? (
             <div
@@ -525,6 +573,9 @@ export function ToolGroupCard({
                 </p>
               )}
             </div>
+          ) : null}
+          {mutationApplied ? (
+            <PostApplyReviewHint postApplyReview={mutationApplied.post_apply_review} />
           ) : null}
           {showMutationCmdDup ? (
             <div className="px-3 pb-2">
@@ -725,6 +776,7 @@ export function RunBlocksList({
                 call={seg.call}
                 mutation={seg.mutation}
                 result={seg.result}
+                mutationApplied={seg.mutationApplied}
                 showApproval={showApproval}
                 approvalItemsForMutation={approvalItemsForMutation}
                 approvalDecisions={approvalDecisions}
@@ -2042,9 +2094,11 @@ export function LiveBlockView({
     );
   }
   if (b.kind === "mutation_applied") {
-    // Inbox / manager-review links are shown in the assistant stream and inline Inbox status;
-    // avoid duplicating the old "Next step" accent box.
-    return null;
+    return (
+      <div className={`${AGENT_CHAT_COLUMN_CLASS}`}>
+        <PostApplyReviewHint postApplyReview={b.post_apply_review} />
+      </div>
+    );
   }
   if (b.kind === "mutation_pending") {
     const title = humanizeToolName(b.name);

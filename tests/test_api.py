@@ -10,6 +10,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from hof.agent.policy import BUILTIN_AGENT_TOOL_NAMES, AgentPolicy
+from hof.agent.sandbox.config import SandboxConfig
+from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
 from hof.api.auth import verify_auth
 from hof.core.registry import registry
 from hof.flows.flow import Flow
@@ -287,6 +289,43 @@ class TestAgentRoutes:
         assert read["parameters"]["type"] == "object"
         props = read["parameters"].get("properties") or {}
         assert "x" in props
+
+    def test_agent_tools_terminal_only_lists_domain_not_terminal_transport(self, client):
+        """Skills catalog keeps domain tools when the model only sees terminal exec."""
+
+        @function
+        def domain_list_rows() -> dict:
+            """List rows."""
+            return {}
+
+        @function
+        def domain_create_row() -> dict:
+            """Create row."""
+            return {}
+
+        importlib.reload(importlib.import_module("hof.agent.builtin_tools"))
+
+        policy = AgentPolicy(
+            allowlist_read=frozenset({"domain_list_rows"}),
+            allowlist_mutation=frozenset({"domain_create_row"}),
+            system_prompt_intro="test ",
+            sandbox=SandboxConfig(
+                enabled=True,
+                terminal_only_dispatch=True,
+                builtins_when_terminal_only=frozenset({"hof_builtin_present_plan"}),
+            ),
+        )
+        assert HOF_BUILTIN_TERMINAL_EXEC in policy.effective_allowlist()
+        assert HOF_BUILTIN_TERMINAL_EXEC not in policy.skills_catalog_allowlist()
+        with patch("hof.api.routes.agent.try_get_agent_policy", return_value=policy):
+            response = client.get("/api/agent/tools")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["configured"] is True
+        names = {t["name"] for t in data["tools"]}
+        assert "domain_list_rows" in names
+        assert "domain_create_row" in names
+        assert HOF_BUILTIN_TERMINAL_EXEC not in names
 
 
 # ---------------------------------------------------------------------------

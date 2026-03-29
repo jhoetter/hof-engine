@@ -109,6 +109,10 @@ These **read-only** tools are always part of the effective allowlist (`AgentPoli
 
 They appear in `GET /api/agent/tools` like any other registered function once discovery has run (same as the dev server and CLI bootstrap).
 
+## Sandbox terminal (`hof_builtin_terminal_exec`)
+
+When **`AgentPolicy.sandbox`** is enabled, **`hof_builtin_terminal_exec`** runs a command in a pooled Docker image (**`hof-skill-base`** by default). The image installs **`/usr/local/bin/hof`**: **`hof fn list`**, **`hof fn describe <name>`**, **`hof fn <name> '<json>'`**, using **`API_BASE_URL`** / **`API_TOKEN`** and **`HOF_AGENT_SKILLS_CATALOG`** (from **`skills_catalog_allowlist()`**). Apps with **`terminal_only_dispatch`** should steer the model to this CLI instead of hand-written **`curl`** so behavior matches the host **`hof fn`** mental model. Per-exec **`HOF_AGENT_RUN_ID`** / **`HOF_AGENT_TOOL_CALL_ID`** are merged for **`docker exec`** so mutation POSTs can defer like direct tools.
+
 ## Plan discovery (`plan_discover`)
 
 System text (`_AGENT_CHAT_PLAN_DISCOVER_PREFIX` / suffix / `_AGENT_CHAT_PLAN_DISCOVER_FINAL_LOCK` in `hof/agent/stream.py`) instructs the model to **explore briefly** (reads inform questions, not full deliverables), then **`hof_builtin_present_plan_clarification`**, then after user answers **`hof_builtin_present_plan`**. The **final lock** block is appended last so it wins over app-specific “answer from tools” wording. Apps may add domain guidance in `system_prompt_intro` that aligns with that sequence.

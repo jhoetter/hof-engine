@@ -311,6 +311,19 @@ class AgentPolicy:
             return base | frozenset({HOF_BUILTIN_TERMINAL_EXEC})
         return base
 
+    def skills_catalog_allowlist(self) -> frozenset[str]:
+        """Logical tools for ``GET /api/agent/tools`` (domain read/mutation + plan builtins).
+
+        Unlike :meth:`effective_allowlist`, this always includes ``allowlist_read`` and
+        ``allowlist_mutation`` even when ``terminal_only_dispatch`` hides them from the model.
+        The terminal transport tool is never listed.
+        """
+        base = frozenset(self.allowlist_read | self.allowlist_mutation | BUILTIN_AGENT_TOOL_NAMES)
+        sc = self.sandbox.with_env_overrides() if self.sandbox is not None else None
+        if sc is not None and sc.enabled and sc.terminal_only_dispatch:
+            base = base | frozenset(sc.builtins_when_terminal_only)
+        return base - frozenset({HOF_BUILTIN_TERMINAL_EXEC})
+
     def rationale_for(self, function_name: str) -> str | None:
         key = (function_name or "").strip()
         return self.tool_internal_rationale.get(key)

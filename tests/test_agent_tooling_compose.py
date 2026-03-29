@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from hof.agent.policy import AgentPolicy, configure_agent
+from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
 from hof.agent.tooling import (
     AGENT_TOOL_DESCRIPTION_MAX_CHARS,
     AGENT_TOOL_DISPLAY_TITLE_KEY,
@@ -204,3 +205,21 @@ def test_format_cli_line_omits_display_title() -> None:
     assert AGENT_TOOL_DISPLAY_TITLE_KEY not in line
     assert "List page" not in line
     assert "--page" in line
+
+
+def test_format_cli_line_terminal_exec_hof_fn_json_to_flags() -> None:
+    """Sandbox ``hof fn name '<json>'`` is shown as pseudo-CLI flags (same as direct calls)."""
+    wire = json.dumps(
+        {
+            "command": (
+                "hof fn create_expense "
+                '\'{"description":"Coffee","amount":12.5,"date":"2026-03-29","category":"Food"}\''
+            ),
+        },
+    )
+    line = format_cli_line(HOF_BUILTIN_TERMINAL_EXEC, wire, max_cli_line_chars=500)
+    assert "hof fn create_expense" in line
+    assert "--description" in line
+    assert "Coffee" in line
+    assert "--amount" in line
+    assert "'{\\" not in line

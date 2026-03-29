@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shlex
 import threading
 from typing import Any
@@ -285,10 +286,71 @@ def _redact_for_cli(obj: Any) -> Any:
     return obj
 
 
+_TERMINAL_HOF_FN_RE = re.compile(r"\bhof\s+fn\s+([a-zA-Z0-9_]+)")
+
+
+def _hof_fn_shell_to_pseudo_cli(cmd: str, cap: int) -> str | None:
+    """Turn ``hof fn <name> '<json>'`` into the same pseudo-CLI as :func:`format_cli_line`."""
+    m = re.search(r"\bhof\s+fn\s+([a-zA-Z0-9_]+)\s*", cmd)
+    if not m:
+        return None
+    fn_name = m.group(1)
+    if fn_name in ("list", "describe", "help"):
+        return None
+    rest = cmd[m.end() :].strip()
+    if not rest:
+        return f"hof fn {fn_name}"
+    if (rest.startswith("'") and rest.endswith("'")) or (
+        rest.startswith('"') and rest.endswith('"')
+    ):
+        rest = rest[1:-1]
+    try:
+        body = json.loads(rest)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(body, dict):
+        args_wire = json.dumps(body, ensure_ascii=False)
+        return format_cli_line(fn_name, args_wire, max_cli_line_chars=cap)
+    compact = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+    line = f"hof fn {fn_name} {compact}"
+    if len(line) > cap:
+        return line[: cap - 1] + "…"
+    return line
+
+
+def _format_terminal_exec_cli_line(wire: str, cap: int) -> str:
+    """For ``hof_builtin_terminal_exec``, show the shell command itself, not the wrapper."""
+    from hof.agent.sandbox.mutation_bridge import (
+        parse_terminal_exec_command,
+    )
+
+    cmd = parse_terminal_exec_command(wire)
+    if not cmd:
+        return "(terminal)"
+    pseudo = _hof_fn_shell_to_pseudo_cli(cmd, cap)
+    if pseudo:
+        return pseudo
+    fn_match = _TERMINAL_HOF_FN_RE.search(cmd)
+    if fn_match:
+        fn_name = fn_match.group(1)
+        return f"hof fn {fn_name}" if len(cmd) > cap else cmd
+    if len(cmd) > cap:
+        cmd = cmd[: cap - 1] + "…"
+    return cmd
+
+
+
+
 def format_cli_line(name: str, arguments_json: str, *, max_cli_line_chars: int) -> str:
     """Human-readable pseudo-CLI for UI/TUI (not executed)."""
+    from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
+
     raw = arguments_json or "{}"
     wire, _ = split_agent_tool_display_metadata(raw)
+
+    if name == HOF_BUILTIN_TERMINAL_EXEC:
+        return _format_terminal_exec_cli_line(wire, max_cli_line_chars)
+
     try:
         parsed = json.loads(wire)
         if not isinstance(parsed, dict):

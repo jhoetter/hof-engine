@@ -59,3 +59,9 @@ export const HLJS_SCOPED_CSS = `
 .hof-agent-md .hljs-emphasis { font-style: italic; }
 .hof-agent-md .hljs-strong { font-weight: 600; }
 `.trim();
+
+/** Same token map as {@link HLJS_SCOPED_CSS}, scoped for terminal command `<pre>` (see `TerminalCommandHighlight`). */
+export const TERMINAL_CMD_HLJS_SCOPED_CSS = HLJS_SCOPED_CSS.replace(
+  /\.hof-agent-md/g,
+  ".hof-terminal-cmd",
+);

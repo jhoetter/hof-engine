@@ -34,6 +34,10 @@ from hof.agent.sandbox.context import (
     set_sandbox_run,
     unbind_sandbox_run,
 )
+from hof.agent.sandbox.mutation_bridge import (
+    parse_terminal_exec_command,
+    terminal_exec_command_targets_mutation,
+)
 from hof.agent.state import (
     delete_agent_run,
     delete_pending,
@@ -60,7 +64,7 @@ logger = logging.getLogger(__name__)
 def _cli_line_cap_for_tool(name: str, base: int) -> int:
     """Long ``hof_builtin_terminal_exec`` commands need a higher cap than generic tools."""
     if name == HOF_BUILTIN_TERMINAL_EXEC:
-        return max(base, 12_000)
+        return max(base, 120_000)
     return base
 
 
@@ -521,9 +525,16 @@ def _try_coerce_terminal_exec_mutation_events(
     if isinstance(preview, dict):
         tr_pending["data"] = preview
     ph_obj: dict[str, Any] = {
+        "status": "success",
         "pending_confirmation": True,
         "pending_id": pid,
         "function": fname,
+        "next_step": "STOP",
+        "instruction": (
+            "The mutation was successfully received and is now pending user approval. "
+            "Your turn is DONE. Do NOT call any more tools. Do NOT retry or probe. "
+            "Write a brief confirmation message and end your turn."
+        ),
     }
     if isinstance(preview, dict):
         ph_obj["preview"] = preview
@@ -1838,6 +1849,21 @@ def _run_agent_llm_tool_loop(
     _discover_explored = False
     _clarification_retries = 0
     _max_clarification_retries = 3
+
+    # Ensure the agent run exists in state so sandbox curl can defer mutations via
+    # ``defer_mutation_if_terminal_agent_http`` (which calls ``load_agent_run``).
+    # Critical after resume paths that ``delete_agent_run`` before re-entering this loop.
+    save_agent_run(
+        run_id,
+        {
+            "oa_messages": oa_messages,
+            "model": model,
+            "llm_backend": lm_backend,
+            "rounds": rounds,
+            "agent_chat_mode": agent_chat_mode,
+        },
+    )
+
     try:
         while rounds < max_rounds:
             rounds += 1
@@ -2369,6 +2395,52 @@ def _run_agent_llm_tool_loop(
                             tid,
                         )
                     else:
+                        if (
+                            pending_ids
+                            and name == HOF_BUILTIN_TERMINAL_EXEC
+                        ):
+                            cmd = parse_terminal_exec_command(args_wire)
+                            if terminal_exec_command_targets_mutation(
+                                cmd,
+                                mutation_allowlist,
+                            ):
+                                skip_payload: dict[str, Any] = {
+                                    "skipped": True,
+                                    "reason": "mutation_already_pending_this_round",
+                                    "detail": (
+                                        "A mutation is already awaiting confirmation for this "
+                                        "assistant turn. Do not run another mutation until the "
+                                        "user confirms or rejects in the UI."
+                                    ),
+                                }
+                                skip_json = json.dumps(skip_payload)
+                                tr_skip: dict[str, Any] = {
+                                    "type": "tool_result",
+                                    "name": name,
+                                    "summary": (
+                                        "Skipped: mutation already awaiting confirmation "
+                                        "this round."
+                                    ),
+                                    "status_code": 409,
+                                    "tool_call_id": tid,
+                                    "ok": False,
+                                    "data": skip_payload,
+                                }
+                                yield tr_skip
+                                oa_messages.append(
+                                    {
+                                        "role": "tool",
+                                        "tool_call_id": tid,
+                                        "content": skip_json,
+                                    },
+                                )
+                                logger.info(
+                                    "agent_chat terminal_exec mutation_skip run_id=%s "
+                                    "tool_call_id=%s",
+                                    run_id,
+                                    tid,
+                                )
+                                continue
                         out_json, summary = execute_tool(
                             name,
                             args_wire,
@@ -2960,6 +3032,9 @@ def _run_agent_resume_stream(
         yield {"type": "error", "detail": str(exc)}
         return
     allowlist = policy.effective_allowlist()
+    # Confirmed mutations must be executable even in terminal-only dispatch
+    # where effective_allowlist only contains builtins.
+    exec_allowlist = allowlist | policy.allowlist_mutation
     tools = openai_tool_specs(allowlist)
 
     try:
@@ -3011,7 +3086,7 @@ def _run_agent_resume_stream(
                 out_json, _s = execute_tool(
                     fname,
                     args,
-                    allowlist,
+                    exec_allowlist,
                     max_tool_output_chars=max_tool_output_chars,
                     run_id=rid,
                 )
@@ -3153,6 +3228,23 @@ def _run_agent_resume_stream(
             agent_chat_mode=resume_chat_mode,
         )
         return
+
+    # Tell the model which mutations were applied so it doesn't repeat them.
+    _applied = [e for e in batch_entries if e.confirmed]
+    _rejected = [e for e in batch_entries if not e.confirmed]
+    _parts: list[str] = []
+    for e in _applied:
+        _parts.append(f"✓ {e.function_name} — confirmed and executed.")
+    for e in _rejected:
+        _parts.append(f"✗ {e.function_name} — rejected by user.")
+    if _parts:
+        _resume_note = (
+            "Mutations resolved by the user:\n"
+            + "\n".join(_parts)
+            + "\nDo NOT repeat any confirmed mutation. "
+            "Continue only if there is remaining work."
+        )
+        oa_messages.append({"role": "user", "content": _resume_note})
 
     delete_agent_run(rid)
     yield {"type": "resume_start", "run_id": rid, "model": model, "continuation": True}

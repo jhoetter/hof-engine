@@ -746,6 +746,13 @@ def _sandbox_api_environment() -> dict[str, str]:
                     (os.environ.get("HOF_SANDBOX_BASIC_USER") or "").strip() or default_user
                 )
                 env["HOF_BASIC_PASSWORD"] = basic_pw
+    pol = try_get_agent_policy()
+    if pol is not None:
+        try:
+            cat = pol.skills_catalog_allowlist()
+            env["HOF_AGENT_SKILLS_CATALOG"] = "\n".join(sorted(cat))
+        except Exception:
+            logger.debug("sandbox: could not build HOF_AGENT_SKILLS_CATALOG", exc_info=True)
     return env
 
 
@@ -764,14 +771,17 @@ def _sandbox_per_exec_agent_headers_env() -> dict[str, str]:
 @function(
     name="hof_builtin_terminal_exec",
     tool_summary=(
-        "Run a shell command in the isolated sandbox container (workspace under /workspace). "
-        "Use CLI skills and curl against API_BASE_URL with API_TOKEN when configured."
+        "Run a shell command in the isolated sandbox (workspace under /workspace). "
+        "Prefer **`hof fn list`**, **`hof fn describe <name>`**, **`hof fn <name> '<json>'`** "
+        "(installed in the container, same as the host Hof CLI). Use raw curl only when needed."
     ),
     when_to_use=(
-        "For piping, Python scripts, pip install, jq, and calling generated skill CLIs — "
-        "the only way to reach app data when terminal-only dispatch is enabled."
+        "For normal shell work (python, jq, pipes) and for app data via **`hof fn …`** or "
+        "generated `list-*` CLIs — the path to skills when terminal-only dispatch is enabled."
     ),
-    when_not_to_use="Never for direct JSON tool calls to domain functions; those are not exposed.",
+    when_not_to_use=(
+        "Not for separate JSON tools to domain functions; those are not exposed to the model."
+    ),
 )
 def hof_builtin_terminal_exec(command: str) -> dict[str, Any]:
     """Execute ``command`` via ``docker exec`` in a pooled container (see ``hof.agent.sandbox``)."""

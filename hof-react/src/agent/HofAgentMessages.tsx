@@ -16,6 +16,8 @@ import { HofAgentPlanClarificationCardSkeleton } from "./HofAgentPlanClarificati
 import { HofAgentPlanCard } from "./HofAgentPlanCard";
 import { HofAgentPlanCardSkeleton } from "./HofAgentPlanCardSkeleton";
 import { AgentEarlyThinkingIndicator } from "./HofAgentChatBlocks";
+import { TerminalAnsiStyle } from "./terminalAnsiHtml";
+import { TerminalCommandHljsStyle } from "./terminalCommandHighlight";
 import { PlanSection } from "./PlanSection";
 import { computePlanDiscoverUiState } from "./planDiscoverUiReducer";
 import { visiblePlanMarkdownPreview } from "./planMarkdownTodos";
@@ -471,6 +473,8 @@ export function HofAgentMessages({
 
   return (
     <div className={rootClass}>
+      <TerminalCommandHljsStyle />
+      <TerminalAnsiStyle />
       {conversationEmpty ? (
         <div
           className={`${contentClassName} flex min-h-0 flex-1 flex-col justify-center !py-0`.trim()}

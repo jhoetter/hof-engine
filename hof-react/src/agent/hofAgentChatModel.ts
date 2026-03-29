@@ -240,6 +240,91 @@ export function humanizeToolName(name: string): string {
     .join(" ");
 }
 
+/** Wire name for Docker-backed terminal transport (not the domain function). */
+export const HOF_BUILTIN_TERMINAL_EXEC = "hof_builtin_terminal_exec";
+
+/**
+ * Extract domain `@function` name from a shell snippet inside terminal exec (`hof fn …` or `…/api/functions/<name>`).
+ */
+export function extractFunctionNameFromShellCommand(cmd: string): string | null {
+  const t = cmd.trim();
+  if (!t) {
+    return null;
+  }
+  const hofFn = /\bhof\s+fn\s+([a-zA-Z0-9_]+)/.exec(t);
+  if (hofFn?.[1]) {
+    return hofFn[1].trim();
+  }
+  const apiFn = /\/api\/functions\/([a-zA-Z0-9_]+)/.exec(t);
+  if (apiFn?.[1]) {
+    return apiFn[1].trim();
+  }
+  return null;
+}
+
+/**
+ * From `hof_builtin_terminal_exec` JSON arguments, resolve the underlying domain function name for UI titles / CLI.
+ */
+export function underlyingFunctionFromTerminalExecArguments(
+  argumentsJson: string | undefined,
+): string | null {
+  if (!argumentsJson?.trim()) {
+    return null;
+  }
+  let o: Record<string, unknown>;
+  try {
+    const p = JSON.parse(argumentsJson) as unknown;
+    if (!p || typeof p !== "object" || Array.isArray(p)) {
+      return null;
+    }
+    o = p as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const cmd = typeof o.command === "string" ? o.command : "";
+  return extractFunctionNameFromShellCommand(cmd);
+}
+
+/**
+ * Extract the raw shell command string from terminal exec arguments JSON.
+ * Returns null when parsing fails or `command` is missing.
+ */
+export function rawShellCommandFromTerminalExecArguments(
+  argumentsJson: string | undefined,
+): string | null {
+  if (!argumentsJson?.trim()) {
+    return null;
+  }
+  try {
+    const p = JSON.parse(argumentsJson) as unknown;
+    if (!p || typeof p !== "object" || Array.isArray(p)) {
+      return null;
+    }
+    const o = p as Record<string, unknown>;
+    const cmd = typeof o.command === "string" ? o.command.trim() : "";
+    return cmd || null;
+  } catch {
+    return null;
+  }
+}
+
+function looksLikeTerminalTransportCli(line: string): boolean {
+  const t = line.trim();
+  if (!t) {
+    return false;
+  }
+  if (/curl\s+/i.test(t)) {
+    return true;
+  }
+  if (/\bhof\s+fn\s+hof_builtin_terminal_exec\b/i.test(t)) {
+    return true;
+  }
+  if (t.includes("hof_builtin_terminal_exec")) {
+    return true;
+  }
+  return false;
+}
+
 const _TOOL_TITLE_ATTACHMENT_EXT_RE =
   /\.(pdf|png|jpe?g|gif|webp|csv|xlsx?|txt)$/i;
 
@@ -400,9 +485,14 @@ export function toolCallRowTitle(call: {
   displayTitle?: string;
   arguments?: string;
 }): string {
-  const base = humanizeToolName(call.name);
+  const effectiveName =
+    call.name.trim() === HOF_BUILTIN_TERMINAL_EXEC
+      ? (underlyingFunctionFromTerminalExecArguments(call.arguments) ??
+        call.name)
+      : call.name;
+  const base = humanizeToolName(effectiveName);
   const dt = call.displayTitle?.trim();
-  const ctx = toolRowContextFromArguments(call.name, call.arguments);
+  const ctx = toolRowContextFromArguments(effectiveName, call.arguments);
 
   if (dt) {
     if (_looksLikeRichDisplayTitle(dt)) {
@@ -1705,21 +1795,150 @@ function cliLineLooksLikeHttpFunctionPost(line: string): boolean {
   return /^POST\s+\/api\/functions\/\S+/i.test(line.trim());
 }
 
+function shlexQuotePseudo(s: string): string {
+  if (!/[\s'"\\]/.test(s)) {
+    return s;
+  }
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Mirror server ``hof.agent.tooling._hof_fn_shell_to_pseudo_cli``: turn
+ * ``hof fn &lt;name&gt; '&lt;json&gt;'`` into ``hof fn &lt;name&gt; --k v`` for flat objects.
+ */
+export function pseudoHofFnCliFromShellCommand(
+  cmd: string,
+  maxChars: number,
+): string | null {
+  const m = /\bhof\s+fn\s+([a-zA-Z0-9_]+)\s*/.exec(cmd);
+  if (!m) {
+    return null;
+  }
+  const fnName = m[1];
+  if (fnName === "list" || fnName === "describe" || fnName === "help") {
+    return null;
+  }
+  let rest = cmd.slice(m.index + m[0].length).trim();
+  if (!rest) {
+    return `hof fn ${fnName}`;
+  }
+  if (
+    (rest.startsWith("'") && rest.endsWith("'")) ||
+    (rest.startsWith('"') && rest.endsWith('"'))
+  ) {
+    rest = rest.slice(1, -1);
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(rest);
+  } catch {
+    return null;
+  }
+  if (body === null || typeof body !== "object") {
+    const compact = JSON.stringify(body);
+    const line = `hof fn ${fnName} ${compact}`;
+    return line.length > maxChars ? `${line.slice(0, maxChars - 1)}…` : line;
+  }
+  if (Array.isArray(body)) {
+    const compact = JSON.stringify(body);
+    const line = `hof fn ${fnName} ${compact}`;
+    return line.length > maxChars ? `${line.slice(0, maxChars - 1)}…` : line;
+  }
+  const o = body as Record<string, unknown>;
+  let nested = false;
+  for (const v of Object.values(o)) {
+    if (v !== null && typeof v === "object") {
+      nested = true;
+      break;
+    }
+  }
+  if (nested) {
+    const compact = JSON.stringify(o);
+    const line = `hof fn ${fnName} ${compact}`;
+    return line.length > maxChars ? `${line.slice(0, maxChars - 1)}…` : line;
+  }
+  const keys = Object.keys(o).sort((a, b) => a.localeCompare(b));
+  const parts: string[] = ["hof", "fn", fnName];
+  for (const k of keys) {
+    const v = o[k];
+    if (v === true) {
+      parts.push(`--${k}`);
+    } else if (v === false) {
+      parts.push(`--${k}`, "false");
+    } else if (v === null) {
+      parts.push(`--${k}`, "null");
+    } else {
+      parts.push(`--${k}`, shlexQuotePseudo(String(v)));
+    }
+  }
+  const line = parts.join(" ");
+  return line.length > maxChars ? `${line.slice(0, maxChars - 1)}…` : line;
+}
+
 /**
  * Single source of truth for pseudo-CLI lines in the assistant (tool card, pending rows, barrier).
  * Prefer server ``cli_line`` unless it is the old HTTP-style line and ``argumentsJson`` can replace it.
+ * For ``hof_builtin_terminal_exec``, prefer ``hof fn <underlying_domain_fn>`` when the command is transport (curl / wrapper).
  */
 export function normalizeAgentCliDisplayLine(
   name: string,
   cliLine: string | undefined,
   argumentsJson: string | undefined,
 ): string {
+  const raw = cliLine?.trim();
+  const isTerminal = name.trim() === HOF_BUILTIN_TERMINAL_EXEC;
+  const underlying = isTerminal
+    ? underlyingFunctionFromTerminalExecArguments(argumentsJson)
+    : null;
+
+  if (isTerminal && !underlying) {
+    const shellCmd = rawShellCommandFromTerminalExecArguments(argumentsJson);
+    if (shellCmd) {
+      const pseudo = pseudoHofFnCliFromShellCommand(shellCmd, 8000);
+      if (pseudo) {
+        return pseudo;
+      }
+      return shellCmd;
+    }
+    if (!raw) {
+      return "(terminal)";
+    }
+    if (looksLikeTerminalTransportCli(raw)) {
+      return "(terminal)";
+    }
+    return raw;
+  }
+
+  if (isTerminal && underlying) {
+    const shellCmd = rawShellCommandFromTerminalExecArguments(argumentsJson);
+    if (shellCmd) {
+      const pseudo = pseudoHofFnCliFromShellCommand(shellCmd, 8000);
+      if (pseudo) {
+        return pseudo;
+      }
+    }
+    const synthetic = `hof fn ${underlying}`;
+    if (!raw) {
+      return synthetic;
+    }
+    if (cliLineLooksLikeHttpFunctionPost(raw)) {
+      return synthetic;
+    }
+    if (looksLikeTerminalTransportCli(raw)) {
+      return synthetic;
+    }
+    if (raw.length > 160 && /\{[\s\S]*"[^"]+"\s*:/.test(raw)) {
+      return synthetic;
+    }
+    return raw;
+  }
+
   const args = argumentsJson?.trim() ?? "";
   const fallback =
     name && args
       ? `hof fn ${name} ${args.length > 220 ? `${args.slice(0, 217)}…` : args}`
       : name || "(tool)";
-  const raw = cliLine?.trim();
+
   if (!raw) {
     return fallback;
   }
@@ -2030,6 +2249,9 @@ export function barrierMatchesApprovalBlock(
 ): boolean {
   const br = barrier.runId.trim();
   const tr = blockRunId.trim();
+  if (br !== "" && tr !== "" && br !== tr) {
+    return false;
+  }
   if (br !== "" && tr !== "" && br === tr) {
     return true;
   }

@@ -81,6 +81,7 @@ export {
 export {
   FunctionResultDisplay,
   isTerminalExecPayload,
+  type FunctionResultDisplayVariant,
 } from "./agent/FunctionResultDisplay";
 export { useHofTable } from "./hooks/useHofTable";
 export { useHofFunction } from "./hooks/useHofFunction";

@@ -13,6 +13,7 @@ import {
 import { Loader2, MoreHorizontal, Pin } from "lucide-react";
 
 import type { HofAgentConversationOption } from "./HofAgentConversationSelect";
+import { useMenuDismiss } from "./useMenuDismiss";
 
 const ROW_MENU_ITEM_CLASS =
   "flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-hover";
@@ -66,30 +67,11 @@ export function HofAgentConversationPanel({
   const [openMenuForId, setOpenMenuForId] = useState<string | null>(null);
   const menuContainerRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!openMenuForId) {
-      return;
-    }
-    const onDocDown = (e: MouseEvent) => {
-      if (
-        menuContainerRef.current &&
-        !menuContainerRef.current.contains(e.target as Node)
-      ) {
-        setOpenMenuForId(null);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setOpenMenuForId(null);
-      }
-    };
-    document.addEventListener("mousedown", onDocDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [openMenuForId]);
+  useMenuDismiss(
+    Boolean(openMenuForId),
+    () => setOpenMenuForId(null),
+    menuContainerRef,
+  );
 
   const closeMenu = useCallback(() => {
     setOpenMenuForId(null);

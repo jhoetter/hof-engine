@@ -38,6 +38,7 @@ import {
   useAgentVoiceTranscription,
   type AgentVoiceTranscriptionState,
 } from "./useAgentVoiceTranscription";
+import { useMenuDismiss } from "./useMenuDismiss";
 
 const DEFAULT_TRANSCRIBE_PROMPT =
   "Transcribe exactly what is said verbatim. Do not translate.";
@@ -458,55 +459,8 @@ export function HofAgentComposer({
     syncTextareaHeight();
   }, [input, voiceInterim, syncTextareaHeight]);
 
-  useEffect(() => {
-    if (!attachMenuOpen) {
-      return;
-    }
-    const onDocDown = (e: MouseEvent) => {
-      if (
-        attachMenuRef.current &&
-        !attachMenuRef.current.contains(e.target as Node)
-      ) {
-        setAttachMenuOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setAttachMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onDocDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [attachMenuOpen]);
-
-  useEffect(() => {
-    if (!modeMenuOpen) {
-      return;
-    }
-    const onDocDown = (e: MouseEvent) => {
-      if (
-        modeMenuRef.current &&
-        !modeMenuRef.current.contains(e.target as Node)
-      ) {
-        setModeMenuOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setModeMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onDocDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [modeMenuOpen]);
+  useMenuDismiss(attachMenuOpen, setAttachMenuOpen, attachMenuRef);
+  useMenuDismiss(modeMenuOpen, setModeMenuOpen, modeMenuRef);
 
   const openAttachPicker = () => {
     fileInputRef.current?.click();

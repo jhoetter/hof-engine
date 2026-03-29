@@ -136,7 +136,11 @@ class ContainerPool:
             try:
                 c = client.containers.get(pc.container_id)
                 c.exec_run(
-                    ["bash", "-lc", "rm -rf /workspace/* /tmp/* 2>/dev/null || true"],
+                    [
+                        "bash",
+                        "-lc",
+                        "shopt -s dotglob; rm -rf /workspace/* /tmp/* 2>/dev/null || true",
+                    ],
                 )
             except NotFound:
                 return
@@ -169,6 +173,21 @@ class ContainerPool:
         except Exception:
             logger.debug("sandbox pool: destroy failed", exc_info=True)
 
+    def shutdown(self) -> None:
+        """Shutdown the pool by stopping and removing all idle containers."""
+        with self._lock:
+            client = self._client()
+            for pc in self._idle:
+                try:
+                    c = client.containers.get(pc.container_id)
+                    c.stop(timeout=5)
+                    c.remove(force=True)
+                except NotFound:
+                    pass
+                except Exception:
+                    logger.debug("sandbox pool: shutdown failed for container", exc_info=True)
+            self._idle.clear()
+
 
 _pool_lock = threading.Lock()
 _global_pool: ContainerPool | None = None
@@ -190,6 +209,7 @@ def get_container_pool(config: Any) -> ContainerPool:
     with _pool_lock:
         if _global_pool is not None and _global_pool_key == key:
             return _global_pool
+        old_pool = _global_pool
         _global_pool = ContainerPool(
             image=config.image,
             pool_size=config.pool_size,
@@ -200,4 +220,6 @@ def get_container_pool(config: Any) -> ContainerPool:
             pool_max_idle_sec=config.pool_max_idle_sec,
         )
         _global_pool_key = key
+        if old_pool is not None:
+            old_pool.shutdown()
         return _global_pool

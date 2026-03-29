@@ -48,8 +48,9 @@ def schema_cmd(
     console.print("[bold]Datasets[/bold] (id → list_function / get_sql_function)")
     for row in ds:
         console.print(
-            f"  [cyan]{row.get('id')}[/] → {row.get('list_function')} / {row.get('get_sql_function')} "
-            f"(default sort: {row.get('default_sort_by')} {row.get('default_sort_dir')})",
+            f"  [cyan]{row.get('id')}[/] → {row.get('list_function')} / "
+            f"{row.get('get_sql_function')} (default sort: {row.get('default_sort_by')} "
+            f"{row.get('default_sort_dir')})",
         )
     note = data.get("note")
     if note:
@@ -67,7 +68,12 @@ def sql_cmd(
         help="Dataset id: expenses | expense_overview | revenues | budgets | receipt_documents",
     ),
     page: int = typer.Option(1, "--page", "-p", help="1-based page."),
-    page_size: int = typer.Option(25, "--page-size", "-n", help="Rows per page (cap in app if large)."),
+    page_size: int = typer.Option(
+        25,
+        "--page-size",
+        "-n",
+        help="Rows per page (cap in app if large).",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Print raw JSON (sql + note)."),
 ) -> None:
     """Fetch compiled SQL for a named dataset (``get_dataset_list_sql``)."""

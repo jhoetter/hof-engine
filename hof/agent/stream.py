@@ -34,10 +34,6 @@ from hof.agent.sandbox.context import (
     set_sandbox_run,
     unbind_sandbox_run,
 )
-from hof.agent.sandbox.mutation_bridge import (
-    parse_terminal_exec_command,
-    terminal_exec_command_targets_mutation,
-)
 from hof.agent.state import (
     delete_agent_run,
     delete_pending,
@@ -2395,52 +2391,6 @@ def _run_agent_llm_tool_loop(
                             tid,
                         )
                     else:
-                        if (
-                            pending_ids
-                            and name == HOF_BUILTIN_TERMINAL_EXEC
-                        ):
-                            cmd = parse_terminal_exec_command(args_wire)
-                            if terminal_exec_command_targets_mutation(
-                                cmd,
-                                mutation_allowlist,
-                            ):
-                                skip_payload: dict[str, Any] = {
-                                    "skipped": True,
-                                    "reason": "mutation_already_pending_this_round",
-                                    "detail": (
-                                        "A mutation is already awaiting confirmation for this "
-                                        "assistant turn. Do not run another mutation until the "
-                                        "user confirms or rejects in the UI."
-                                    ),
-                                }
-                                skip_json = json.dumps(skip_payload)
-                                tr_skip: dict[str, Any] = {
-                                    "type": "tool_result",
-                                    "name": name,
-                                    "summary": (
-                                        "Skipped: mutation already awaiting confirmation "
-                                        "this round."
-                                    ),
-                                    "status_code": 409,
-                                    "tool_call_id": tid,
-                                    "ok": False,
-                                    "data": skip_payload,
-                                }
-                                yield tr_skip
-                                oa_messages.append(
-                                    {
-                                        "role": "tool",
-                                        "tool_call_id": tid,
-                                        "content": skip_json,
-                                    },
-                                )
-                                logger.info(
-                                    "agent_chat terminal_exec mutation_skip run_id=%s "
-                                    "tool_call_id=%s",
-                                    run_id,
-                                    tid,
-                                )
-                                continue
                         out_json, summary = execute_tool(
                             name,
                             args_wire,

@@ -62,11 +62,7 @@ def terminal_exec_command_targets_mutation(
     command: str,
     mutation_allowlist: frozenset[str],
 ) -> bool:
-    """True if the shell snippet would invoke a **mutation** function (not reads / describe / list).
-
-    Used to skip redundant terminal mutation calls in the same model round after the first
-    deferred mutation is already pending confirmation.
-    """
+    """True if the shell snippet would invoke a **mutation** function (not reads / describe / list)."""
     t = (command or "").strip()
     if not t:
         return False

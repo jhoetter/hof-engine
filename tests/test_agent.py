@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import importlib
+import json
+import uuid
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 import pytest
+
 from llm_markdown.agent_stream import (
     AgentContentDelta,
     AgentMessageFinish,
@@ -25,17 +28,20 @@ from hof.agent.policy import (
     get_agent_policy,
     inbox_watch_to_wire,
 )
-from hof.agent.state import load_agent_run, save_agent_run
+from hof.agent.state import load_agent_run, save_agent_run, save_pending
+from hof.agent.sandbox.config import SandboxConfig
+from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
+from hof.agent import tooling as agent_tooling
 from hof.agent.stream import (
     _agent_stream_error_event,
-    _AgentStreamTurnExhaustedError,
-    _append_client_messages,
     _failure_category_value,
-    _iter_stream_agent_turn_with_engine_retries,
     _looks_like_llm_provider_error,
-    _mutation_preview_payload,
     _provider_error_eligible_for_engine_stream_retry,
     _provider_error_is_transient_for_log,
+    _AgentStreamTurnExhaustedError,
+    _append_client_messages,
+    _iter_stream_agent_turn_with_engine_retries,
+    _mutation_preview_payload,
     collect_agent_chat_from_stream,
     default_normalize_attachments,
     iter_agent_chat_stream,
@@ -482,7 +488,8 @@ def test_inbox_review_summary_llm_streams_before_awaiting_inbox(monkeypatch) -> 
     assert saved is not None
     msgs = saved.get("oa_messages") or []
     assert any(
-        m.get("role") == "assistant" and "Inbox" in str(m.get("content") or "")
+        m.get("role") == "assistant"
+        and "Inbox" in str(m.get("content") or "")
         for m in msgs
         if isinstance(m, dict)
     )
@@ -1191,6 +1198,144 @@ def test_two_mutations_one_turn_then_mixed_resume(monkeypatch) -> None:
     assert stream_calls == [0, 1]
 
 
+def test_two_terminal_exec_deferred_mutations_one_turn_then_mixed_resume(monkeypatch) -> None:
+    """Two ``hof_builtin_terminal_exec`` calls that defer mutations → one barrier; no 409 skip."""
+    from hof.functions import function
+
+    @function
+    def mut_a() -> dict:
+        """Mutation A."""
+        return {"ok": True, "which": "a"}
+
+    @function
+    def mut_b() -> dict:
+        """Mutation B."""
+        return {"ok": True, "which": "b"}
+
+    importlib.reload(importlib.import_module("hof.agent.builtin_tools"))
+
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset({"mut_a", "mut_b"}),
+            system_prompt_intro="test ",
+            confirmation_summary_mode="none",
+            sandbox=SandboxConfig(enabled=True, terminal_only_dispatch=False),
+        )
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AGENT_REASONING_MODE", raising=False)
+
+    stream_calls: list[int] = []
+    term_round = 0
+
+    def fake_execute_tool(
+        name: str,
+        arguments_json: str,
+        allowlist: frozenset[str],
+        *,
+        max_tool_output_chars: int,
+        run_id: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> tuple[str, str]:
+        nonlocal term_round
+        if name == HOF_BUILTIN_TERMINAL_EXEC:
+            term_round += 1
+            fn = "mut_a" if term_round == 1 else "mut_b"
+            pid = str(uuid.uuid4())
+            save_pending(
+                pid,
+                {
+                    "run_id": run_id or "",
+                    "tool_call_id": (tool_call_id or "").strip() or "terminal",
+                    "function_name": fn,
+                    "arguments_json": "{}",
+                },
+            )
+            inner = {
+                "pending_confirmation": True,
+                "pending_id": pid,
+                "function": fn,
+            }
+            wrapper = {"result": inner, "duration_ms": 0, "function": fn}
+            raw_out = json.dumps(wrapper)
+            body = {"exit_code": 0, "output": raw_out}
+            return json.dumps(body), "deferred"
+        return agent_tooling.execute_tool(
+            name,
+            arguments_json,
+            allowlist,
+            max_tool_output_chars=max_tool_output_chars,
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+        )
+
+    def fake_stream_agent_turn(*_a, **_kw):
+        n = len(stream_calls)
+        stream_calls.append(n)
+        if n == 0:
+            yield AgentToolCallDelta(
+                index=0,
+                tool_call_id="call_term_a",
+                name=HOF_BUILTIN_TERMINAL_EXEC,
+                arguments=json.dumps({"command": "hof fn mut_a '{}'"}),
+            )
+            yield AgentToolCallDelta(
+                index=1,
+                tool_call_id="call_term_b",
+                name=HOF_BUILTIN_TERMINAL_EXEC,
+                arguments=json.dumps({"command": "hof fn mut_b '{}'"}),
+            )
+            yield AgentMessageFinish(finish_reason="tool_calls", usage=None)
+        else:
+            yield AgentContentDelta(text="Continued after mixed resolutions.")
+            yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_agent_turn):
+        with patch("hof.agent.stream.execute_tool", side_effect=fake_execute_tool):
+            ev1 = list(
+                iter_agent_chat_stream(
+                    [{"role": "user", "content": "run two terminal mutations"}],
+                    None,
+                ),
+            )
+
+    assert not any(
+        (e.get("data") or {}).get("reason") == "mutation_already_pending_this_round"
+        for e in ev1
+        if e.get("type") == "tool_result"
+    )
+    mp = [e for e in ev1 if e.get("type") == "mutation_pending"]
+    assert len(mp) == 2
+    assert {e.get("name") for e in mp} == {"mut_a", "mut_b"}
+
+    ac = [e for e in ev1 if e.get("type") == "awaiting_confirmation"]
+    assert len(ac) == 1
+    pids = ac[0].get("pending_ids")
+    assert isinstance(pids, list) and len(pids) == 2
+
+    rs = [e for e in ev1 if e.get("type") == "run_start"]
+    assert rs
+    run_id = str(rs[0].get("run_id") or "").strip()
+    assert run_id
+
+    resolutions = [
+        {"pending_id": pids[0], "confirm": True},
+        {"pending_id": pids[1], "confirm": False},
+    ]
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream_agent_turn):
+        with patch("hof.agent.stream.execute_tool", side_effect=fake_execute_tool):
+            ev2 = list(iter_agent_resume_stream(run_id, resolutions))
+
+    assert not any(e.get("type") == "error" for e in ev2)
+    assert any(e.get("type") == "resume_start" for e in ev2)
+    fin = [e for e in ev2 if e.get("type") == "final"]
+    assert fin
+    assert "Continued" in str(fin[0].get("reply") or "")
+    assert stream_calls == [0, 1]
+
+
 def test_agent_stream_error_event_maps_provider_failure() -> None:
     """Non-transient categories keep llm-markdown ``public_message`` on the wire."""
     from llm_markdown.providers.base import ProviderError
@@ -1279,7 +1424,10 @@ def test_agent_stream_error_event_duck_typed_maps_transient_detail() -> None:
 
 
 def test_failure_category_value_accepts_string_category() -> None:
-    assert _failure_category_value(SimpleNamespace(category="SERVER")) == "server"
+    assert (
+        _failure_category_value(SimpleNamespace(category="SERVER"))
+        == "server"
+    )
 
 
 def test_provider_error_transient_when_retryable_even_if_category_odd() -> None:
@@ -1409,7 +1557,9 @@ def test_iter_stream_agent_turn_retries_when_only_segment_start_before_error(
     )
     assert calls["n"] == 2
     assert any(isinstance(e, AgentRateLimitWait) for e in out)
-    assert any(isinstance(e, AgentContentDelta) and e.text == "ok" for e in out)
+    assert any(
+        isinstance(e, AgentContentDelta) and e.text == "ok" for e in out
+    )
 
 
 def test_iter_stream_agent_turn_engine_retries_then_succeeds(monkeypatch) -> None:

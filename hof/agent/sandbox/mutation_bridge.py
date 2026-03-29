@@ -17,12 +17,12 @@ normal API client.
    **internal** route that delegates to the same code path as ``agent_chat`` mutation preview
    (not documented here; product-specific).
 
-3. **Until (1) or (2) exists:** Treat terminal-only runs as **read/analysis** via CLI; keep
-   mutations on the direct-tool path by not enabling ``terminal_only_dispatch``, or accept that
-   HTTP mutations apply immediately without chat confirmation.
-
-This module intentionally does **not** parse terminal stdout to synthesize ``mutation_pending``
-events — that would be fragile. Hosts that need parsing should do so in app-specific middleware.
+3. **Implemented in hof-engine:** ``POST /api/functions/<name>`` calls
+   ``defer_mutation_if_terminal_agent_http`` when ``X-Hof-Agent-Run-Id`` matches an active
+   ``agent_chat`` run (and ``terminal_only_dispatch`` is on). The agent stream then parses
+   terminal stdout and emits ``mutation_pending`` (see ``_try_coerce_terminal_exec_mutation_events``).
+   Curl in the sandbox must still send both correlation headers; env
+   ``HOF_AGENT_RUN_ID`` / ``HOF_AGENT_TOOL_CALL_ID`` are injected per ``docker exec``.
 """
 
 from __future__ import annotations
@@ -30,6 +30,8 @@ from __future__ import annotations
 # HTTP header name apps may use to correlate sandbox CLI calls with the active agent run.
 # Values are product-specific; the engine only documents the conventional name.
 AGENT_RUN_HEADER_NAME = "X-Hof-Agent-Run-Id"
+# Optional second header: OpenAI tool_call id for the ``hof_builtin_terminal_exec`` row (pending UI).
+AGENT_TOOL_CALL_HEADER_NAME = "X-Hof-Agent-Tool-Call-Id"
 
 # Keys often present on mutation responses when chat confirmation is required (same as in-process
 # tool path). Apps aligning HTTP with agent_chat should return compatible shapes.
@@ -38,6 +40,7 @@ PENDING_ID_KEY = "pending_id"
 
 __all__ = [
     "AGENT_RUN_HEADER_NAME",
+    "AGENT_TOOL_CALL_HEADER_NAME",
     "PENDING_CONFIRMATION_KEY",
     "PENDING_ID_KEY",
 ]

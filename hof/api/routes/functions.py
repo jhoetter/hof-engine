@@ -11,6 +11,11 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBasicCredentials
 from pydantic import ValidationError
 
+from hof.agent.http_mutation_gate import defer_mutation_if_terminal_agent_http
+from hof.agent.sandbox.mutation_bridge import (
+    AGENT_RUN_HEADER_NAME,
+    AGENT_TOOL_CALL_HEADER_NAME,
+)
 from hof.api.auth import api_key_header, basic_auth, oauth2_scheme, verify_auth
 from hof.core.registry import registry
 from hof.db.schemas import build_function_input_schema
@@ -75,7 +80,10 @@ async def call_function_stream(
                 line = json.dumps(ev, default=str, ensure_ascii=False) + "\n"
                 yield line.encode("utf-8")
         except Exception as exc:
-            err_line = json.dumps({"type": "error", "detail": str(exc)}, ensure_ascii=False) + "\n"
+            err_line = (
+                json.dumps({"type": "error", "detail": str(exc)}, ensure_ascii=False)
+                + "\n"
+            )
             yield err_line.encode("utf-8")
 
     return StreamingResponse(
@@ -91,6 +99,7 @@ async def call_function_stream(
 @router.post("/{function_name}")
 async def call_function(
     function_name: str,
+    request: Request,
     body: dict[str, Any] | None = None,
     user: str = Depends(_optional_auth),
 ) -> dict:
@@ -108,6 +117,22 @@ async def call_function(
         except ValidationError as exc:
             raise HTTPException(422, detail=exc.errors())
         kwargs = validated.model_dump(exclude_none=False)
+
+    agent_run = (request.headers.get(AGENT_RUN_HEADER_NAME) or "").strip()
+    agent_tcid = (request.headers.get(AGENT_TOOL_CALL_HEADER_NAME) or "").strip()
+    if agent_run:
+        deferred = defer_mutation_if_terminal_agent_http(
+            function_name=function_name,
+            kwargs=kwargs,
+            agent_run_id=agent_run,
+            tool_call_id=agent_tcid,
+        )
+        if deferred is not None:
+            return {
+                "result": deferred,
+                "duration_ms": 0,
+                "function": function_name,
+            }
 
     start = time.monotonic()
 

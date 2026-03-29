@@ -252,7 +252,10 @@ def _user_message_transient_limit_without_exhausted_retries(f: Any) -> str:
             "Please wait a short moment and try again."
         )
     elif cv == "timeout":
-        msg = "The request timed out before I could finish this step. Please try again in a moment."
+        msg = (
+            "The request timed out before I could finish this step. "
+            "Please try again in a moment."
+        )
     else:
         msg = (
             "The AI service was temporarily unavailable before I could finish this step. "
@@ -301,7 +304,9 @@ def _iter_stream_agent_turn_with_engine_retries(
             if not _provider_error_eligible_for_engine_stream_retry(exc):
                 raise
             if attempt + 1 >= max_attempts:
-                raise _AgentStreamTurnExhaustedError(exc, attempts=max_attempts) from exc
+                raise _AgentStreamTurnExhaustedError(
+                    exc, attempts=max_attempts
+                ) from exc
             wait = _engine_stream_retry_sleep_seconds(exc)
             yield AgentRateLimitWait(
                 seconds=wait,
@@ -388,7 +393,9 @@ def _agent_stream_error_event(
         "detail": detail,
         "error_category": cat_key,
         "retryable": (
-            False if engine_turn_retries_exhausted else bool(getattr(exc, "retryable", False))
+            False
+            if engine_turn_retries_exhausted
+            else bool(getattr(exc, "retryable", False))
         ),
     }
     http_status = getattr(f, "http_status", None)
@@ -427,6 +434,105 @@ def _mutation_preview_payload(
     except Exception:
         logger.debug("mutation_preview failed for %s", name, exc_info=True)
         return None
+
+
+def _extract_json_dict_from_text(text: str) -> dict[str, Any] | None:
+    s = (text or "").strip()
+    if not s:
+        return None
+    try:
+        o = json.loads(s)
+        return o if isinstance(o, dict) else None
+    except json.JSONDecodeError:
+        pass
+    i = s.find("{")
+    if i < 0:
+        return None
+    try:
+        o, _ = json.JSONDecoder().raw_decode(s[i:])
+        return o if isinstance(o, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def _terminal_http_body_inner_pending(body: dict[str, Any]) -> dict[str, Any] | None:
+    inner = body.get("result")
+    if isinstance(inner, dict) and inner.get("pending_confirmation") is True:
+        return inner
+    if body.get("pending_confirmation") is True:
+        return body
+    return None
+
+
+def _try_coerce_terminal_exec_mutation_events(
+    *,
+    out_json: str,
+    run_id: str,
+    tid: str,
+    mutation_allowlist: frozenset[str],
+    max_cli_line_chars: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any], str] | None:
+    """If terminal stdout is an HTTP wrapper with a deferred mutation, emit pending rows."""
+    pdata = parsed_tool_result_for_stream(out_json)
+    if not isinstance(pdata, dict):
+        return None
+    raw_out = pdata.get("output")
+    if not isinstance(raw_out, str):
+        return None
+    wrapper = _extract_json_dict_from_text(raw_out)
+    if wrapper is None:
+        return None
+    inner = _terminal_http_body_inner_pending(wrapper)
+    if inner is None:
+        return None
+    pid = str(inner.get("pending_id") or "").strip()
+    fname = str(inner.get("function") or "").strip()
+    if not pid or not fname or fname not in mutation_allowlist:
+        return None
+    loaded = load_pending(pid)
+    if loaded is None or str(loaded.get("run_id") or "") != str(run_id):
+        return None
+    args_wire = str(loaded.get("arguments_json") or "{}")
+    cap = _cli_line_cap_for_tool(fname, max_cli_line_chars)
+    cli_line = format_cli_line(fname, args_wire, max_cli_line_chars=cap)
+    preview = inner.get("preview")
+    mp_ev: dict[str, Any] = {
+        "type": "mutation_pending",
+        "run_id": run_id,
+        "pending_id": pid,
+        "name": fname,
+        "arguments": args_wire[:12000],
+        "cli_line": cli_line,
+        "tool_call_id": tid,
+    }
+    if isinstance(preview, dict):
+        mp_ev["preview"] = preview
+    tr_pending: dict[str, Any] = {
+        "type": "tool_result",
+        "name": HOF_BUILTIN_TERMINAL_EXEC,
+        "summary": (
+            "Awaiting your confirmation "
+            "(Assistant panel or agent_resume_mutations)."
+        ),
+        "pending_confirmation": True,
+        "status_code": 202,
+        "tool_call_id": tid,
+    }
+    if isinstance(preview, dict):
+        tr_pending["data"] = preview
+    ph_obj: dict[str, Any] = {
+        "pending_confirmation": True,
+        "pending_id": pid,
+        "function": fname,
+    }
+    if isinstance(preview, dict):
+        ph_obj["preview"] = preview
+    oa_tool = {
+        "role": "tool",
+        "tool_call_id": tid,
+        "content": json.dumps(ph_obj),
+    }
+    return ([mp_ev, tr_pending], oa_tool, pid)
 
 
 def _collapse_agent_round_trace(parts: list[str], *, max_parts: int = 200) -> str:
@@ -712,7 +818,8 @@ def _resolve_agent_reasoning_config(backend: str | None = None) -> ReasoningConf
     if mode_src in ("fallback",):
         if extras:
             msg = (
-                "AGENT_REASONING_OPENAI_EXTRAS is not allowed when AGENT_REASONING_MODE is fallback"
+                "AGENT_REASONING_OPENAI_EXTRAS is not allowed when "
+                "AGENT_REASONING_MODE is fallback"
             )
             raise ValueError(msg)
         if backend_norm == "anthropic":
@@ -720,16 +827,22 @@ def _resolve_agent_reasoning_config(backend: str | None = None) -> ReasoningConf
                 "FALLBACK reasoning is not recommended for Anthropic; "
                 "using native mode with provider thinking instead (see AGENT_ANTHROPIC_THINKING)"
             )
-            return ReasoningConfig.native(anthropic_thinking=_resolve_anthropic_thinking_kw())
+            return ReasoningConfig.native(
+                anthropic_thinking=_resolve_anthropic_thinking_kw()
+            )
         return ReasoningConfig(mode=ReasoningMode.FALLBACK)
     if mode_src not in ("native", "", "on", "true", "1", "yes"):
-        msg = f"Unknown agent reasoning mode: {mode_src!r} (use native, off, or fallback)"
+        msg = (
+            f"Unknown agent reasoning mode: {mode_src!r} (use native, off, or fallback)"
+        )
         raise ValueError(msg)
     if backend_norm == "anthropic":
         if extras:
             msg = "AGENT_REASONING_OPENAI_EXTRAS is not used when AGENT_LLM_BACKEND=anthropic"
             raise ValueError(msg)
-        return ReasoningConfig.native(anthropic_thinking=_resolve_anthropic_thinking_kw())
+        return ReasoningConfig.native(
+            anthropic_thinking=_resolve_anthropic_thinking_kw()
+        )
     # OpenAI (default backend): "native" in config means "show thinking for every turn".
     # Chat Completions on gpt-4o-class models usually emit no reasoning_delta; llm-markdown
     # FALLBACK always streams a planning/thinking lane. Opt into true Chat Completions native
@@ -791,7 +904,9 @@ def _resolve_agent_max_completion_tokens() -> int:
         c = get_config()
         n = int(getattr(c, "agent_max_completion_tokens", 16_384))
         if n > 0:
-            return max(_AGENT_COMPLETION_TOKENS_FLOOR, min(n, _AGENT_COMPLETION_TOKENS_CAP))
+            return max(
+                _AGENT_COMPLETION_TOKENS_FLOOR, min(n, _AGENT_COMPLETION_TOKENS_CAP)
+            )
     except Exception:
         pass
     return 16_384
@@ -830,7 +945,9 @@ def _resolve_provider(lm_backend: str, model: str) -> Any:
     else:
         api_key = _resolve_openai_api_key()
         if not api_key:
-            raise _ProviderSetupError("Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)")
+            raise _ProviderSetupError(
+                "Missing OPENAI_API_KEY (or llm_api_key in hof.config.py)"
+            )
         try:
             from llm_markdown.providers import OpenAIProvider
         except ImportError:
@@ -1060,11 +1177,17 @@ def collect_agent_chat_from_stream(
             r = int(ev.get("round") or 0)
             ph = str(ev.get("phase") or "")
             if ph == "model":
-                legacy.append({"type": "thinking", "detail": f"Round {r}: calling model…"})
+                legacy.append(
+                    {"type": "thinking", "detail": f"Round {r}: calling model…"}
+                )
             elif ph == "tools":
-                legacy.append({"type": "thinking", "detail": f"Round {r}: executing tools…"})
+                legacy.append(
+                    {"type": "thinking", "detail": f"Round {r}: executing tools…"}
+                )
             elif ph == "summary":
-                legacy.append({"type": "thinking", "detail": f"Round {r}: confirmation reply…"})
+                legacy.append(
+                    {"type": "thinking", "detail": f"Round {r}: confirmation reply…"}
+                )
         elif t == "segment_start":
             continue
         elif t == "assistant_delta" or t == "reasoning_delta":
@@ -1148,14 +1271,18 @@ def collect_agent_chat_from_stream(
                 "awaiting_plan_clarification": True,
                 "run_id": str(ev.get("run_id") or ""),
                 "clarification_id": str(ev.get("clarification_id") or ""),
-                "questions": (ev.get("questions") if isinstance(ev.get("questions"), list) else []),
+                "questions": (
+                    ev.get("questions") if isinstance(ev.get("questions"), list) else []
+                ),
                 "reply": "",
                 "events": legacy,
                 "tool_rounds_used": rounds,
                 "model": model_out,
             }
         elif t == "resume_start":
-            legacy.append({"type": "thinking", "detail": "Continuing after confirmation…"})
+            legacy.append(
+                {"type": "thinking", "detail": "Continuing after confirmation…"}
+            )
         elif t == "final":
             reply = str(ev.get("reply") or "").strip()
             rounds = int(ev.get("tool_rounds_used") or rounds)
@@ -1348,13 +1475,16 @@ def _stream_inbox_review_summary_for_ui(
         yield {
             "type": "error",
             "detail": (
-                f"invalid inbox_review_summary_mode={mode!r} (expected llm_stream, static, or none)"
+                f"invalid inbox_review_summary_mode={mode!r} "
+                "(expected llm_stream, static, or none)"
             ),
         }
         return
 
     oa_messages.append({"role": "user", "content": user_content})
-    sc_inbox = policy.sandbox.with_env_overrides() if policy.sandbox is not None else None
+    sc_inbox = (
+        policy.sandbox.with_env_overrides() if policy.sandbox is not None else None
+    )
     if sc_inbox is not None and sc_inbox.enabled and sc_inbox.terminal_only_dispatch:
         read_allowlist = policy.effective_allowlist()
     else:
@@ -1434,8 +1564,11 @@ def _stream_inbox_review_summary_for_ui(
             return
 
         if finish_reason != "tool_calls":
-            final_text = assistant_text.strip() or _inbox_review_static_message_from_wires(
-                wires,
+            final_text = (
+                assistant_text.strip()
+                or _inbox_review_static_message_from_wires(
+                    wires,
+                )
             )
             if not assistant_text.strip():
                 yield {"type": "assistant_delta", "text": final_text}
@@ -1519,6 +1652,7 @@ def _stream_inbox_review_summary_for_ui(
                 read_allowlist,
                 max_tool_output_chars=max_tool_output_chars,
                 run_id=run_id,
+                tool_call_id=tid,
             )
             ok, status_code = tool_result_status_for_ui(out_json)
             tr_out: dict[str, Any] = {
@@ -1724,7 +1858,8 @@ def _run_agent_llm_tool_loop(
                         "explore" if not _discover_explored else "clarify"
                     )
                 logger.info(
-                    "agent_chat ndjson_phase run_id=%s round=%d phase=model discover_phase=%s",
+                    "agent_chat ndjson_phase run_id=%s round=%d phase=model "
+                    "discover_phase=%s",
                     run_id,
                     rounds,
                     _phase_model["discover_phase"],
@@ -1768,7 +1903,9 @@ def _run_agent_llm_tool_loop(
                 and discover_explore_tools is not None
                 and not _discover_explored
             )
-            active_allowlist = discover_explore_allowlist if _in_discover_explore else allowlist
+            active_allowlist = (
+                discover_explore_allowlist if _in_discover_explore else allowlist
+            )
             active_tools = discover_explore_tools if _in_discover_explore else tools
             st_tools = active_tools if len(active_tools) > 0 else None
             if st_tools is not None and agent_chat_mode == "plan_discover":
@@ -1899,7 +2036,9 @@ def _run_agent_llm_tool_loop(
                         _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION,
                     }
                     terminal_idxs = [
-                        i for i in sorted_idx if parts[i].get("name") in _plan_terminal_tools
+                        i
+                        for i in sorted_idx
+                        if parts[i].get("name") in _plan_terminal_tools
                     ]
                     if len(terminal_idxs) > 1:
                         yield {
@@ -1913,14 +2052,21 @@ def _run_agent_llm_tool_loop(
                         if tix != sorted_idx[-1]:
                             yield {
                                 "type": "error",
-                                "detail": (f"{tname} must be the last tool call in the round"),
+                                "detail": (
+                                    f"{tname} must be the last "
+                                    "tool call in the round"
+                                ),
                             }
                             return
-                        if any(parts[j].get("name") in mutation_allowlist for j in sorted_idx):
+                        if any(
+                            parts[j].get("name") in mutation_allowlist
+                            for j in sorted_idx
+                        ):
                             yield {
                                 "type": "error",
                                 "detail": (
-                                    f"cannot combine {tname} with mutation tools in the same round"
+                                    f"cannot combine {tname} "
+                                    "with mutation tools in the same round"
                                 ),
                             }
                             return
@@ -1954,7 +2100,9 @@ def _run_agent_llm_tool_loop(
                     tc = parts[idx]
                     name = tc["name"]
                     args_raw = tc["arguments"] or "{}"
-                    args_wire, display_title = split_agent_tool_display_metadata(args_raw)
+                    args_wire, display_title = split_agent_tool_display_metadata(
+                        args_raw
+                    )
                     tid = tc["id"] or f"call_{idx}"
                     cap = _cli_line_cap_for_tool(name, max_cli_line_chars)
                     cli = format_cli_line(name, args_wire, max_cli_line_chars=cap)
@@ -1998,11 +2146,14 @@ def _run_agent_llm_tool_loop(
                         and agent_chat_mode == "plan_discover"
                     ):
                         logger.info(
-                            "agent_chat plan_clarification_validating run_id=%s args_wire_chars=%d",
+                            "agent_chat plan_clarification_validating run_id=%s "
+                            "args_wire_chars=%d",
                             run_id,
                             len(args_wire),
                         )
-                        qs, verr = _parse_and_validate_plan_clarification_questions(args_wire)
+                        qs, verr = _parse_and_validate_plan_clarification_questions(
+                            args_wire
+                        )
                         if verr is not None:
                             logger.warning(
                                 "agent_chat plan_clarification_validation_error "
@@ -2095,9 +2246,13 @@ def _run_agent_llm_tool_loop(
                             cid,
                             tid,
                         )
-                    elif name == _HOF_BUILTIN_PRESENT_PLAN and agent_chat_mode == "plan_discover":
+                    elif (
+                        name == _HOF_BUILTIN_PRESENT_PLAN
+                        and agent_chat_mode == "plan_discover"
+                    ):
                         logger.info(
-                            "agent_chat plan_proposal_validating run_id=%s args_wire_chars=%d",
+                            "agent_chat plan_proposal_validating run_id=%s "
+                            "args_wire_chars=%d",
                             run_id,
                             len(args_wire),
                         )
@@ -2144,7 +2299,8 @@ def _run_agent_llm_tool_loop(
                             "structured_plan": proposal,
                         }
                         logger.info(
-                            "agent_chat plan_proposal_accepted run_id=%s round=%d steps=%d",
+                            "agent_chat plan_proposal_accepted run_id=%s round=%d "
+                            "steps=%d",
                             run_id,
                             rounds,
                             len(proposal.get("steps", [])),
@@ -2219,7 +2375,29 @@ def _run_agent_llm_tool_loop(
                             active_allowlist,
                             max_tool_output_chars=max_tool_output_chars,
                             run_id=run_id,
+                            tool_call_id=tid,
                         )
+                        if name == HOF_BUILTIN_TERMINAL_EXEC:
+                            coerced = _try_coerce_terminal_exec_mutation_events(
+                                out_json=out_json,
+                                run_id=run_id,
+                                tid=tid,
+                                mutation_allowlist=mutation_allowlist,
+                                max_cli_line_chars=max_cli_line_chars,
+                            )
+                            if coerced is not None:
+                                t_ev, oa_tool, pid_c = coerced
+                                yield from t_ev
+                                oa_messages.append(oa_tool)
+                                pending_ids.append(pid_c)
+                                logger.info(
+                                    "agent_chat terminal_exec coerced mutation_pending "
+                                    "run_id=%s pending_id=%s tool_call_id=%s",
+                                    run_id,
+                                    pid_c,
+                                    tid,
+                                )
+                                continue
                         ok, status_code = tool_result_status_for_ui(out_json)
                         logger.info(
                             "agent_chat tool_result emit run_id=%s round=%d name=%s "
@@ -2301,7 +2479,8 @@ def _run_agent_llm_tool_loop(
                                 plan_final[k] = v
                     yield plan_final
                     logger.info(
-                        "agent_chat plan_proposal_final run_id=%s round=%d reply_chars=%d",
+                        "agent_chat plan_proposal_final run_id=%s round=%d "
+                        "reply_chars=%d",
                         run_id,
                         rounds,
                         len(plan_md),
@@ -2309,7 +2488,9 @@ def _run_agent_llm_tool_loop(
                     return
                 if plan_clarify_halt is not None:
                     store_extras = (
-                        plan_resume_final_extras if plan_resume_final_extras is not None else {}
+                        plan_resume_final_extras
+                        if plan_resume_final_extras is not None
+                        else {}
                     )
                     save_agent_run(
                         run_id,
@@ -2430,7 +2611,8 @@ def _run_agent_llm_tool_loop(
                     {"role": "assistant", "content": text if text else ""},
                 )
                 logger.info(
-                    "agent_chat discover_explore_complete run_id=%s round=%d text_chars=%d",
+                    "agent_chat discover_explore_complete run_id=%s round=%d "
+                    "text_chars=%d",
                     run_id,
                     rounds,
                     len(text),
@@ -2460,7 +2642,8 @@ def _run_agent_llm_tool_loop(
                 )
                 reasoning = ReasoningConfig.off()
                 logger.info(
-                    "agent_chat discover_text_retry run_id=%s round=%d text_chars=%d",
+                    "agent_chat discover_text_retry run_id=%s round=%d "
+                    "text_chars=%d",
                     run_id,
                     rounds,
                     len(text),
@@ -2567,7 +2750,9 @@ def _run_agent_chat_stream(
     plan_text: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield NDJSON-shaped dicts."""
-    max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = _agent_limits()
+    max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = (
+        _agent_limits()
+    )
 
     norm_fn = policy.normalize_attachments or default_normalize_attachments
     att_norm, att_err = norm_fn(attachments)
@@ -2700,7 +2885,9 @@ def _run_agent_resume_stream(
 
     run = load_agent_run(rid)
     if not run:
-        logger.warning("agent_resume_mutations rejected: unknown or expired run_id=%s", rid)
+        logger.warning(
+            "agent_resume_mutations rejected: unknown or expired run_id=%s", rid
+        )
         yield {
             "type": "error",
             "detail": "Unknown or expired run_id; start a new chat.",
@@ -2709,7 +2896,9 @@ def _run_agent_resume_stream(
 
     open_ids = [str(x) for x in (run.get("open_pending_ids") or []) if str(x).strip()]
     if not open_ids:
-        logger.warning("agent_resume_mutations rejected: no pending mutations run_id=%s", rid)
+        logger.warning(
+            "agent_resume_mutations rejected: no pending mutations run_id=%s", rid
+        )
         yield {"type": "error", "detail": "No pending mutations for this run."}
         return
 
@@ -2928,7 +3117,9 @@ def _run_agent_resume_stream(
         if snap_live is not None:
             try:
                 raw_live = snap_live()
-                baseline_ids = sorted(str(x).strip() for x in (raw_live or []) if str(x).strip())
+                baseline_ids = sorted(
+                    str(x).strip() for x in (raw_live or []) if str(x).strip()
+                )
             except Exception:
                 logger.debug(
                     "inbox pending baseline snapshot failed",
@@ -3033,7 +3224,9 @@ def _run_agent_resume_plan_clarification_stream(
         yield {"type": "error", "detail": "Invalid saved clarification state"}
         return
 
-    sel_map, other_text_map, aerr = _validate_clarification_answers(qnorm, answers or [])
+    sel_map, other_text_map, aerr = _validate_clarification_answers(
+        qnorm, answers or []
+    )
     if aerr is not None:
         yield {"type": "error", "detail": aerr}
         return
@@ -3165,7 +3358,9 @@ def iter_agent_chat_stream(
     )
 
 
-def iter_agent_resume_stream(run_id: str, resolutions: list) -> Iterator[dict[str, Any]]:
+def iter_agent_resume_stream(
+    run_id: str, resolutions: list
+) -> Iterator[dict[str, Any]]:
     """Stream continued agent trace after mutation confirmation."""
     policy = get_agent_policy()
     yield from _run_agent_resume_stream(run_id, resolutions, policy=policy)
@@ -3261,10 +3456,13 @@ def _run_agent_resume_inbox_stream(
         if not ok:
             yield {
                 "type": "error",
-                "detail": msg or f"Inbox watch {desc.watch_id!r} is still pending review",
+                "detail": msg
+                or f"Inbox watch {desc.watch_id!r} is still pending review",
             }
             return
-        summary_lines.append(msg or f"{desc.record_type} {desc.record_id}: inbox review completed.")
+        summary_lines.append(
+            msg or f"{desc.record_type} {desc.record_id}: inbox review completed."
+        )
 
     oa_messages = run["oa_messages"]
     if not isinstance(oa_messages, list):
@@ -3364,7 +3562,9 @@ def _run_agent_resume_inbox_stream(
     )
 
 
-def iter_agent_resume_inbox_stream(run_id: str, resolutions: list) -> Iterator[dict[str, Any]]:
+def iter_agent_resume_inbox_stream(
+    run_id: str, resolutions: list
+) -> Iterator[dict[str, Any]]:
     """Stream trace after inbox review resolution (client assert + server verify)."""
     policy = get_agent_policy()
     yield from _run_agent_resume_inbox_stream(run_id, resolutions, policy=policy)

@@ -17,14 +17,18 @@ from hof.functions import FunctionMetadata
 
 logger = logging.getLogger(__name__)
 
-# Propagates ``run_id`` into builtins (e.g. ``hof_builtin_terminal_exec``) when ContextVar state
-# is missing in the worker thread that runs the tool (Starlette streaming).
+# Propagates ``run_id`` / tool_call_id into builtins (e.g. ``hof_builtin_terminal_exec``) when
+# TLS state is set by the agent stream before ``execute_tool`` (Starlette streaming).
 _tls_tool_run_id = threading.local()
+_tls_tool_call_id = threading.local()
 
 
 def get_tool_execution_run_id() -> str | None:
     return getattr(_tls_tool_run_id, "run_id", None)
 
+
+def get_tool_execution_tool_call_id() -> str | None:
+    return getattr(_tls_tool_call_id, "tool_call_id", None)
 
 _REDACT_SUBSTRINGS = ("token", "password", "secret", "api_key", "authorization")
 
@@ -355,6 +359,7 @@ def execute_tool(
     *,
     max_tool_output_chars: int,
     run_id: str | None = None,
+    tool_call_id: str | None = None,
 ) -> tuple[str, str]:
     """Execute a tool (read or mutation). Returns (json_string_for_model, summary_for_ui)."""
     meta = registry.get_function(name)
@@ -398,8 +403,11 @@ def execute_tool(
             raw = json.dumps(err)
             return raw, summarize_tool_json(name, raw)
         prev_rid = getattr(_tls_tool_run_id, "run_id", None)
+        prev_tid = getattr(_tls_tool_call_id, "tool_call_id", None)
         if run_id is not None:
             _tls_tool_run_id.run_id = run_id
+        if tool_call_id is not None:
+            _tls_tool_call_id.tool_call_id = tool_call_id
         try:
             result = meta.fn(**kwargs)
         finally:
@@ -408,6 +416,11 @@ def execute_tool(
                     _tls_tool_run_id.run_id = prev_rid
                 elif hasattr(_tls_tool_run_id, "run_id"):
                     delattr(_tls_tool_run_id, "run_id")
+            if tool_call_id is not None:
+                if prev_tid is not None:
+                    _tls_tool_call_id.tool_call_id = prev_tid
+                elif hasattr(_tls_tool_call_id, "tool_call_id"):
+                    delattr(_tls_tool_call_id, "tool_call_id")
     except Exception as exc:
         logger.exception("agent tool %s failed", name)
         err = {"error": str(exc)}

@@ -30,7 +30,7 @@ from simpleeval import (
 
 from hof.agent.sandbox.context import resolve_sandbox_run_state
 from hof.agent.sandbox.token import mint_sandbox_bearer_token
-from hof.agent.tooling import get_tool_execution_run_id
+from hof.agent.tooling import get_tool_execution_run_id, get_tool_execution_tool_call_id
 from hof.functions import function
 
 logger = logging.getLogger(__name__)
@@ -404,7 +404,9 @@ def _normalize_agg_values(values: list[Any]) -> tuple[list[float] | None, str | 
     return out, None
 
 
-def _single_aggregate_result(nums: list[float], operation: str) -> tuple[Any, str | None]:
+def _single_aggregate_result(
+    nums: list[float], operation: str
+) -> tuple[Any, str | None]:
     op = (operation or "").strip().lower()
     if op not in _AGGREGATE_OPS:
         allowed = ", ".join(sorted(_AGGREGATE_OPS))
@@ -474,7 +476,9 @@ def _get_calc_evaluator() -> EvalWithCompoundTypes:
             "floor": math.floor,
             "ceil": math.ceil,
         }
-        _calc_evaluator = EvalWithCompoundTypes(functions=safe_functions, names=safe_names)
+        _calc_evaluator = EvalWithCompoundTypes(
+            functions=safe_functions, names=safe_names
+        )
     return _calc_evaluator
 
 
@@ -511,7 +515,9 @@ def hof_builtin_calculate(
         return {"error": "cannot combine values with expressions; use one mode only"}
 
     if batch_mode and expr_raw:
-        return {"error": "cannot combine expression with expressions; use one mode only"}
+        return {
+            "error": "cannot combine expression with expressions; use one mode only"
+        }
 
     if batch_mode:
         if not expr_batch:
@@ -526,7 +532,9 @@ def hof_builtin_calculate(
             ex_stripped = ex.strip()
             entry: dict[str, Any] = {"index": i}
             if len(ex_stripped) > max_chars:
-                entry["error"] = f"expression exceeds max length ({max_chars} characters)"
+                entry["error"] = (
+                    f"expression exceeds max length ({max_chars} characters)"
+                )
                 items.append(entry)
                 continue
             if not ex_stripped:
@@ -552,7 +560,9 @@ def hof_builtin_calculate(
         if merr:
             return {"error": merr}
         if not merged_ops:
-            return {"error": "operation or operations is required when values is provided"}
+            return {
+                "error": "operation or operations is required when values is provided"
+            }
         parsed, perr = _parse_values_input(values)
         if perr:
             return {"error": perr}
@@ -574,7 +584,9 @@ def hof_builtin_calculate(
 
     if not expr_raw:
         return {
-            "error": ("provide expression, expressions, or values with operation/operations"),
+            "error": (
+                "provide expression, expressions, or values with operation/operations"
+            ),
         }
 
     max_chars = _calc_max_expression_chars()
@@ -731,10 +743,22 @@ def _sandbox_api_environment() -> dict[str, str]:
                 except Exception:
                     default_user = "admin"
                 env["HOF_BASIC_USER"] = (
-                    os.environ.get("HOF_SANDBOX_BASIC_USER") or ""
-                ).strip() or default_user
+                    (os.environ.get("HOF_SANDBOX_BASIC_USER") or "").strip() or default_user
+                )
                 env["HOF_BASIC_PASSWORD"] = basic_pw
     return env
+
+
+def _sandbox_per_exec_agent_headers_env() -> dict[str, str]:
+    """Per ``docker exec`` vars so curl can pass mutation correlation headers."""
+    out: dict[str, str] = {}
+    rid = get_tool_execution_run_id()
+    if rid and str(rid).strip():
+        out["HOF_AGENT_RUN_ID"] = str(rid).strip()
+    tid = get_tool_execution_tool_call_id()
+    if tid and str(tid).strip():
+        out["HOF_AGENT_TOOL_CALL_ID"] = str(tid).strip()
+    return out
 
 
 @function(
@@ -773,7 +797,8 @@ def hof_builtin_terminal_exec(command: str) -> dict[str, Any]:
     run = resolve_sandbox_run_state(tool_rid)
     if run is None:
         logger.warning(
-            "hof_builtin_terminal_exec: missing sandbox state (tool_run_id=%r ctx_var=%s)",
+            "hof_builtin_terminal_exec: missing sandbox state "
+            "(tool_run_id=%r ctx_var=%s)",
             tool_rid,
             get_sandbox_run() is not None,
         )
@@ -789,5 +814,8 @@ def hof_builtin_terminal_exec(command: str) -> dict[str, Any]:
             max_timeout_sec=sc.max_exec_timeout_sec,
         )
     cmd = (command or "").strip() or "true"
-    result = run.terminal_session.exec_command(cmd)
+    result = run.terminal_session.exec_command(
+        cmd,
+        extra_env=_sandbox_per_exec_agent_headers_env(),
+    )
     return {"exit_code": result.exit_code, "output": result.output}

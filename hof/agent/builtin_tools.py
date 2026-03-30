@@ -185,12 +185,12 @@ def _sandbox_per_exec_agent_headers_env() -> dict[str, str]:
     tool_summary=(
         "Run a shell command in the isolated sandbox (workspace under /workspace). "
         "Prefer **`hof fn list`**, **`hof fn describe <name>`**, **`hof fn <name> '<json>'`** "
-        "(installed in the container, same as the host Hof CLI). Spreadsheet-app images also ship "
-        "**`sql-lab-query`** / **`sql-lab-exec`** (thin wrappers around `hof fn read_data`). Use raw curl only when needed."
+        "(installed in the container, same as the host Hof CLI). For spreadsheet-app data reads use "
+        "**`hof fn read_data '<json>'`**. Use raw curl only when needed."
     ),
     when_to_use=(
-        "For normal shell work (python, jq, pipes) and for app data via **`hof fn …`**, "
-        "**`sql-lab-query`** / **`sql-lab-exec`** (spreadsheet sandbox → `read_data`), or "
+        "For normal shell work (python, jq, pipes) and for app data via **`hof fn …`** "
+        "(e.g. **`hof fn read_data`** in spreadsheet sandbox), or "
         "generated `list-*` CLIs — the path to skills when terminal-only dispatch is enabled."
     ),
     when_not_to_use=(

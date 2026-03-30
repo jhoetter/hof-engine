@@ -241,7 +241,11 @@ class Table(Base, metaclass=TableMeta):
             **kwargs: Column values for the new record.
         """
         if "id" not in kwargs:
-            kwargs["id"] = uuid.uuid4()
+            # Auto-generate UUID for UUID primary keys.
+            # For integer/serial PKs the database assigns the id automatically.
+            pk_col = getattr(cls.__table__.c, "id", None)
+            if pk_col is None or not isinstance(pk_col.type, sa.Integer):
+                kwargs["id"] = uuid.uuid4()
         instance = cls(**kwargs)
         with cls._session_scope(session) as s:
             s.add(instance)

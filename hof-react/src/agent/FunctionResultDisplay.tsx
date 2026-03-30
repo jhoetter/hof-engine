@@ -10,6 +10,7 @@ import {
   resultColumnKeyOrder,
 } from "./functionResultShared";
 import { terminalOutputAnsiToHtml } from "./terminalAnsiHtml";
+import { parseTerminalExecPayload } from "./terminalExecPayload";
 
 /**
  * Renders @function return values like ``hof fn … --format auto`` / TUI ``render_function_result``
@@ -108,22 +109,7 @@ function RowsTableView({
   );
 }
 
-/** True for sandbox ``hof_builtin_terminal_exec`` JSON: ``exit_code`` + ``output`` string. */
-export function isTerminalExecPayload(
-  value: unknown,
-): value is { exit_code: number; output: string } {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const o = value as Record<string, unknown>;
-  if (typeof o.exit_code !== "number" || !Number.isFinite(o.exit_code)) {
-    return false;
-  }
-  if (typeof o.output !== "string") {
-    return false;
-  }
-  return true;
-}
+export { isTerminalExecPayload } from "./terminalExecPayload";
 
 /** Curl / ``hof fn`` stdout often wraps API JSON in ``{ "result": … }`` — unwrap for table view. */
 function tryUnwrapApiFunctionStdout(output: string): unknown | null {
@@ -277,11 +263,12 @@ export function FunctionResultDisplay({
     );
   }
 
-  if (isTerminalExecPayload(value)) {
+  const terminalPayload = parseTerminalExecPayload(value);
+  if (terminalPayload !== null) {
     return shell(
       <TerminalExecResultView
-        exitCode={value.exit_code}
-        output={value.output}
+        exitCode={terminalPayload.exit_code}
+        output={terminalPayload.output}
       />,
     );
   }

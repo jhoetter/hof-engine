@@ -511,6 +511,35 @@ def execute_tool(
 _TOOL_TRUNCATION_MARKER = "\n…(truncated)"
 
 
+def _peel_terminal_exec_dict(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Follow ``result`` / ``data`` / string ``result`` until ``exit_code`` + ``output``."""
+    cur: Any = data
+    for _ in range(8):
+        if not isinstance(cur, dict):
+            return None
+        if "exit_code" in cur and "output" in cur:
+            return cur
+        nxt: Any = None
+        if "result" in cur:
+            r = cur["result"]
+            if isinstance(r, str) and r.strip().startswith("{"):
+                try:
+                    nxt = json.loads(r)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    nxt = None
+            elif isinstance(r, dict):
+                nxt = r
+        if nxt is None and "data" in cur:
+            dd = cur["data"]
+            if isinstance(dd, dict):
+                nxt = dd
+        if nxt is not None:
+            cur = nxt
+            continue
+        return None
+    return None
+
+
 def tool_result_status_for_ui(out_json: str) -> tuple[bool, int]:
     """Return (ok, http_shaped_code) for the assistant UI (not a real HTTP response)."""
     try:
@@ -523,6 +552,18 @@ def tool_result_status_for_ui(out_json: str) -> tuple[bool, int]:
 
     if not isinstance(data, dict):
         return True, 200
+
+    # Sandbox terminal: {"exit_code": int, "output": str, ...} — vacuous ``error`` (or bad
+    # ok/status from upstream) must not mark success as failure. Peel HTTP/proxy wrappers.
+    peeled = _peel_terminal_exec_dict(data) if isinstance(data, dict) else None
+    if peeled is not None:
+        try:
+            ec = int(peeled["exit_code"])
+        except (TypeError, ValueError):
+            ec = -1
+        if ec == 0:
+            return True, 200
+        return False, 500
 
     if "error" in data:
         err = str(data.get("error") or "").lower()

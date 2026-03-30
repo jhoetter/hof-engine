@@ -1,6 +1,7 @@
 "use client";
 
 import { FileText } from "lucide-react";
+import { attachmentKindShortLabel } from "./agentAttachmentUpload";
 import { RunBlocksList } from "./HofAgentChatBlocks";
 import {
   CHAT_USER_BUBBLE_CLASS,
@@ -321,7 +322,10 @@ export function HofAgentMessages({
                         {a.filename}
                       </span>
                       <span className="shrink-0 text-[10px] uppercase tracking-wide text-tertiary">
-                        PDF
+                        {attachmentKindShortLabel(
+                          a.content_type,
+                          a.filename,
+                        )}
                       </span>
                     </div>
                   ))}

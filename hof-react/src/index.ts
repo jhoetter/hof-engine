@@ -28,6 +28,12 @@ export {
   type HofAgentComposerVoiceTranscription,
 } from "./agent/HofAgentComposer";
 export {
+  AGENT_CHAT_ATTACHMENT_ACCEPT,
+  AGENT_CHAT_ATTACHMENT_MIME_TYPES,
+  attachmentKindShortLabel,
+  resolveAgentChatAttachmentContentType,
+} from "./agent/agentAttachmentUpload";
+export {
   HofAgentConversationSelect,
   type HofAgentConversationOption,
   type HofAgentConversationPickerCoreProps,
@@ -83,6 +89,10 @@ export {
   isTerminalExecPayload,
   type FunctionResultDisplayVariant,
 } from "./agent/FunctionResultDisplay";
+export {
+  parseTerminalExecPayload,
+  type TerminalExecPayload,
+} from "./agent/terminalExecPayload";
 export { useHofTable } from "./hooks/useHofTable";
 export { useHofFunction } from "./hooks/useHofFunction";
 export {

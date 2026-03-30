@@ -31,6 +31,7 @@ import type {
   LiveBlock,
   ThreadItem,
 } from "./hofAgentChatModel";
+import { resolveAgentChatAttachmentContentType } from "./agentAttachmentUpload";
 import {
   agentChatDebugNdjson,
   agentChatDebugLog,
@@ -2173,25 +2174,38 @@ export function HofAgentChatProvider({
         return;
       }
       setUploadErr(null);
-      const list = Array.from(files).filter(
-        (f) =>
-          f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"),
+      const entries = Array.from(files).map((f) => {
+        const ct = resolveAgentChatAttachmentContentType(f);
+        return { file: f, content_type: ct };
+      });
+      const valid = entries.filter(
+        (x): x is { file: File; content_type: string } =>
+          Boolean(x.content_type),
       );
-      if (list.length === 0) {
-        setUploadErr("Only PDF files are supported.");
+      const skipped = entries.length - valid.length;
+      if (valid.length === 0) {
+        setUploadErr(
+          "Unsupported file type. Use PDF, Word (.docx), Excel (.xlsx), CSV, Markdown, HTML, JSON, XML, or plain text.",
+        );
         return;
+      }
+      if (skipped > 0) {
+        setUploadErr(
+          `${skipped} file(s) skipped (unsupported type). Uploading ${valid.length} supported file(s).`,
+        );
       }
       setUploadBusy(true);
       try {
-        for (const file of list) {
+        for (const { file, content_type } of valid) {
+          const ct = content_type!;
           const pr = await presignUpload({
             filename: file.name,
-            content_type: "application/pdf",
+            content_type: ct,
           });
           const put = await fetch(pr.upload_url, {
             method: "PUT",
             body: file,
-            headers: { "Content-Type": "application/pdf" },
+            headers: { "Content-Type": ct },
           });
           if (!put.ok) {
             throw new Error(`Upload failed (${put.status})`);
@@ -2201,7 +2215,7 @@ export function HofAgentChatProvider({
             {
               object_key: pr.object_key,
               filename: file.name,
-              content_type: "application/pdf",
+              content_type: ct,
             },
           ]);
         }

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Spreadsheet-app: call sql_lab_query with a natural-language instruction (no manual JSON).
+# Requires API_BASE_URL, API_TOKEN (sandbox injects both for HTTP auth to /hof fn). Uses /usr/local/bin/hof.
+#
+# Usage: sql-lab-query [--limit N] <instruction words...>
+# Example: sql-lab-query Count expenses per category
+# Example: sql-lab-query --limit 100 Show top 5 categories by spend
+set -euo pipefail
+
+usage() {
+  echo "usage: sql-lab-query [--limit N] <instruction...>" >&2
+  exit 2
+}
+
+LIMIT=500
+if [[ "${1:-}" == "--limit" ]]; then
+  [[ -n "${2:-}" ]] || usage
+  LIMIT="$2"
+  shift 2
+fi
+
+[[ $# -ge 1 ]] || usage
+INSTRUCTION="$*"
+
+: "${API_BASE_URL:?set API_BASE_URL}"
+: "${API_TOKEN:?set API_TOKEN}"
+
+BODY=$(jq -n --arg i "$INSTRUCTION" --argjson l "$LIMIT" '{instruction:$i, limit:$l}')
+
+exec /usr/local/bin/hof fn sql_lab_query "$BODY"

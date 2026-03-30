@@ -38,10 +38,10 @@ function getAgentUiPortalRoot(): HTMLElement {
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import {
   FunctionResultDisplay,
-  isTerminalExecPayload,
   TERMINAL_SESSION_INSET,
   TERMINAL_STDOUT_SURFACE_CLASS,
 } from "./FunctionResultDisplay";
+import { parseTerminalExecPayload } from "./terminalExecPayload";
 import {
   AGENT_CHAT_COLUMN_CLASS,
   CHAT_ASSISTANT_REPLY_BUBBLE_CLASS,
@@ -2037,15 +2037,18 @@ export function LiveBlockView({
     );
   }
   if (b.kind === "tool_result") {
-    if (
-      b.name === HOF_BUILTIN_TERMINAL_EXEC &&
-      b.data !== undefined &&
-      isTerminalExecPayload(b.data)
-    ) {
+    const termData =
+      b.name === HOF_BUILTIN_TERMINAL_EXEC && b.data !== undefined
+        ? parseTerminalExecPayload(b.data)
+        : null;
+    if (termData !== null) {
       return (
         <TerminalToolResultInlineStandalone
           b={
-            b as ToolResultBlock & {
+            {
+              ...b,
+              data: termData,
+            } as ToolResultBlock & {
               data: { exit_code: number; output: string };
             }
           }

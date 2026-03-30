@@ -15,6 +15,7 @@ import {
   mergeAdjacentReasoningSegments,
   normalizeAssistantStreamSegments,
 } from "./assistantStreamSegments";
+import { parseTerminalExecPayload } from "./terminalExecPayload";
 
 export type { AssistantStreamSegment };
 export {
@@ -326,7 +327,7 @@ function looksLikeTerminalTransportCli(line: string): boolean {
 }
 
 const _TOOL_TITLE_ATTACHMENT_EXT_RE =
-  /\.(pdf|png|jpe?g|gif|webp|csv|xlsx?|txt)$/i;
+  /\.(pdf|png|jpe?g|gif|webp|csv|xlsx?|txt|docx|json|md|html?|xml)$/i;
 
 function _toolTitleBasenameKey(key: string): string {
   const k = key.trim().replace(/\\/g, "/");
@@ -2019,7 +2020,7 @@ export function toolResultUiStatus(
   result: Pick<
     ToolResultBlock,
     "pending_confirmation" | "data" | "summary" | "ok" | "status_code"
-  >,
+  > & { name?: string },
 ): ToolResultUiStatus {
   if (result.pending_confirmation) {
     const code = result.status_code ?? 202;
@@ -2040,6 +2041,24 @@ export function toolResultUiStatus(
       headline: "Waiting for your approval",
       detail:
         "The mutation has not run yet. Approve or reject on the pending tool row; the assistant continues when every pending action has a choice.",
+    };
+  }
+  /** ``hof_builtin_terminal_exec`` — trust process exit_code over vacuous ``error`` keys / bad stream ok flags. */
+  const terminalPayload = parseTerminalExecPayload(result.data);
+  if (terminalPayload !== null) {
+    if (terminalPayload.exit_code === 0) {
+      return {
+        code: 200,
+        label: "OK",
+        tone: "success",
+        headline: "Succeeded",
+      };
+    }
+    return {
+      code: 502,
+      label: "Tool error",
+      tone: "error",
+      headline: "Failed",
     };
   }
   if (result.status_code !== undefined && Number.isFinite(result.status_code)) {

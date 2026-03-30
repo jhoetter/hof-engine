@@ -57,6 +57,47 @@ from hof.config import get_config
 logger = logging.getLogger(__name__)
 
 
+def _save_agent_run_merge_attachments(run_id: str, payload: dict[str, Any]) -> None:
+    """Persist run state; keep ``chat_attachments`` from a previous save if not set in ``payload``."""
+    prev = load_agent_run(run_id)
+    if prev and isinstance(prev.get("chat_attachments"), list) and "chat_attachments" not in payload:
+        payload = {**payload, "chat_attachments": prev["chat_attachments"]}
+    save_agent_run(run_id, payload)
+
+
+def _save_agent_run_with_ttl_merge_attachments(
+    run_id: str,
+    payload: dict[str, Any],
+    ttl_sec: int,
+) -> None:
+    prev = load_agent_run(run_id)
+    if prev and isinstance(prev.get("chat_attachments"), list) and "chat_attachments" not in payload:
+        payload = {**payload, "chat_attachments": prev["chat_attachments"]}
+    save_agent_run_with_ttl(run_id, payload, ttl_sec)
+
+
+def _coerce_persisted_chat_attachments(raw: Any) -> list[dict[str, str]] | None:
+    """Normalize ``chat_attachments`` from persisted agent run JSON."""
+    if not isinstance(raw, list) or not raw:
+        return None
+    out: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("object_key") or "").strip()
+        if not key:
+            continue
+        row: dict[str, str] = {"object_key": key}
+        fn = item.get("filename")
+        if isinstance(fn, str) and fn.strip():
+            row["filename"] = fn.strip()[:500]
+        ct = item.get("content_type")
+        if isinstance(ct, str) and ct.strip():
+            row["content_type"] = ct.strip()[:200]
+        out.append(row)
+    return out or None
+
+
 def _cli_line_cap_for_tool(name: str, base: int) -> int:
     """Long ``hof_builtin_terminal_exec`` commands need a higher cap than generic tools."""
     if name == HOF_BUILTIN_TERMINAL_EXEC:
@@ -75,11 +116,17 @@ def _maybe_wrap_sandbox(
     policy: AgentPolicy,
     run_id: str,
     loop_gen: Iterator[dict[str, Any]],
+    chat_attachments: list[dict[str, str]] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Bind sandbox terminal session to this run (release container when the loop ends)."""
     sc = policy.sandbox.with_env_overrides() if policy.sandbox is not None else None
     if sc is not None and sc.enabled:
-        token = set_sandbox_run(run_id=run_id, user_id=run_id, policy=policy)
+        token = set_sandbox_run(
+            run_id=run_id,
+            user_id=run_id,
+            policy=policy,
+            chat_attachments=chat_attachments,
+        )
         st = get_sandbox_run()
         if st is not None:
             bind_sandbox_run(run_id, st)
@@ -1724,7 +1771,7 @@ def _yield_awaiting_inbox_review_barrier(
             max_tool_output_chars=max_tool_output_chars,
             max_cli_line_chars=max_cli_line_chars,
         )
-    save_agent_run_with_ttl(
+    _save_agent_run_with_ttl_merge_attachments(
         rid,
         {
             "oa_messages": oa_messages,
@@ -1837,6 +1884,7 @@ def _run_agent_llm_tool_loop(
     discover_explore_allowlist: frozenset[str] | None = None,
     discover_explore_tools: list[dict[str, Any]] | None = None,
     discover_post_clarification_resume: bool = False,
+    chat_attachments: list[dict[str, str]] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Run model ↔ tools until final reply, error, or halt for mutation confirmation."""
     rounds = start_round
@@ -1849,16 +1897,16 @@ def _run_agent_llm_tool_loop(
     # Ensure the agent run exists in state so sandbox curl can defer mutations via
     # ``defer_mutation_if_terminal_agent_http`` (which calls ``load_agent_run``).
     # Critical after resume paths that ``delete_agent_run`` before re-entering this loop.
-    save_agent_run(
-        run_id,
-        {
-            "oa_messages": oa_messages,
-            "model": model,
-            "llm_backend": lm_backend,
-            "rounds": rounds,
-            "agent_chat_mode": agent_chat_mode,
-        },
-    )
+    _loop_payload: dict[str, Any] = {
+        "oa_messages": oa_messages,
+        "model": model,
+        "llm_backend": lm_backend,
+        "rounds": rounds,
+        "agent_chat_mode": agent_chat_mode,
+    }
+    if chat_attachments is not None:
+        _loop_payload["chat_attachments"] = chat_attachments
+    _save_agent_run_merge_attachments(run_id, _loop_payload)
 
     try:
         while rounds < max_rounds:
@@ -2514,18 +2562,18 @@ def _run_agent_llm_tool_loop(
                         if plan_resume_final_extras is not None
                         else {}
                     )
-                    save_agent_run(
-                        run_id,
-                        {
-                            "oa_messages": oa_messages,
-                            "model": model,
-                            "llm_backend": lm_backend,
-                            "rounds": rounds,
-                            "open_plan_clarification_id": plan_clarify_halt,
-                            "agent_chat_mode": "plan_discover",
-                            "plan_resume_final_extras": store_extras,
-                        },
-                    )
+                    _pc_payload: dict[str, Any] = {
+                        "oa_messages": oa_messages,
+                        "model": model,
+                        "llm_backend": lm_backend,
+                        "rounds": rounds,
+                        "open_plan_clarification_id": plan_clarify_halt,
+                        "agent_chat_mode": "plan_discover",
+                        "plan_resume_final_extras": store_extras,
+                    }
+                    if chat_attachments is not None:
+                        _pc_payload["chat_attachments"] = chat_attachments
+                    _save_agent_run_merge_attachments(run_id, _pc_payload)
                     yield {
                         "type": "awaiting_plan_clarification",
                         "run_id": run_id,
@@ -2567,17 +2615,17 @@ def _run_agent_llm_tool_loop(
                             ),
                         }
                         return
-                    save_agent_run(
-                        run_id,
-                        {
-                            "oa_messages": oa_messages,
-                            "model": model,
-                            "llm_backend": lm_backend,
-                            "rounds": rounds,
-                            "open_pending_ids": pending_ids,
-                            "agent_chat_mode": agent_chat_mode,
-                        },
-                    )
+                    _pend_payload: dict[str, Any] = {
+                        "oa_messages": oa_messages,
+                        "model": model,
+                        "llm_backend": lm_backend,
+                        "rounds": rounds,
+                        "open_pending_ids": pending_ids,
+                        "agent_chat_mode": agent_chat_mode,
+                    }
+                    if chat_attachments is not None:
+                        _pend_payload["chat_attachments"] = chat_attachments
+                    _save_agent_run_merge_attachments(run_id, _pend_payload)
                     yield {
                         "type": "awaiting_confirmation",
                         "run_id": run_id,
@@ -2873,6 +2921,7 @@ def _run_agent_chat_stream(
             "llm_backend": lm_backend,
             "rounds": 0,
             "agent_chat_mode": chat_mode,
+            "chat_attachments": att_norm,
         },
     )
 
@@ -2898,7 +2947,9 @@ def _run_agent_chat_stream(
             plan_resume_final_extras=plan_resume_final_extras,
             discover_explore_allowlist=discover_explore_allowlist,
             discover_explore_tools=discover_explore_tools,
+            chat_attachments=att_norm,
         ),
+        chat_attachments=att_norm,
     )
 
 
@@ -3196,6 +3247,8 @@ def _run_agent_resume_stream(
         )
         oa_messages.append({"role": "user", "content": _resume_note})
 
+    resume_chat_attachments = _coerce_persisted_chat_attachments(run.get("chat_attachments"))
+
     delete_agent_run(rid)
     yield {"type": "resume_start", "run_id": rid, "model": model, "continuation": True}
     logger.info(
@@ -3224,7 +3277,9 @@ def _run_agent_resume_stream(
             max_tool_output_chars=max_tool_output_chars,
             max_cli_line_chars=max_cli_line_chars,
             agent_chat_mode=resume_chat_mode,
+            chat_attachments=resume_chat_attachments,
         ),
+        chat_attachments=resume_chat_attachments,
     )
 
 
@@ -3352,6 +3407,9 @@ def _run_agent_resume_plan_clarification_stream(
         return
 
     delete_pending(cid)
+    plan_resume_chat_attachments = _coerce_persisted_chat_attachments(
+        run.get("chat_attachments"),
+    )
     delete_agent_run(rid)
     yield {"type": "resume_start", "run_id": rid, "model": model, "continuation": True}
     logger.info(
@@ -3381,7 +3439,9 @@ def _run_agent_resume_plan_clarification_stream(
             agent_chat_mode=resume_chat_mode,
             plan_resume_final_extras=plan_resume_final_extras,
             discover_post_clarification_resume=True,
+            chat_attachments=plan_resume_chat_attachments,
         ),
+        chat_attachments=plan_resume_chat_attachments,
     )
 
 
@@ -3585,6 +3645,10 @@ def _run_agent_resume_inbox_stream(
 
     oa_messages.append({"role": "user", "content": combined})
 
+    inbox_resume_chat_attachments = _coerce_persisted_chat_attachments(
+        run.get("chat_attachments"),
+    )
+
     delete_agent_run(rid)
     yield {"type": "resume_start", "run_id": rid, "model": model, "continuation": True}
     logger.debug(
@@ -3612,7 +3676,9 @@ def _run_agent_resume_inbox_stream(
             max_tool_output_chars=max_tool_output_chars,
             max_cli_line_chars=max_cli_line_chars,
             agent_chat_mode=resume_chat_mode,
+            chat_attachments=inbox_resume_chat_attachments,
         ),
+        chat_attachments=inbox_resume_chat_attachments,
     )
 
 

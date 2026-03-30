@@ -14,6 +14,9 @@ from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
 NormalizeAttachmentsFn = Callable[[Any], tuple[list[dict[str, str]], str | None]]
 # normalized attachment list -> system prompt fragment
 AttachmentsSystemNoteFn = Callable[[list[dict[str, str]]], str]
+# Copy user chat uploads into the sandbox container ``/workspace`` (first terminal session).
+# Args: ``TerminalSession``, normalized attachments (``object_key``, optional ``filename`` / ``content_type``).
+SandboxStageChatAttachmentsFn = Callable[[Any, list[dict[str, str]]], None]
 
 
 @dataclass(frozen=True)
@@ -300,6 +303,9 @@ class AgentPolicy:
     # Optional: Docker terminal pool; when ``terminal_only_dispatch``, domain tools are not exposed
     # to the model — only ``hof_builtin_terminal_exec`` and ``builtins_when_terminal_only``.
     sandbox: SandboxConfig | None = None
+    # Optional: when sandbox is enabled, stage chat S3 attachments into ``/workspace`` before the first
+    # ``hof_builtin_terminal_exec`` in a run (so shell tools can read uploaded files).
+    sandbox_stage_chat_attachments: SandboxStageChatAttachmentsFn | None = None
 
     def effective_allowlist(self) -> frozenset[str]:
         sc = self.sandbox.with_env_overrides() if self.sandbox is not None else None

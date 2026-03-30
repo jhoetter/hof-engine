@@ -14,6 +14,11 @@ RUN useradd --create-home --shell /bin/bash sandbox
 COPY hof/agent/sandbox/hof_cli.sh /usr/local/bin/hof
 RUN chmod +x /usr/local/bin/hof
 
+# Ergonomic SQL Lab entrypoints (build JSON via jq; no invented --sql/--token flags on `hof fn`).
+COPY hof/agent/sandbox/sql-lab-query /usr/local/bin/sql-lab-query
+COPY hof/agent/sandbox/sql-lab-exec /usr/local/bin/sql-lab-exec
+RUN chmod +x /usr/local/bin/sql-lab-query /usr/local/bin/sql-lab-exec
+
 USER sandbox
 WORKDIR /workspace
 

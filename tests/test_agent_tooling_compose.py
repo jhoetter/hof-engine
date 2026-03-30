@@ -163,6 +163,24 @@ def test_tool_result_status_for_ui_error_payload() -> None:
     assert tool_result_status_for_ui('{"error":"boom"}') == (False, 500)
 
 
+def test_tool_result_status_for_ui_terminal_exec_exit_zero_ignores_vacuous_error() -> None:
+    raw = json.dumps(
+        {"exit_code": 0, "output": '{"result":{"rows":[]}}', "error": ""},
+    )
+    assert tool_result_status_for_ui(raw) == (True, 200)
+
+
+def test_tool_result_status_for_ui_terminal_exec_nonzero() -> None:
+    raw = json.dumps({"exit_code": 2, "output": "stderr"})
+    assert tool_result_status_for_ui(raw) == (False, 500)
+
+
+def test_tool_result_status_for_ui_terminal_nested_result_string() -> None:
+    inner = json.dumps({"exit_code": 0, "output": '{"result":{"rows":[]}}'})
+    raw = json.dumps({"result": inner, "duration_ms": 0, "error": ""})
+    assert tool_result_status_for_ui(raw) == (True, 200)
+
+
 def test_tool_result_status_for_ui_validation() -> None:
     raw = '{"error":"validation failed","detail":[]}'
     assert tool_result_status_for_ui(raw) == (False, 422)

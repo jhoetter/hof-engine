@@ -8,9 +8,13 @@ HOF_USAGE="usage: hof fn list | hof fn describe <name> | hof fn <function_name> 
 _curl_post_fn() {
   local url="$1"
   local body="${2:-}"
+  local tmp
+  tmp=$(mktemp)
   local args=(
-    -sS -f
+    -sS
     -H "Content-Type: application/json"
+    -o "$tmp"
+    -w "%{http_code}"
   )
   if [[ -n "${API_TOKEN:-}" ]]; then
     args+=(-H "Authorization: Bearer $API_TOKEN")
@@ -18,15 +22,51 @@ _curl_post_fn() {
     args+=(-u "${HOF_BASIC_USER:-admin}:$HOF_BASIC_PASSWORD")
   else
     echo "hof: set API_TOKEN or HOF_BASIC_PASSWORD in the sandbox" >&2
+    rm -f "$tmp"
     exit 1
   fi
   [[ -n "${HOF_AGENT_RUN_ID:-}" ]] && args+=(-H "X-Hof-Agent-Run-Id: $HOF_AGENT_RUN_ID")
   [[ -n "${HOF_AGENT_TOOL_CALL_ID:-}" ]] && args+=(-H "X-Hof-Agent-Tool-Call-Id: $HOF_AGENT_TOOL_CALL_ID")
+  local http_code
   if [[ -n "$body" ]]; then
-    curl "${args[@]}" -d "$body" "$url"
+    http_code=$(curl "${args[@]}" -d "$body" "$url")
   else
-    curl "${args[@]}" -d @- "$url"
+    http_code=$(curl "${args[@]}" -d @- "$url")
   fi
+  local out
+  out=$(cat "$tmp")
+  rm -f "$tmp"
+  if [[ "$http_code" -ge 400 ]]; then
+    echo "hof: HTTP $http_code from $url" >&2
+    printf '%s\n' "$out" >&2
+    exit 1
+  fi
+  printf '%s' "$out"
+}
+
+_curl_get_describe() {
+  local url="$1"
+  local tmp
+  tmp=$(mktemp)
+  local http_code
+  if [[ -n "${API_TOKEN:-}" ]]; then
+    http_code=$(curl -sS -o "$tmp" -w "%{http_code}" -H "Authorization: Bearer $API_TOKEN" "$url")
+  elif [[ -n "${HOF_BASIC_PASSWORD:-}" ]]; then
+    http_code=$(curl -sS -o "$tmp" -w "%{http_code}" -u "${HOF_BASIC_USER:-admin}:$HOF_BASIC_PASSWORD" "$url")
+  else
+    echo "hof: set API_TOKEN or HOF_BASIC_PASSWORD in the sandbox" >&2
+    rm -f "$tmp"
+    exit 1
+  fi
+  local out
+  out=$(cat "$tmp")
+  rm -f "$tmp"
+  if [[ "$http_code" -ge 400 ]]; then
+    echo "hof: HTTP $http_code from $url" >&2
+    printf '%s\n' "$out" >&2
+    exit 1
+  fi
+  printf '%s' "$out"
 }
 
 if [[ "${1:-}" != "fn" ]]; then
@@ -54,14 +94,7 @@ case "$cmd" in
     fi
     base="${API_BASE_URL:?set API_BASE_URL}"
     url="$base/api/functions/$name/schema"
-    if [[ -n "${API_TOKEN:-}" ]]; then
-      curl -sS -f -H "Authorization: Bearer $API_TOKEN" "$url"
-    elif [[ -n "${HOF_BASIC_PASSWORD:-}" ]]; then
-      curl -sS -f -u "${HOF_BASIC_USER:-admin}:$HOF_BASIC_PASSWORD" "$url"
-    else
-      echo "hof: set API_TOKEN or HOF_BASIC_PASSWORD in the sandbox" >&2
-      exit 1
-    fi
+    _curl_get_describe "$url"
     ;;
   help | --help | -h)
     echo "$HOF_USAGE"

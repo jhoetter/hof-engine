@@ -33,6 +33,7 @@ import {
   stripGuidanceParagraphsForStructuredSections,
 } from "./prepareSkillFieldForMarkdown";
 import { humanizeToolName } from "./hofAgentChatModel";
+import { AGENT_CHAT_ATTACHMENT_ACCEPT } from "./agentAttachmentUpload";
 import { useHofAgentChat } from "./hofAgentChatContext";
 import {
   useAgentVoiceTranscription,
@@ -735,7 +736,7 @@ export function HofAgentComposer({
                   strokeWidth={2}
                   aria-hidden
                 />
-                <span>Attach PDF</span>
+                <span>Attach document</span>
               </button>
               <button
                 type="button"
@@ -893,7 +894,7 @@ export function HofAgentComposer({
       <input
         ref={fileInputRef}
         type="file"
-        accept="application/pdf,.pdf"
+        accept={AGENT_CHAT_ATTACHMENT_ACCEPT}
         multiple
         className="hidden"
         onChange={(e) => void onPickFiles(e.target.files)}

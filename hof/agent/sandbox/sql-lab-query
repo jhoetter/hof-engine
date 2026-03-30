@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Spreadsheet-app: call sql_lab_query with a natural-language instruction (no manual JSON).
+# Spreadsheet-app: NL→SQL via read_data(natural_language=) — no separate sql_lab_query function.
 # Requires API_BASE_URL, API_TOKEN (sandbox injects both for HTTP auth to /hof fn). Uses /usr/local/bin/hof.
 #
 # Usage: sql-lab-query [--limit N] <instruction words...>
@@ -25,6 +25,6 @@ INSTRUCTION="$*"
 : "${API_BASE_URL:?set API_BASE_URL}"
 : "${API_TOKEN:?set API_TOKEN}"
 
-BODY=$(jq -n --arg i "$INSTRUCTION" --argjson l "$LIMIT" '{instruction:$i, limit:$l}')
+BODY=$(jq -n --arg i "$INSTRUCTION" --argjson l "$LIMIT" '{natural_language:$i, limit:$l}')
 
-exec /usr/local/bin/hof fn sql_lab_query "$BODY"
+exec /usr/local/bin/hof fn read_data "$BODY"

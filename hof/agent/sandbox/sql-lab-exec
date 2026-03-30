@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Spreadsheet-app: call sql_lab_execute with read-only SQL (no manual JSON).
+# Spreadsheet-app: raw read-only SQL via read_data(sql=) — no separate sql_lab_execute function.
 # Requires API_BASE_URL, API_TOKEN (sandbox injects both for HTTP auth to /hof fn). Uses /usr/local/bin/hof.
 #
 # Usage:
@@ -37,4 +37,4 @@ fi
 
 BODY=$(jq -n --arg s "$SQL" --argjson l "$LIMIT" '{sql:$s, limit:$l}')
 
-exec /usr/local/bin/hof fn sql_lab_execute "$BODY"
+exec /usr/local/bin/hof fn read_data "$BODY"

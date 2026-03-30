@@ -193,6 +193,7 @@ describe("toolResultUiStatus", () => {
     expect(
       toolResultUiStatus({
         summary: "x",
+        name: "hof_builtin_terminal_exec",
         ok: false,
         status_code: 500,
         data: '{"exit_code":0,"output":"{}"}',

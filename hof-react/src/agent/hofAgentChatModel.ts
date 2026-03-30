@@ -2044,22 +2044,24 @@ export function toolResultUiStatus(
     };
   }
   /** ``hof_builtin_terminal_exec`` — trust process exit_code over vacuous ``error`` keys / bad stream ok flags. */
-  const terminalPayload = parseTerminalExecPayload(result.data);
-  if (terminalPayload !== null) {
-    if (terminalPayload.exit_code === 0) {
+  if (result.name === HOF_BUILTIN_TERMINAL_EXEC) {
+    const terminalPayload = parseTerminalExecPayload(result.data);
+    if (terminalPayload !== null) {
+      if (terminalPayload.exit_code === 0) {
+        return {
+          code: 200,
+          label: "OK",
+          tone: "success",
+          headline: "Succeeded",
+        };
+      }
       return {
-        code: 200,
-        label: "OK",
-        tone: "success",
-        headline: "Succeeded",
+        code: 502,
+        label: "Tool error",
+        tone: "error",
+        headline: "Failed",
       };
     }
-    return {
-      code: 502,
-      label: "Tool error",
-      tone: "error",
-      headline: "Failed",
-    };
   }
   if (result.status_code !== undefined && Number.isFinite(result.status_code)) {
     const code = result.status_code;

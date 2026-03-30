@@ -174,10 +174,6 @@ def mutation_preview_to_wire(
 # Framework agent tools (read-only); registered after user discovery in ``discover_all``.
 BUILTIN_AGENT_TOOL_NAMES: frozenset[str] = frozenset(
     {
-        "hof_builtin_server_time",
-        "hof_builtin_runtime_info",
-        "hof_builtin_http_get",
-        "hof_builtin_calculate",
         "hof_builtin_present_plan",
         "hof_builtin_present_plan_clarification",
         "hof_builtin_update_plan_todo_state",

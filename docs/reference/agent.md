@@ -83,29 +83,13 @@ Without streamed reasoning, the observable tool chain is: `assistant_done` (`fin
 
 ## Built-in agent tools
 
-These **read-only** tools are always part of the effective allowlist (`AgentPolicy.effective_allowlist()`): they are merged with your `allowlist_read` and `allowlist_mutation` names. They are **not** mutation tools (no confirmation step). Implementations live in the framework; modules register at the end of **`discover_all`** so app `functions/` load first and reserved `hof_builtin_*` names win on accidental collision.
+The following **read-only** tools are always part of the effective allowlist (`AgentPolicy.effective_allowlist()`): they are merged with your `allowlist_read` and `allowlist_mutation` names. They are **not** mutation tools (no confirmation step). Implementations live in the framework; modules register at the end of **`discover_all`** so app `functions/` load first and reserved `hof_builtin_*` names win on accidental collision.
 
 | Tool | Purpose |
 |------|---------|
-| `hof_builtin_server_time` | UTC ISO time, unix timestamp, server-local ISO; optional `iana_timezone` (IANA name, e.g. `Europe/Berlin`) for `requested_zone_iso`. |
-| `hof_builtin_runtime_info` | `hostname`, OS/platform string, Python version, **`hof-engine` package version**, and `app_name` when `hof.config` is loaded. |
-| `hof_builtin_http_get` | GET a URL; returns `status_code`, `content_type`, and UTF-8 `text` (truncated). |
-| `hof_builtin_calculate` | Numeric math: `expression` or batch `expressions` (simpleeval), or `values` + `operation` / `operations` for aggregates (`sum`, `mean`, `min`, `max`, `median`, `product`, `count`). |
-
-**Calculate (`hof_builtin_calculate`):**
-
-- **Expression mode:** literals, `+ - * / // % **`, comparisons, parentheses; functions `int`, `float`, `abs`, `round`, `min`, `max`, `sum`, `pow`, `sqrt`, `floor`, `ceil`; constants `pi`, `e`, `True`/`False`/`None`. List/tuple literals allowed (EvalWithCompoundTypes). Not a general Python or shell runner.
-- **Batch expression mode:** send **`expressions`** as an array of strings (each evaluated like `expression`). Mutually exclusive with **`values`** and with a singular **`expression`**. Response: `mode: batch_expression`, `results`: `[{ "index": 0, "result": … }, { "index": 1, "error": "…" }, …]`.
-- **Aggregate mode:** send **`values`** and **`operation`** (one stat) or **`operations`** (several stats in one call). **`operations`** is a string array, a JSON-array string, or comma-separated names (e.g. `sum, mean`). If both **`operation`** and **`operations`** are set, the server merges them (**`operations` first**, then appends **`operation`** if not already listed). With a **single** op, the response keeps **`operation`** + **`result`** (backward compatible). With **multiple** ops, the response uses **`results`**: `{ "sum": 6, "mean": 2 }` (per-op failures appear as `{ "error": "…" }` under that op key). For table columns, prefer **one** call with all numbers in **`values`** and **`operations`**, not one call per row.
-- **Values parsing:** Prefer a JSON **array of numbers**; the server also accepts a **string** containing a JSON array (e.g. tooling that double-encodes), **comma-separated** numbers (`1, 2, 3.5`), **numeric strings** inside the array, or a **single number**. If both `values` and `expression` are present, **aggregate wins** and `ignored_expression` is set when `expression` was non-empty.
-- **Limits:** `HOF_AGENT_CALC_MAX_EXPRESSION_CHARS` (default **4096**, hard max **64000**), `HOF_AGENT_CALC_MAX_VALUES` (default **10000**, hard max **50000**), `HOF_AGENT_CALC_MAX_BATCH_EXPRESSIONS` (default **200**, hard max **1000**).
-
-**Fetch safety (`hof_builtin_http_get`):**
-
-- **HTTPS:** the hostname must resolve only to **public** addresses (`ipaddress.is_global`). Link-local, loopback, and private ranges are rejected (SSRF mitigation).
-- **HTTP:** allowed only for hostnames `localhost`, `127.0.0.1`, or `::1`; resolved IPs must be **loopback**.
-- **Redirects:** disabled (`follow_redirects=False`).
-- **Size / time:** response body is capped (default **512 KiB**, hard max **2 MiB**). Override with **`HOF_AGENT_FETCH_MAX_BYTES`**. Timeout default **15s**; cap with **`HOF_AGENT_FETCH_TIMEOUT_SECONDS`** (1–120).
+| `hof_builtin_present_plan` | Present a structured plan to the user for review. |
+| `hof_builtin_present_plan_clarification` | Show multiple-choice clarification questions during plan discovery. |
+| `hof_builtin_update_plan_todo_state` | Mark plan checklist items as completed during execution. |
 
 They appear in `GET /api/agent/tools` like any other registered function once discovery has run (same as the dev server and CLI bootstrap).
 
@@ -128,8 +112,6 @@ Pending runs and mutation placeholders are stored in **Redis** when `REDIS_URL` 
 - Direct `POST /api/functions/<mutation>` still runs immediately.
 - Only the agent path wraps mutations in `pending_confirmation` + user approval.
 - Validate attachments in `AgentPolicy.normalize_attachments` (e.g. tenant S3 prefix).
-- Built-in **`hof_builtin_http_get`** is not a general egress proxy: no redirects, strict host/IP rules, bounded body size (see **Built-in agent tools**).
-- Built-in **`hof_builtin_calculate`** evaluates only whitelisted numeric expressions and aggregates; it does not execute arbitrary code.
 
 ## React UI
 

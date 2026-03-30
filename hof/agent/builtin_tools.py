@@ -825,22 +825,22 @@ def hof_builtin_terminal_exec(command: str) -> dict[str, Any]:
             max_output_chars=sc.max_output_chars,
             max_timeout_sec=sc.max_exec_timeout_sec,
         )
-        stage_fn = getattr(policy, "sandbox_stage_chat_attachments", None)
-        if not run.sandbox_attachments_staged:
-            atts = run.chat_attachments or []
-            if atts and callable(stage_fn):
-                try:
-                    stage_fn(run.terminal_session, atts)
-                except Exception as exc:
-                    logger.exception("sandbox_stage_chat_attachments failed")
-                    return {
-                        "exit_code": 1,
-                        "output": (
-                            "error: could not copy chat attachments into /workspace: "
-                            f"{exc}"
-                        ),
-                    }
-            run.sandbox_attachments_staged = True
+    stage_fn = getattr(policy, "sandbox_stage_chat_attachments", None)
+    if not run.sandbox_attachments_staged:
+        atts = run.chat_attachments or []
+        if atts and callable(stage_fn):
+            try:
+                stage_fn(run.terminal_session, atts)
+            except Exception as exc:
+                logger.exception("sandbox_stage_chat_attachments failed")
+                return {
+                    "exit_code": 1,
+                    "output": (
+                        "error: could not copy chat attachments into /workspace: "
+                        f"{exc}"
+                    ),
+                }
+        run.sandbox_attachments_staged = True
     cmd = (command or "").strip() or "true"
     result = run.terminal_session.exec_command(
         cmd,

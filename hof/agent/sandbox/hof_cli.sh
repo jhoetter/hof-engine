@@ -107,7 +107,7 @@ case "$cmd" in
     if [[ $# -ge 1 ]]; then
       _curl_post_fn "$url" "$1"
     else
-      _curl_post_fn "$url" ""
+      _curl_post_fn "$url" "{}"
     fi
     ;;
 esac

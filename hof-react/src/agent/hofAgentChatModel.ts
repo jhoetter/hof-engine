@@ -1846,18 +1846,6 @@ export function pseudoHofFnCliFromShellCommand(
     return line.length > maxChars ? `${line.slice(0, maxChars - 1)}…` : line;
   }
   const o = body as Record<string, unknown>;
-  let nested = false;
-  for (const v of Object.values(o)) {
-    if (v !== null && typeof v === "object") {
-      nested = true;
-      break;
-    }
-  }
-  if (nested) {
-    const compact = JSON.stringify(o);
-    const line = `hof fn ${fnName} ${compact}`;
-    return line.length > maxChars ? `${line.slice(0, maxChars - 1)}…` : line;
-  }
   const keys = Object.keys(o).sort((a, b) => a.localeCompare(b));
   const parts: string[] = ["hof", "fn", fnName];
   for (const k of keys) {
@@ -1868,6 +1856,8 @@ export function pseudoHofFnCliFromShellCommand(
       parts.push(`--${k}`, "false");
     } else if (v === null) {
       parts.push(`--${k}`, "null");
+    } else if (typeof v === "object") {
+      parts.push(`--${k}`, shlexQuotePseudo(JSON.stringify(v)));
     } else {
       parts.push(`--${k}`, shlexQuotePseudo(String(v)));
     }
@@ -1935,10 +1925,15 @@ export function normalizeAgentCliDisplayLine(
   }
 
   const args = argumentsJson?.trim() ?? "";
-  const fallback =
-    name && args
-      ? `hof fn ${name} ${args.length > 220 ? `${args.slice(0, 217)}…` : args}`
-      : name || "(tool)";
+  const fallback = (() => {
+    if (name && args) {
+      const candidate = `hof fn ${name} '${args}'`;
+      const pseudo = pseudoHofFnCliFromShellCommand(candidate, 8000);
+      if (pseudo) return pseudo;
+      return `hof fn ${name} ${args.length > 220 ? `${args.slice(0, 217)}…` : args}`;
+    }
+    return name || "(tool)";
+  })();
 
   if (!raw) {
     return fallback;
@@ -1946,7 +1941,8 @@ export function normalizeAgentCliDisplayLine(
   if (cliLineLooksLikeHttpFunctionPost(raw)) {
     return fallback;
   }
-  return raw;
+  const pseudo = pseudoHofFnCliFromShellCommand(raw, 8000);
+  return pseudo ?? raw;
 }
 
 export function toolCallCliLine(b: ToolCallBlock): string {

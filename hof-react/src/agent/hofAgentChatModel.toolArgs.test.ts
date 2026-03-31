@@ -42,7 +42,7 @@ describe("toolCallCliLine", () => {
         arguments: '{"rows":[]}',
         cli_line: 'POST /api/functions/bulk_create_expenses {"rows":[]}',
       }),
-    ).toBe('hof fn bulk_create_expenses {"rows":[]}');
+    ).toBe("hof fn bulk_create_expenses --rows []");
   });
 
   it("keeps server hof fn lines when present", () => {
@@ -114,6 +114,18 @@ describe("pseudoHofFnCliFromShellCommand", () => {
     expect(line).toContain("hof fn list_expenses");
     expect(line).toContain("--page");
     expect(line).toContain("--page_size");
+  });
+
+  it("returns flag line with nested JSON serialized as flag value", () => {
+    const line = pseudoHofFnCliFromShellCommand(
+      `hof fn read_data '{"entity":"reviews","page":1,"filters":{"counts_only":true}}'`,
+      500,
+    );
+    expect(line).toContain("hof fn read_data");
+    expect(line).toContain("--entity");
+    expect(line).toContain("--page");
+    expect(line).toContain("--filters");
+    expect(line).not.toMatch(/^hof fn read_data \{/);
   });
 });
 

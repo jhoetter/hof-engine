@@ -40,7 +40,6 @@ AGENT_TOOL_DESCRIPTION_MAX_CHARS = 2000
 AGENT_TOOL_DISPLAY_TITLE_KEY = "_display_title"
 AGENT_TOOL_DISPLAY_TITLE_MAX_CHARS = 120
 
-
 def _json_type_for_param(type_name: str) -> str:
     return {
         "int": "integer",
@@ -363,27 +362,21 @@ def format_cli_line(name: str, arguments_json: str, *, max_cli_line_chars: int) 
 
     safe = _redact_for_cli(parsed)
     parts: list[str] = ["hof", "fn", name]
-    nested = False
     for key in sorted(safe.keys()):
         val = safe[key]
-        if isinstance(val, (dict, list)):
-            nested = True
-            break
         if val is True:
             parts.append(f"--{key}")
         elif val is False:
             parts.extend((f"--{key}", "false"))
         elif val is None:
             parts.extend((f"--{key}", "null"))
+        elif isinstance(val, (dict, list)):
+            parts.append(f"--{key}")
+            parts.append(shlex.quote(json.dumps(val, separators=(",", ":"), ensure_ascii=False)))
         else:
             parts.append(f"--{key}")
             parts.append(shlex.quote(str(val)))
-    if nested:
-        compact = json.dumps(safe, separators=(",", ":"), ensure_ascii=False)
-        # Same pseudo-CLI as flat args (UI/TUI); nested payloads are JSON after the function name.
-        line = f"hof fn {name} {compact}"
-    else:
-        line = " ".join(parts)
+    line = " ".join(parts)
     if len(line) > max_cli_line_chars:
         line = line[: max_cli_line_chars - 1] + "…"
     return line

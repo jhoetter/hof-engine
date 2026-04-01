@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import {
@@ -83,6 +84,12 @@ export type HofAgentComposerProps = {
   planModePromptMinChars?: number;
   /** Streaming speech-to-text (OpenAI Realtime); optional Vite: `VITE_AGENT_TRANSCRIBE_*`. */
   voiceTranscription?: HofAgentComposerVoiceTranscription;
+  /** Optional extra rows for the `+` composer menu. */
+  extraAttachMenuItems?: (context: {
+    closeMenu: () => void;
+    inputLocked: boolean;
+    busy: boolean;
+  }) => ReactNode;
 };
 
 /** Square ghost icon control (plus / attach menu trigger). */
@@ -347,6 +354,7 @@ export function HofAgentComposer({
   textareaMaxHeightPx = 200,
   planModePromptMinChars = 80,
   voiceTranscription: voiceTranscriptionProp,
+  extraAttachMenuItems,
 }: HofAgentComposerProps) {
   const {
     input,
@@ -499,6 +507,9 @@ export function HofAgentComposer({
     fileInputRef.current?.click();
     setAttachMenuOpen(false);
   };
+  const closeAttachMenu = useCallback(() => {
+    setAttachMenuOpen(false);
+  }, []);
 
   const openSkillsDialog = () => {
     setAttachMenuOpen(false);
@@ -752,6 +763,13 @@ export function HofAgentComposer({
                 />
                 <span>Show skills</span>
               </button>
+              {extraAttachMenuItems
+                ? extraAttachMenuItems({
+                    closeMenu: closeAttachMenu,
+                    inputLocked,
+                    busy,
+                  })
+                : null}
             </div>
           ) : null}
           </div>

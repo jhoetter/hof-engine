@@ -18,7 +18,9 @@ import { HLJS_SCOPED_CSS } from "./markdown/hljsTokens";
 import { MarkdownSortableTable } from "./markdown/MarkdownSortableTable";
 import { prepareAssistantMarkdownSource } from "./markdown/prepareAssistantMarkdownSource";
 import { rehypeFencedCodeClass } from "./markdown/rehypeFencedCodeClass";
+import { hastTableToMatrix } from "./markdown/hastTable";
 import { useAssistantMarkdownLinkClick } from "./assistantMarkdownLinkContext";
+import { useAssistantMarkdownTableRenderer } from "./assistantMarkdownTableContext";
 
 function MarkdownAnchor({
   href,
@@ -55,7 +57,7 @@ function MarkdownAnchor({
  * Streaming can yield ragged GFM tables or half-open fences; sortable table
  * then falls back to the default DOM until the matrix is rectangular.
  */
-const mdComponents: Components = {
+const baseMdComponents: Components = {
   p: ({ children, ...props }) => (
     <p className="mb-2 last:mb-0 [&:first-child]:mt-0" {...props}>
       {children}
@@ -134,9 +136,6 @@ const mdComponents: Components = {
       {children}
     </CodeFence>
   ),
-  table: ({ node, children }) => (
-    <MarkdownSortableTable node={node}>{children}</MarkdownSortableTable>
-  ),
   thead: ({ children, ...props }) => (
     <thead className="border-b border-border bg-surface/40" {...props}>
       {children}
@@ -189,9 +188,31 @@ const KATEX_STYLESHEET_HREF =
   "https://cdn.jsdelivr.net/npm/katex@0.16.41/dist/katex.min.css";
 
 export function AssistantMarkdown({ source }: AssistantMarkdownProps) {
+  const tableRenderer = useAssistantMarkdownTableRenderer();
   const prepared = useMemo(
     () => prepareAssistantMarkdownSource(source),
     [source],
+  );
+  const mdComponents = useMemo<Components>(
+    () => ({
+      ...baseMdComponents,
+      table: ({ node, children }) => {
+        if (node && node.tagName === "table" && tableRenderer) {
+          const matrix = hastTableToMatrix(node);
+          if (matrix && matrix.length > 0) {
+            const custom = tableRenderer({
+              headers: matrix[0] ?? [],
+              rows: matrix.slice(1),
+            });
+            if (custom != null) {
+              return custom;
+            }
+          }
+        }
+        return <MarkdownSortableTable node={node}>{children}</MarkdownSortableTable>;
+      },
+    }),
+    [tableRenderer],
   );
 
   useEffect(() => {

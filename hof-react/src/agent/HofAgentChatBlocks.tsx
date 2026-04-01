@@ -37,6 +37,10 @@ function getAgentUiPortalRoot(): HTMLElement {
 }
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import {
+  AssistantMarkdownTableProvider,
+  type AssistantMarkdownTableRenderer,
+} from "./assistantMarkdownTableContext";
+import {
   FunctionResultDisplay,
   TERMINAL_SESSION_INSET,
   TERMINAL_STDOUT_SURFACE_CLASS,
@@ -56,6 +60,8 @@ import {
   toolCallRowTitle,
   isGenericAwaitingConfirmationSummary,
   postToolAssistantBlockIds,
+  postToolAssistantToolInfo,
+  type PostToolInfo,
   segmentLiveBlocks,
   showProposedActionsLabel,
   toolCallCliLine,
@@ -77,6 +83,79 @@ import type {
   ToolCallBlock,
   ToolResultBlock,
 } from "./hofAgentChatModel";
+
+/** Context for optional action buttons rendered alongside a tool result. */
+export type ToolResultActionsContext = {
+  call?: { name: string; arguments?: Record<string, unknown> };
+  result: { data?: unknown; summary?: string; name?: string };
+};
+
+export type ToolResultActionsRenderer = (
+  ctx: ToolResultActionsContext,
+) => ReactNode;
+
+/** Context for replacing default {@link FunctionResultDisplay} for a tool result. */
+export type ToolResultRendererContext = {
+  name: string;
+  data: unknown;
+  call?: { arguments?: Record<string, unknown> };
+};
+
+export type ToolResultRendererFn = (
+  ctx: ToolResultRendererContext,
+) => ReactNode | null;
+
+/**
+ * Called for assistant blocks that follow a tool result.
+ * Receives the tool call info (name + parsed arguments + result data).
+ * Return a table renderer to upgrade markdown tables in that block; null = default tables.
+ */
+export type AfterToolTableRendererFn = (
+  tool: {
+    name: string;
+    arguments?: Record<string, unknown>;
+    resultData?: unknown;
+  },
+) => AssistantMarkdownTableRenderer | null;
+
+function parsePostToolInfo(
+  info: PostToolInfo,
+): {
+  name: string;
+  arguments?: Record<string, unknown>;
+  resultData?: unknown;
+} {
+  let args: Record<string, unknown> | undefined;
+  if (info.arguments) {
+    try {
+      const parsed: unknown = JSON.parse(info.arguments);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        args = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return { name: info.name, arguments: args, resultData: info.resultData };
+}
+
+export function parseToolCallArguments(
+  call: ToolCallBlock,
+): Record<string, unknown> | undefined {
+  const raw = call.arguments;
+  if (!raw || typeof raw !== "string") {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // ignore invalid JSON
+  }
+  return undefined;
+}
 import {
   formatDurationMs,
   useThinkingEpisodeElapsed,
@@ -457,6 +536,8 @@ export function ToolGroupCard({
   busy,
   anchorId,
   mutationOutcome,
+  toolResultActions,
+  toolResultRenderer,
 }: {
   call: ToolCallBlock;
   mutation?: MutationPendingBlock;
@@ -475,6 +556,8 @@ export function ToolGroupCard({
   anchorId?: string;
   /** `true` approved, `false` rejected, `undefined` unknown / still pending */
   mutationOutcome?: boolean;
+  toolResultActions?: ToolResultActionsRenderer;
+  toolResultRenderer?: ToolResultRendererFn;
 }) {
   const title = toolCallRowTitle(call);
   const line = toolCallCliLine(call);
@@ -528,24 +611,60 @@ export function ToolGroupCard({
         </summary>
         <div className="min-w-0 max-w-full border-t border-border/60">
           <ToolTerminalCommandRow cliLine={line} />
-          {showInnerBody ? (
-            <div
-              className={`min-w-0 max-w-full overflow-x-auto ${TERMINAL_STDOUT_SURFACE_CLASS}`}
-              aria-label="Tool output"
-            >
-              {result!.data !== undefined ? (
-                <FunctionResultDisplay
-                  value={result!.data}
-                  variant="terminalPlain"
-                />
-              ) : (
-                <p
-                  className={`whitespace-pre-wrap break-words text-secondary ${TERMINAL_SESSION_INSET}`}
-                >
-                  {result!.summary}
-                </p>
-              )}
-            </div>
+          {showInnerBody && result ? (
+            <>
+              <div
+                className={`min-w-0 max-w-full overflow-x-auto ${TERMINAL_STDOUT_SURFACE_CLASS}`}
+                aria-label="Tool output"
+              >
+                {(() => {
+                  const parsedArgs = parseToolCallArguments(call);
+                  const custom = toolResultRenderer?.({
+                    name: result.name,
+                    data: result.data,
+                    call: { arguments: parsedArgs },
+                  });
+                  if (custom != null) {
+                    return custom;
+                  }
+                  if (result.data !== undefined) {
+                    return (
+                      <FunctionResultDisplay
+                        value={result.data}
+                        variant="terminalPlain"
+                      />
+                    );
+                  }
+                  return (
+                    <p
+                      className={`whitespace-pre-wrap break-words text-secondary ${TERMINAL_SESSION_INSET}`}
+                    >
+                      {result.summary}
+                    </p>
+                  );
+                })()}
+              </div>
+              {toolResultActions
+                ? (() => {
+                    const actions = toolResultActions({
+                      call: {
+                        name: call.name,
+                        arguments: parseToolCallArguments(call),
+                      },
+                      result: {
+                        data: result.data,
+                        summary: result.summary,
+                        name: result.name,
+                      },
+                    });
+                    return actions ? (
+                      <div className="border-t border-border/60 px-3 py-2">
+                        {actions}
+                      </div>
+                    ) : null;
+                  })()
+                : null}
+            </>
           ) : null}
         </div>
       </details>
@@ -680,6 +799,9 @@ export function RunBlocksList({
   setApprovalDecisions,
   busy,
   mutationOutcomeByPendingId,
+  toolResultActions,
+  toolResultRenderer,
+  afterToolTableRenderer,
 }: {
   blocks: LiveBlock[];
   barrier: ApprovalBarrier | null;
@@ -689,6 +811,9 @@ export function RunBlocksList({
   >;
   busy: boolean;
   mutationOutcomeByPendingId: Record<string, boolean | undefined>;
+  toolResultActions?: ToolResultActionsRenderer;
+  toolResultRenderer?: ToolResultRendererFn;
+  afterToolTableRenderer?: AfterToolTableRendererFn;
 }) {
   const segments = segmentLiveBlocks(
     dropRedundantModelPhaseBeforeAssistant(blocks),
@@ -701,6 +826,9 @@ export function RunBlocksList({
     );
 
   const postToolAssistantIds = postToolAssistantBlockIds(blocks);
+  const postToolInfoMap = afterToolTableRenderer
+    ? postToolAssistantToolInfo(blocks)
+    : null;
 
   return (
     <div className="space-y-3">
@@ -763,6 +891,8 @@ export function RunBlocksList({
                 busy={busy}
                 anchorId={anchorId}
                 mutationOutcome={mutationOutcome}
+                toolResultActions={toolResultActions}
+                toolResultRenderer={toolResultRenderer}
               />
             </div>
           );
@@ -803,6 +933,20 @@ export function RunBlocksList({
         if (b.kind === "inbox_review_required") {
           return null;
         }
+        const precedingTool = postToolInfoMap?.get(b.id);
+        const blockTableRenderer =
+          precedingTool && afterToolTableRenderer
+            ? afterToolTableRenderer(parsePostToolInfo(precedingTool))
+            : null;
+        const blockView = (
+          <LiveBlockView
+            b={b}
+            afterToolResult={postToolAssistantIds.has(b.id)}
+            busy={busy}
+            toolResultActions={toolResultActions}
+            toolResultRenderer={toolResultRenderer}
+          />
+        );
         return (
           <div
             key={b.id}
@@ -810,11 +954,13 @@ export function RunBlocksList({
               isCompactTerminalToolPair(segments, segIdx) ? "!mt-1" : undefined
             }
           >
-            <LiveBlockView
-              b={b}
-              afterToolResult={postToolAssistantIds.has(b.id)}
-              busy={busy}
-            />
+            {blockTableRenderer ? (
+              <AssistantMarkdownTableProvider renderer={blockTableRenderer}>
+                {blockView}
+              </AssistantMarkdownTableProvider>
+            ) : (
+              blockView
+            )}
           </div>
         );
       })}
@@ -1668,6 +1814,8 @@ export function LiveBlockView({
   b,
   afterToolResult = false,
   busy = false,
+  toolResultActions,
+  toolResultRenderer,
 }: {
   b: LiveBlock;
   afterToolResult?: boolean;
@@ -1676,6 +1824,8 @@ export function LiveBlockView({
    * on persisted thread blocks after the HTTP stream has already ended.
    */
   busy?: boolean;
+  toolResultActions?: ToolResultActionsRenderer;
+  toolResultRenderer?: ToolResultRendererFn;
 }) {
   const { agentMode, planBuiltinLane, planClarificationBarrier } =
     useHofAgentChat();
@@ -2056,6 +2206,21 @@ export function LiveBlockView({
       );
     }
     const title = humanizeToolName(b.name);
+    const customOutput = toolResultRenderer?.({
+      name: b.name,
+      data: b.data,
+      call: undefined,
+    });
+    const actionsNode = toolResultActions
+      ? toolResultActions({
+          call: undefined,
+          result: {
+            data: b.data,
+            summary: b.summary,
+            name: b.name,
+          },
+        })
+      : null;
     return (
       <div
         className={`${AGENT_CHAT_COLUMN_CLASS} flex min-w-0 gap-2.5 pl-0.5 text-[12px] leading-snug`}
@@ -2069,7 +2234,9 @@ export function LiveBlockView({
             className="mt-2 min-w-0 max-w-full overflow-x-auto"
             aria-label="Tool output"
           >
-            {b.data !== undefined ? (
+            {customOutput != null ? (
+              customOutput
+            ) : b.data !== undefined ? (
               <FunctionResultDisplay
                 value={b.data}
                 variant="terminalPlain"
@@ -2080,6 +2247,9 @@ export function LiveBlockView({
               </p>
             )}
           </div>
+          {actionsNode ? (
+            <div className="mt-2 border-t border-border/60 pt-2">{actionsNode}</div>
+          ) : null}
         </div>
       </div>
     );

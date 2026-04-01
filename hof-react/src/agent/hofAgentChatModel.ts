@@ -704,6 +704,43 @@ export function postToolAssistantBlockIds(blocks: LiveBlock[]): Set<string> {
   return ids;
 }
 
+export type PostToolInfo = {
+  name: string;
+  arguments?: string;
+  resultData?: unknown;
+};
+
+/** Maps assistant block IDs that follow tool results → info about the preceding tool call + result. */
+export function postToolAssistantToolInfo(
+  blocks: LiveBlock[],
+): Map<string, PostToolInfo> {
+  const m = new Map<string, PostToolInfo>();
+  let lastTool: PostToolInfo | null = null;
+  for (const b of blocks) {
+    if (b.kind === "tool_call") {
+      const tc = b as ToolCallBlock;
+      lastTool = { name: tc.name, arguments: tc.arguments };
+    }
+    if (b.kind === "tool_result") {
+      const tr = b as ToolResultBlock;
+      if (lastTool) {
+        lastTool = {
+          ...lastTool,
+          ...(tr.name ? { name: tr.name } : {}),
+          resultData: tr.data,
+        };
+      }
+    }
+    if (b.kind === "assistant" && lastTool) {
+      m.set(b.id, lastTool);
+    }
+    if (b.kind === "assistant") {
+      lastTool = null;
+    }
+  }
+  return m;
+}
+
 /** Union pending ids: server list first, then any extras (same run, second mutation, etc.). */
 export function mergePendingIdLists(
   primary: string[],

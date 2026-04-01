@@ -15,10 +15,22 @@ export {
   type PlanClarificationBarrierV1,
 } from "./agent/hofAgentChatContext";
 export type { AssistantMarkdownLinkClickHandler } from "./agent/assistantMarkdownLinkContext";
+export type {
+  AssistantMarkdownTableRenderer,
+  AssistantMarkdownTableRendererContext,
+} from "./agent/assistantMarkdownTableContext";
 export {
   HofAgentMessages,
   type HofAgentMessagesProps,
 } from "./agent/HofAgentMessages";
+export type {
+  AfterToolTableRendererFn,
+  ToolResultActionsContext,
+  ToolResultActionsRenderer,
+  ToolResultRendererContext,
+  ToolResultRendererFn,
+} from "./agent/HofAgentChatBlocks";
+export { parseToolCallArguments } from "./agent/HofAgentChatBlocks";
 export { HofAgentPendingApprovalBar } from "./agent/HofAgentPendingApprovalBar";
 export { HofAgentProviderWaitBanner } from "./agent/HofAgentProviderWaitBanner";
 export { defaultPollInboxReviewWatch } from "./agent/hofAgentChatContext";

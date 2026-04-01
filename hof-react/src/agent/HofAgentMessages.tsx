@@ -2,7 +2,16 @@
 
 import { FileText } from "lucide-react";
 import { attachmentKindShortLabel } from "./agentAttachmentUpload";
-import { RunBlocksList } from "./HofAgentChatBlocks";
+import {
+  AssistantMarkdownTableProvider,
+  type AssistantMarkdownTableRenderer,
+} from "./assistantMarkdownTableContext";
+import {
+  RunBlocksList,
+  type AfterToolTableRendererFn,
+  type ToolResultActionsRenderer,
+  type ToolResultRendererFn,
+} from "./HofAgentChatBlocks";
 import {
   CHAT_USER_BUBBLE_CLASS,
   PLAN_EXECUTE_USER_MARKER,
@@ -37,6 +46,14 @@ export type HofAgentMessagesProps = {
    * so the input sits with the greeting instead of a distant footer.
    */
   emptyStateFooter?: ReactNode;
+  /** Optional buttons / actions rendered below each tool result (e.g. “Save as widget”). */
+  toolResultActions?: ToolResultActionsRenderer;
+  /** When non-null, replaces default tool result display for that tool. */
+  toolResultRenderer?: ToolResultRendererFn;
+  /** When non-null, upgrades assistant markdown tables with an app-provided renderer. */
+  assistantMarkdownTableRenderer?: AssistantMarkdownTableRenderer;
+  /** When set, markdown tables in assistant blocks after a matching tool get a custom renderer. */
+  afterToolTableRenderer?: AfterToolTableRendererFn;
 };
 
 /** Where to insert plan / clarification elements: anchored to the discovery run (or run before ``[plan:execute]``). */
@@ -73,6 +90,10 @@ export function HofAgentMessages({
     "min-h-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable] [overflow-anchor:none]",
   contentClassName = "mx-auto flex min-h-full w-full flex-col px-5 py-6 sm:px-6 sm:py-8",
   emptyStateFooter,
+  toolResultActions,
+  toolResultRenderer,
+  assistantMarkdownTableRenderer,
+  afterToolTableRenderer,
 }: HofAgentMessagesProps) {
   const {
     welcomeName,
@@ -258,6 +279,9 @@ export function HofAgentMessages({
               setApprovalDecisions={setApprovalDecisions}
               busy={busy}
               mutationOutcomeByPendingId={mutationOutcomeByPendingId}
+              toolResultActions={toolResultActions}
+              toolResultRenderer={toolResultRenderer}
+              afterToolTableRenderer={afterToolTableRenderer}
             />
           ) : null}
         </div>
@@ -271,6 +295,8 @@ export function HofAgentMessages({
     setApprovalDecisions,
     busy,
     mutationOutcomeByPendingId,
+    toolResultActions,
+    toolResultRenderer,
   ]);
 
   const planRunAnchorIdx = findPlanRunAnchorIndex(thread, planRunId);
@@ -344,6 +370,9 @@ export function HofAgentMessages({
             setApprovalDecisions={setApprovalDecisions}
             busy={busy}
             mutationOutcomeByPendingId={mutationOutcomeByPendingId}
+            toolResultActions={toolResultActions}
+            toolResultRenderer={toolResultRenderer}
+            afterToolTableRenderer={afterToolTableRenderer}
           />
         </div>
       );
@@ -476,27 +505,29 @@ export function HofAgentMessages({
     : className;
 
   return (
-    <div className={rootClass}>
-      <TerminalCommandHljsStyle />
-      <TerminalAnsiStyle />
-      {conversationEmpty ? (
-        <div
-          className={`${contentClassName} flex min-h-0 flex-1 flex-col justify-center !py-0`.trim()}
-        >
-          <div className="flex w-full flex-col items-center gap-4 font-sans">
-            <p className="text-center text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
-              Welcome, {welcomeName}
-            </p>
-            {emptyStateFooter ? (
-              <div className="w-full shrink-0">{emptyStateFooter}</div>
-            ) : null}
-          </div>
+    <AssistantMarkdownTableProvider renderer={assistantMarkdownTableRenderer}>
+      <div className={rootClass}>
+          <TerminalCommandHljsStyle />
+          <TerminalAnsiStyle />
+          {conversationEmpty ? (
+            <div
+              className={`${contentClassName} flex min-h-0 flex-1 flex-col justify-center !py-0`.trim()}
+            >
+              <div className="flex w-full flex-col items-center gap-4 font-sans">
+                <p className="text-center text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
+                  Welcome, {welcomeName}
+                </p>
+                {emptyStateFooter ? (
+                  <div className="w-full shrink-0">{emptyStateFooter}</div>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className={contentClassName}>
+              <div className="min-h-0 flex-1 space-y-5">{threadList}</div>
+            </div>
+          )}
         </div>
-      ) : (
-        <div className={contentClassName}>
-          <div className="min-h-0 flex-1 space-y-5">{threadList}</div>
-        </div>
-      )}
-    </div>
+      </AssistantMarkdownTableProvider>
   );
 }

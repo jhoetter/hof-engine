@@ -175,8 +175,9 @@ export type AssistantMarkdownProps = {
 };
 
 /**
- * Renders assistant Markdown with GFM, `remark-math` + KaTeX (`$…$`, `$$…$$`,
- * or fenced ` ```math `), syntax highlighting (lowlight / hljs), spurious
+ * Renders assistant Markdown with GFM, `remark-math` + KaTeX (`$$…$$` for inline
+ * math; single `$` is not math so currency like `$12.34` renders as text; fenced
+ * ` ```math `), syntax highlighting (lowlight / hljs), spurious
  * pipe-only text neutralized so it does not become tables, sortable pipe
  * tables when structurally valid, expand-on-hover for tables, and copy on code
  * blocks.
@@ -245,7 +246,10 @@ export function AssistantMarkdown({ source }: AssistantMarkdownProps) {
   return (
     <div className="hof-agent-md min-w-0 break-words [&_*]:max-w-full [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto">
       <ReactMarkdown
-        remarkPlugins={[remarkMath, remarkGfm]}
+        remarkPlugins={[
+          [remarkMath, { singleDollarTextMath: false }],
+          remarkGfm,
+        ]}
         rehypePlugins={[rehypeKatex, rehypeHighlight, rehypeFencedCodeClass]}
         components={mdComponents}
       >

@@ -107,8 +107,7 @@ export type ToolResultRendererFn = (
 
 /**
  * Called for assistant blocks that follow a tool result.
- * Receives the tool call info (name + parsed arguments + result data).
- * Return a table renderer to upgrade markdown tables in that block; null = default tables.
+ * Return a table renderer function to upgrade GFM pipe tables in markdown, or null.
  */
 export type AfterToolTableRendererFn = (
   tool: {
@@ -934,9 +933,14 @@ export function RunBlocksList({
           return null;
         }
         const precedingTool = postToolInfoMap?.get(b.id);
+        const parsedToolInfo = precedingTool
+          ? parsePostToolInfo(precedingTool)
+          : null;
         const blockTableRenderer =
-          precedingTool && afterToolTableRenderer
-            ? afterToolTableRenderer(parsePostToolInfo(precedingTool))
+          b.kind === "assistant" &&
+          parsedToolInfo &&
+          afterToolTableRenderer
+            ? afterToolTableRenderer(parsedToolInfo)
             : null;
         const blockView = (
           <LiveBlockView

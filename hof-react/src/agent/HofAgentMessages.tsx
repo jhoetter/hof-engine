@@ -52,7 +52,7 @@ export type HofAgentMessagesProps = {
   toolResultRenderer?: ToolResultRendererFn;
   /** When non-null, upgrades assistant markdown tables with an app-provided renderer. */
   assistantMarkdownTableRenderer?: AssistantMarkdownTableRenderer;
-  /** When set, markdown tables in assistant blocks after a matching tool get a custom renderer. */
+  /** When set, markdown tables in assistant blocks after a matching tool get a custom renderer (or bundle with fallback). */
   afterToolTableRenderer?: AfterToolTableRendererFn;
 };
 

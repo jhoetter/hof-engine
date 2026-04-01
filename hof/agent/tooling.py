@@ -441,7 +441,7 @@ def execute_tool(
     schema = build_function_input_schema(meta)
     try:
         validated = schema(**parsed)
-        kwargs = validated.model_dump(exclude_none=False)
+        kwargs = validated.model_dump(exclude_none=False, by_alias=True)
     except ValidationError as exc:
         logger.warning(
             "agent tool validation failed: name=%s errors=%s",

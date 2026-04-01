@@ -352,6 +352,8 @@ export type HofAgentChatContextValue = {
   fileInputRef: RefObject<HTMLInputElement | null>;
   onPickFiles: (files: FileList | null) => Promise<void>;
   send: () => void;
+  /** Send a user message without relying on the composer ``input`` (e.g. after remounting the provider). */
+  sendWithText: (message: string) => void;
   /** Abort the in-flight ``agent_chat``, ``agent_resume_mutations``, or inbox resume stream. */
   stop: () => void;
   /**
@@ -410,6 +412,12 @@ export type HofAgentChatContextValue = {
   discoverStreamPhase: "explore" | "clarify" | "propose" | null;
   /** While ``hof_builtin_present_plan_clarification`` / ``hof_builtin_present_plan`` tool is active. */
   planBuiltinLane: PlanDiscoverBuiltinLane;
+  /**
+   * Called by {@link HofAgentComposer} to register the main message textarea.
+   * Hosts can call {@link focusComposerInput} to move focus there (e.g. “New conversation”).
+   */
+  registerComposerTextarea: (el: HTMLTextAreaElement | null) => void;
+  focusComposerInput: () => void;
 };
 
 const HofAgentChatContext = createContext<HofAgentChatContextValue | null>(
@@ -469,6 +477,16 @@ export function HofAgentChatProvider({
   const [providerWaitNotice, setProviderWaitNotice] =
     useState<ProviderWaitNotice | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const registerComposerTextarea = useCallback(
+    (el: HTMLTextAreaElement | null) => {
+      composerTextareaRef.current = el;
+    },
+    [],
+  );
+  const focusComposerInput = useCallback(() => {
+    composerTextareaRef.current?.focus();
+  }, []);
   const threadRef = useRef<ThreadItem[]>([]);
   const sendingRef = useRef(false);
   const reqIdRef = useRef(0);
@@ -2231,54 +2249,67 @@ export function HofAgentChatProvider({
     [presignUpload],
   );
 
+  const submitUserTurn = useCallback(
+    (trimmedMessage: string) => {
+      const t = trimmedMessage;
+      if (approvalBarrier || inboxReviewBarrier) {
+        return;
+      }
+      if (
+        (!t && attachmentQueue.length === 0) ||
+        busy ||
+        sendingRef.current ||
+        uploadBusy
+      ) {
+        return;
+      }
+      sendingRef.current = true;
+      setBusy(true);
+      updateThinkingEpisodeStart(Date.now());
+      setInput("");
+      abortRef.current?.abort();
+      const baseThread = threadRef.current;
+      // Do not merge ``liveBlocks`` into ``thread`` here. Completed turns are appended only via
+      // ``flushLiveToThread`` inside ``runAgent`` / ``runResume`` / error handling. Re-archiving
+      // stale ``liveBlocksRef`` on send duplicated the whole run (thread already had it + live area).
+      liveBlocksRef.current = [];
+      setLiveBlocks([]);
+      const afterFlush = baseThread;
+      const snap = [...attachmentQueue];
+      const content = t;
+      const userItem: ThreadItem = {
+        kind: "user",
+        id: newId(),
+        content,
+        attachments: snap.length > 0 ? snap : undefined,
+      };
+      const nextThread = [...afterFlush, userItem];
+      threadRef.current = nextThread;
+      setThread(nextThread);
+      setAttachmentQueue([]);
+      void runAgent(nextThread);
+    },
+    [
+      approvalBarrier,
+      inboxReviewBarrier,
+      attachmentQueue,
+      busy,
+      runAgent,
+      uploadBusy,
+      updateThinkingEpisodeStart,
+    ],
+  );
+
   const send = useCallback(() => {
-    const t = input.trim();
-    if (approvalBarrier || inboxReviewBarrier) {
-      return;
-    }
-    if (
-      (!t && attachmentQueue.length === 0) ||
-      busy ||
-      sendingRef.current ||
-      uploadBusy
-    ) {
-      return;
-    }
-    sendingRef.current = true;
-    setBusy(true);
-    updateThinkingEpisodeStart(Date.now());
-    setInput("");
-    abortRef.current?.abort();
-    const baseThread = threadRef.current;
-    // Do not merge ``liveBlocks`` into ``thread`` here. Completed turns are appended only via
-    // ``flushLiveToThread`` inside ``runAgent`` / ``runResume`` / error handling. Re-archiving
-    // stale ``liveBlocksRef`` on send duplicated the whole run (thread already had it + live area).
-    liveBlocksRef.current = [];
-    setLiveBlocks([]);
-    const afterFlush = baseThread;
-    const snap = [...attachmentQueue];
-    const content = t;
-    const userItem: ThreadItem = {
-      kind: "user",
-      id: newId(),
-      content,
-      attachments: snap.length > 0 ? snap : undefined,
-    };
-    const nextThread = [...afterFlush, userItem];
-    threadRef.current = nextThread;
-    setThread(nextThread);
-    setAttachmentQueue([]);
-    void runAgent(nextThread);
-  }, [
-    approvalBarrier,
-    inboxReviewBarrier,
-    attachmentQueue,
-    busy,
-    input,
-    runAgent,
-    uploadBusy,
-    updateThinkingEpisodeStart,
-  ]);
+    submitUserTurn(input.trim());
+  }, [input, submitUserTurn]);
+
+  const sendWithText = useCallback(
+    (message: string) => {
+      submitUserTurn(message.trim());
+    },
+    [submitUserTurn],
+  );
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -2424,6 +2455,7 @@ export function HofAgentChatProvider({
       fileInputRef,
       onPickFiles,
       send,
+      sendWithText,
       stop,
       dismissApprovalBarrier,
       dismissInboxReviewBarrier,
@@ -2449,6 +2481,8 @@ export function HofAgentChatProvider({
       planPreparationStartedAtMs,
       discoverStreamPhase,
       planBuiltinLane: planBuiltinToolActive,
+      registerComposerTextarea,
+      focusComposerInput,
     }),
     [
       welcomeName,
@@ -2467,6 +2501,7 @@ export function HofAgentChatProvider({
       mutationOutcomeByPendingId,
       onPickFiles,
       send,
+      sendWithText,
       stop,
       dismissApprovalBarrier,
       dismissInboxReviewBarrier,
@@ -2490,6 +2525,8 @@ export function HofAgentChatProvider({
       planPreparationStartedAtMs,
       discoverStreamPhase,
       planBuiltinToolActive,
+      registerComposerTextarea,
+      focusComposerInput,
     ],
   );
 

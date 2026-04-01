@@ -4,6 +4,7 @@ import type { Components } from "react-markdown";
 import {
   useEffect,
   useMemo,
+  useRef,
   type ComponentPropsWithoutRef,
   type MouseEvent,
 } from "react";
@@ -190,6 +191,9 @@ const KATEX_STYLESHEET_HREF =
 
 export function AssistantMarkdown({ source }: AssistantMarkdownProps) {
   const tableRenderer = useAssistantMarkdownTableRenderer();
+  const tableRendererRef = useRef(tableRenderer);
+  tableRendererRef.current = tableRenderer;
+
   const prepared = useMemo(
     () => prepareAssistantMarkdownSource(source),
     [source],
@@ -198,10 +202,10 @@ export function AssistantMarkdown({ source }: AssistantMarkdownProps) {
     () => ({
       ...baseMdComponents,
       table: ({ node, children }) => {
-        if (node && node.tagName === "table" && tableRenderer) {
+        if (node && node.tagName === "table" && tableRendererRef.current) {
           const matrix = hastTableToMatrix(node);
           if (matrix && matrix.length > 0) {
-            const custom = tableRenderer({
+            const custom = tableRendererRef.current({
               headers: matrix[0] ?? [],
               rows: matrix.slice(1),
             });
@@ -213,7 +217,11 @@ export function AssistantMarkdown({ source }: AssistantMarkdownProps) {
         return <MarkdownSortableTable node={node}>{children}</MarkdownSortableTable>;
       },
     }),
-    [tableRenderer],
+    // Stable — tableRendererRef captures the latest renderer without
+    // causing ReactMarkdown to receive a new `components` prop on every
+    // streaming token, which would remount charts and trigger re-animation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
   );
 
   useEffect(() => {

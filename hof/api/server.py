@@ -21,6 +21,9 @@ ADMIN_UI_DIR = Path(__file__).resolve().parent.parent / "ui" / "admin"
 ADMIN_VITE_PORT = int(os.environ.get("HOF_ADMIN_VITE_PORT", "0"))
 USER_VITE_PORT = int(os.environ.get("HOF_USER_VITE_PORT", "0"))
 
+# Vite may still be binding when the API is already up; httpx raises Timeout on slow connects.
+_VITE_PROXY_ERRORS = (httpx.ConnectError, httpx.TimeoutException)
+
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application.
@@ -160,7 +163,7 @@ def _mount_user_ui(app: FastAPI, project_root: Path, config: Any) -> None:
                     status_code=proxy_resp.status_code,
                     media_type=ct,
                 )
-            except httpx.ConnectError:
+            except _VITE_PROXY_ERRORS:
                 return Response(content="User UI not ready", status_code=503)
 
     elif user_ui_dist.is_dir():
@@ -184,7 +187,10 @@ def _mount_admin_ui(app: FastAPI) -> None:
             url = f"/admin/{path}" if path else "/admin/"
             if request.query_params:
                 url += f"?{request.query_params}"
-            proxy_resp = await _proxy.get(url, headers=dict(request.headers))
+            try:
+                proxy_resp = await _proxy.get(url, headers=dict(request.headers))
+            except _VITE_PROXY_ERRORS:
+                return Response(content="Admin UI not ready", status_code=503)
             return Response(
                 content=proxy_resp.content,
                 status_code=proxy_resp.status_code,
@@ -269,7 +275,7 @@ def _mount_user_pages(app: FastAPI, project_root: Path, config: Any) -> None:
                     status_code=proxy_resp.status_code,
                     media_type=proxy_resp.headers.get("content-type"),
                 )
-            except httpx.ConnectError:
+            except _VITE_PROXY_ERRORS:
                 return Response(content="App not ready", status_code=503)
 
     elif user_ui_dist.is_dir():

@@ -376,6 +376,7 @@ export function HofAgentComposer({
     providerWaitNotice,
     agentMode,
     setAgentMode,
+    registerComposerTextarea,
   } = useHofAgentChat();
 
   const [providerWaitComposerTick, setProviderWaitComposerTick] = useState(0);
@@ -448,6 +449,10 @@ export function HofAgentComposer({
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const modeMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    registerComposerTextarea(textareaRef.current);
+    return () => registerComposerTextarea(null);
+  }, [registerComposerTextarea]);
   const skillsDialogRef = useRef<HTMLDialogElement>(null);
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [skillsErr, setSkillsErr] = useState<string | null>(null);
@@ -966,7 +971,7 @@ export function HofAgentComposer({
         className={`${inputShellClassName}${
           voiceSessionActive
             ? " ring-2 ring-inset ring-[var(--color-accent)]/40"
-            : ""
+            : " transition-shadow duration-150 focus-within:ring-2 focus-within:ring-inset focus-within:ring-[var(--color-accent)]/40"
         }`}
       >
         {composerBody}

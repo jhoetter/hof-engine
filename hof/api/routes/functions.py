@@ -72,7 +72,7 @@ async def call_function_stream(
             validated = schema(**kwargs)
         except ValidationError as exc:
             raise HTTPException(422, detail=exc.errors())
-        kwargs = validated.model_dump(exclude_none=False)
+        kwargs = validated.model_dump(exclude_none=False, by_alias=True)
 
     def ndjson_bytes() -> Any:
         try:
@@ -116,7 +116,7 @@ async def call_function(
             validated = schema(**kwargs)
         except ValidationError as exc:
             raise HTTPException(422, detail=exc.errors())
-        kwargs = validated.model_dump(exclude_none=False)
+        kwargs = validated.model_dump(exclude_none=False, by_alias=True)
 
     agent_run = (request.headers.get(AGENT_RUN_HEADER_NAME) or "").strip()
     agent_tcid = (request.headers.get(AGENT_TOOL_CALL_HEADER_NAME) or "").strip()

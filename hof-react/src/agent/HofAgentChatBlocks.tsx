@@ -3,7 +3,6 @@
 import {
   AlertCircle,
   Ban,
-  Braces,
   CheckCircle2,
   Clock,
   Loader2,
@@ -22,14 +21,35 @@ import {
   type SetStateAction,
 } from "react";
 import { createPortal } from "react-dom";
+
+/**
+ * Reasoning popovers must portal here (not directly under `document.body`) so their z-index
+ * competes with the composer inside the same root; otherwise `fixed` + high z on a body child
+ * paints above the entire React app.
+ */
+function getAgentUiPortalRoot(): HTMLElement {
+  return (
+    document.getElementById("root") ??
+    document.getElementById("hof-root") ??
+    document.getElementById("__next") ??
+    document.body
+  );
+}
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import {
+  AssistantMarkdownTableProvider,
+  type AssistantMarkdownTableRenderer,
+} from "./assistantMarkdownTableContext";
+import {
   FunctionResultDisplay,
-  isTerminalExecPayload,
+  TERMINAL_SESSION_INSET,
+  TERMINAL_STDOUT_SURFACE_CLASS,
 } from "./FunctionResultDisplay";
+import { parseTerminalExecPayload } from "./terminalExecPayload";
 import {
   AGENT_CHAT_COLUMN_CLASS,
   CHAT_ASSISTANT_REPLY_BUBBLE_CLASS,
+  HOF_BUILTIN_TERMINAL_EXEC,
   assistantUiRole,
   barrierMatchesApprovalBlock,
   confirmationFooterIconsFromOutcomes,
@@ -40,15 +60,18 @@ import {
   toolCallRowTitle,
   isGenericAwaitingConfirmationSummary,
   postToolAssistantBlockIds,
+  postToolAssistantToolInfo,
+  type PostToolInfo,
   segmentLiveBlocks,
   showProposedActionsLabel,
-  toolArgumentsAreEffectivelyEmpty,
   toolCallCliLine,
   toolGroupAggregatedStatus,
   mergeAdjacentContentSegments,
   mergeAdjacentReasoningSegments,
   normalizeAgentCliDisplayLine,
+  type BlockSegment,
 } from "./hofAgentChatModel";
+import { TerminalInvocationHighlight } from "./terminalCommandHighlight";
 import { reasoningPhaseTickingLive } from "./assistantStreamSegments";
 import { useHofAgentChat } from "./hofAgentChatContext";
 import type {
@@ -60,6 +83,78 @@ import type {
   ToolCallBlock,
   ToolResultBlock,
 } from "./hofAgentChatModel";
+
+/** Context for optional action buttons rendered alongside a tool result. */
+export type ToolResultActionsContext = {
+  call?: { name: string; arguments?: Record<string, unknown> };
+  result: { data?: unknown; summary?: string; name?: string };
+};
+
+export type ToolResultActionsRenderer = (
+  ctx: ToolResultActionsContext,
+) => ReactNode;
+
+/** Context for replacing default {@link FunctionResultDisplay} for a tool result. */
+export type ToolResultRendererContext = {
+  name: string;
+  data: unknown;
+  call?: { arguments?: Record<string, unknown> };
+};
+
+export type ToolResultRendererFn = (
+  ctx: ToolResultRendererContext,
+) => ReactNode | null;
+
+/**
+ * Called for assistant blocks that follow a tool result.
+ * Return a table renderer function to upgrade GFM pipe tables in markdown, or null.
+ */
+export type AfterToolTableRendererFn = (
+  tool: {
+    name: string;
+    arguments?: Record<string, unknown>;
+    resultData?: unknown;
+  },
+) => AssistantMarkdownTableRenderer | null;
+
+function parsePostToolInfo(
+  info: PostToolInfo,
+): {
+  name: string;
+  arguments?: Record<string, unknown>;
+  resultData?: unknown;
+} {
+  let args: Record<string, unknown> | undefined;
+  if (info.arguments) {
+    try {
+      const parsed: unknown = JSON.parse(info.arguments);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        args = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return { name: info.name, arguments: args, resultData: info.resultData };
+}
+
+export function parseToolCallArguments(
+  call: ToolCallBlock,
+): Record<string, unknown> | undefined {
+  const raw = call.arguments;
+  if (!raw || typeof raw !== "string") {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // ignore invalid JSON
+  }
+  return undefined;
+}
 import {
   formatDurationMs,
   useThinkingEpisodeElapsed,
@@ -72,27 +167,51 @@ import {
   settleLiveLabel,
 } from "./planDiscoverStatusLabel";
 
-function formatToolJsonForDialog(raw: string): string {
-  const t = raw.trim();
-  if (!t) {
-    return "";
-  }
-  try {
-    return JSON.stringify(JSON.parse(t) as unknown, null, 2);
-  } catch {
-    return raw;
-  }
-}
-
-const HOF_BUILTIN_TERMINAL_EXEC = "hof_builtin_terminal_exec";
-
 /** Max height for inline terminal command/output in the tool card (scroll inside `<pre>`). */
 const TERMINAL_INLINE_MAX_H = "max-h-[min(75vh,40rem)]";
 
 /**
- * Ground-truth hint from NDJSON `mutation_applied` (server `post_apply_review`), e.g. manager review inbox.
- * Folded into {@link segmentLiveBlocks} tool groups; must render here — `LiveBlockView` skips `mutation_applied`
- * to avoid duplicating a standalone row when grouped.
+ * Prefer same-origin `path` when `url` points at another host (e.g. API default vs SPA dev server).
+ */
+function postApplyReviewHref(postApplyReview: {
+  url?: string;
+  path?: string;
+}): { href: string; openInNewTab: boolean } {
+  const p = postApplyReview.path?.trim() ?? "";
+  const u = postApplyReview.url?.trim() ?? "";
+  if (typeof window === "undefined") {
+    const href = (u || p).trim();
+    return { href, openInNewTab: /^https?:\/\//i.test(u) };
+  }
+  if (p.startsWith("/") && u) {
+    try {
+      const parsed = new URL(u);
+      if (parsed.origin !== window.location.origin) {
+        return { href: p, openInNewTab: false };
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  const href = (u || p).trim();
+  if (!href) {
+    return { href: "", openInNewTab: false };
+  }
+  try {
+    const parsed = new URL(href, window.location.href);
+    return {
+      href,
+      openInNewTab: parsed.origin !== window.location.origin,
+    };
+  } catch {
+    return { href, openInNewTab: /^https?:\/\//i.test(href) };
+  }
+}
+
+/**
+ * Optional inbox hint (label + link) from `mutation_applied` / preview payloads.
+ * The default assistant rail does not render this — the model usually includes the link in prose.
+ * Export for custom shells that want a dedicated inbox row.
  */
 export function PostApplyReviewHint({
   postApplyReview,
@@ -100,8 +219,7 @@ export function PostApplyReviewHint({
   postApplyReview: MutationAppliedBlock["post_apply_review"];
 }) {
   const { label, url, path } = postApplyReview;
-  const href = (url?.trim() || path?.trim() || "").trim() || undefined;
-  const openInNewTab = Boolean(url?.trim());
+  const { href, openInNewTab } = postApplyReviewHref({ url, path });
   return (
     <div
       className="border-t border-border/60 px-3 py-2.5"
@@ -145,12 +263,16 @@ function TerminalToolCallInlineStandalone({ b }: { b: ToolCallBlock }) {
             aria-label="Terminal command"
           >
             <pre
-              className={`${TERMINAL_INLINE_MAX_H} overflow-auto whitespace-pre-wrap break-all bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)] px-2.5 py-2 font-mono text-[10px] text-secondary`}
+              className={`${TERMINAL_INLINE_MAX_H} overflow-auto whitespace-pre-wrap break-all ${TERMINAL_SESSION_INSET}`}
             >
               <span className="text-tertiary select-none" aria-hidden>
                 {"$ "}
               </span>
-              {terminalLine}
+              <TerminalInvocationHighlight
+                code={terminalLine}
+                variant="inline"
+                className="min-w-0 break-all"
+              />
             </pre>
           </div>
         ) : null}
@@ -166,22 +288,15 @@ function TerminalToolResultInlineStandalone({
     data: { exit_code: number; output: string };
   };
 }) {
-  const title = humanizeToolName(b.name);
   const d = b.data;
   return (
-    <div
-      className={`${AGENT_CHAT_COLUMN_CLASS} flex min-w-0 gap-2.5 pl-0.5 text-[12px] leading-snug`}
-    >
-      <span className="mt-0.5 shrink-0">
-        <ToolAggregatedStatusGlyph result={b} busy={false} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <span className="font-medium text-foreground">{title}</span>
+    <div className={AGENT_CHAT_COLUMN_CLASS}>
+      <div className="rounded-lg border border-border bg-surface/40 px-3 py-2 text-[12px] leading-snug">
         <div
-          className="mt-2 min-w-0 max-w-full overflow-x-auto"
-          aria-label="Tool output"
+          className="overflow-hidden rounded-md border border-border/60 bg-surface/30"
+          aria-label="Terminal output"
         >
-          <FunctionResultDisplay value={d} />
+          <FunctionResultDisplay value={d} variant="terminalPlain" />
         </div>
       </div>
     </div>
@@ -189,87 +304,27 @@ function TerminalToolResultInlineStandalone({
 }
 
 /** Terminal-style command row (`$` + line); outer shell reads as input without a visible section title. */
-function ToolTerminalCommandRow({
-  cliLine,
-  argumentsStr,
-  borderBottom = true,
-}: {
-  cliLine: string;
-  argumentsStr?: string;
-  /** When false, no bottom rule (e.g. command-only block). */
-  borderBottom?: boolean;
-}) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const showJsonBtn =
-    argumentsStr != null && !toolArgumentsAreEffectivelyEmpty(argumentsStr);
-  const formatted = argumentsStr ? formatToolJsonForDialog(argumentsStr) : "";
+function ToolTerminalCommandRow({ cliLine }: { cliLine: string }) {
+  const displayLine = cliLine.trim();
 
   return (
-    <>
+    <div className="overflow-hidden bg-surface/30" aria-label="Tool command">
       <div
-        className={`overflow-hidden bg-surface/30 ${borderBottom ? "border-b border-border" : ""}`}
-        aria-label="Tool command"
+        className={`flex w-full min-h-0 ${TERMINAL_INLINE_MAX_H} items-start overflow-hidden bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)]`}
       >
-        <div
-          className={`flex w-full ${TERMINAL_INLINE_MAX_H} items-stretch overflow-hidden bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)]`}
-        >
-        <div
-          className={`flex min-h-0 min-w-0 flex-1 items-center py-2 pl-3 ${showJsonBtn ? "pr-0" : "pr-3"}`}
-        >
+        <div className="flex min-h-0 min-w-0 flex-1 items-start py-2 pl-3 pr-3">
           <span
-            className="shrink-0 pr-1 font-mono text-[11px] leading-none text-tertiary select-none"
+            className="shrink-0 self-start pr-1 font-mono text-[11px] leading-snug text-tertiary select-none"
             aria-hidden
           >
             $
           </span>
-          <pre className="min-h-0 min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-all py-0 font-mono text-[11px] leading-snug text-foreground">
-            {cliLine}
+          <pre className="min-h-0 min-w-0 max-w-full flex-1 overflow-auto whitespace-pre-wrap break-all py-0 font-mono text-[11px] leading-snug">
+            <TerminalInvocationHighlight code={displayLine} />
           </pre>
         </div>
-        {showJsonBtn ? (
-          <div className="flex shrink-0 self-stretch border-l border-border">
-            <button
-              type="button"
-              className="flex items-center justify-center px-2.5 py-0.5 text-tertiary transition-colors hover:bg-hover hover:text-foreground"
-              aria-label="View JSON input"
-              onClick={() => dialogRef.current?.showModal()}
-            >
-              <Braces
-                className="size-3.5 shrink-0"
-                strokeWidth={2}
-                aria-hidden
-              />
-            </button>
-          </div>
-        ) : null}
-        </div>
       </div>
-      <dialog
-        ref={dialogRef}
-        className="fixed top-1/2 left-1/2 z-50 w-[min(100vw-2rem,36rem)] max-h-[min(90vh,32rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-background p-0 font-sans text-foreground shadow-lg backdrop:bg-black/40"
-        onMouseDown={(e) => {
-          if (e.target === dialogRef.current) {
-            dialogRef.current.close();
-          }
-        }}
-      >
-        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-          <span className="text-sm font-medium text-foreground">
-            JSON input
-          </span>
-          <button
-            type="button"
-            className="rounded-md px-2 py-1 text-xs text-secondary hover:bg-hover hover:text-foreground"
-            onClick={() => dialogRef.current?.close()}
-          >
-            Close
-          </button>
-        </div>
-        <pre className="max-h-[min(70vh,24rem)] overflow-auto whitespace-pre-wrap break-all p-3 font-mono text-[11px] leading-snug text-secondary">
-          {formatted}
-        </pre>
-      </dialog>
-    </>
+    </div>
   );
 }
 
@@ -473,7 +528,6 @@ export function ToolGroupCard({
   call,
   mutation,
   result,
-  mutationApplied,
   showApproval,
   approvalItemsForMutation,
   approvalDecisions,
@@ -481,12 +535,12 @@ export function ToolGroupCard({
   busy,
   anchorId,
   mutationOutcome,
+  toolResultActions,
+  toolResultRenderer,
 }: {
   call: ToolCallBlock;
   mutation?: MutationPendingBlock;
   result?: ToolResultBlock;
-  /** Present when the mutation ran and the server sent `post_apply_review` (e.g. item in manager inbox). */
-  mutationApplied?: MutationAppliedBlock;
   showApproval: boolean;
   approvalItemsForMutation: {
     pendingId: string;
@@ -501,17 +555,11 @@ export function ToolGroupCard({
   anchorId?: string;
   /** `true` approved, `false` rejected, `undefined` unknown / still pending */
   mutationOutcome?: boolean;
+  toolResultActions?: ToolResultActionsRenderer;
+  toolResultRenderer?: ToolResultRendererFn;
 }) {
   const title = toolCallRowTitle(call);
   const line = toolCallCliLine(call);
-  const cmd = mutation
-    ? normalizeAgentCliDisplayLine(
-        mutation.name,
-        mutation.cli_line,
-        mutation.arguments_preview,
-      )
-    : "";
-  const cmdDupOfLine = Boolean(cmd.trim()) && cmd.trim() === line.trim();
   const hideGenericResult = Boolean(
     mutation && result && isGenericAwaitingConfirmationSummary(result.summary),
   );
@@ -521,17 +569,23 @@ export function ToolGroupCard({
   );
   /** Preview / summary inside the card (no placeholder copy while awaiting approval). */
   const showInnerBody = showResultBlock;
-  const showMutationCmdDup = Boolean(mutation && cmd && !cmdDupOfLine);
-  const showPostApplyHint = Boolean(mutationApplied);
-  const toolBodyFooter =
-    showInnerBody || showPostApplyHint || showMutationCmdDup;
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  useEffect(() => {
+    if (showApproval && mutation) {
+      setDetailsOpen(true);
+    }
+  }, [showApproval, mutation?.pending_id]);
 
   return (
     <div
       id={anchorId}
       className={`${AGENT_CHAT_COLUMN_CLASS} min-w-0 scroll-mt-4 space-y-2`}
     >
-      <details className="group min-w-0 w-full max-w-full overflow-hidden rounded-lg border border-border bg-surface/40 [&_summary::-webkit-details-marker]:hidden">
+      <details
+        open={detailsOpen}
+        onToggle={(e) => setDetailsOpen(e.currentTarget.open)}
+        className="group min-w-0 w-full max-w-full overflow-hidden rounded-lg border border-border bg-surface/40 [&_summary::-webkit-details-marker]:hidden"
+      >
         <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2.5 px-3 py-2.5 text-[12px] leading-snug transition-colors hover:bg-hover/50">
           <ToolAggregatedStatusGlyph
             result={result}
@@ -555,42 +609,61 @@ export function ToolGroupCard({
           ) : null}
         </summary>
         <div className="min-w-0 max-w-full border-t border-border/60">
-          <ToolTerminalCommandRow
-            cliLine={line}
-            argumentsStr={call.arguments}
-            borderBottom={Boolean(toolBodyFooter)}
-          />
-          {showInnerBody ? (
-            <div
-              className="min-w-0 max-w-full overflow-x-auto px-3 py-2"
-              aria-label="Tool output"
-            >
-              {result!.data !== undefined ? (
-                <FunctionResultDisplay value={result!.data} />
-              ) : (
-                <p className="whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-secondary">
-                  {result!.summary}
-                </p>
-              )}
-            </div>
-          ) : null}
-          {mutationApplied ? (
-            <PostApplyReviewHint postApplyReview={mutationApplied.post_apply_review} />
-          ) : null}
-          {showMutationCmdDup ? (
-            <div className="px-3 pb-2">
-              <div className="flex items-center overflow-hidden rounded-md border border-border/60 bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)]">
-                <span
-                  className="shrink-0 pl-2 pr-1 py-1 font-mono text-[10px] leading-none text-tertiary select-none"
-                  aria-hidden
-                >
-                  $
-                </span>
-                <pre className="min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-all py-1 pr-2 font-mono text-[10px] leading-snug text-secondary">
-                  {cmd}
-                </pre>
+          <ToolTerminalCommandRow cliLine={line} />
+          {showInnerBody && result ? (
+            <>
+              <div
+                className={`min-w-0 max-w-full overflow-x-auto ${TERMINAL_STDOUT_SURFACE_CLASS}`}
+                aria-label="Tool output"
+              >
+                {(() => {
+                  const parsedArgs = parseToolCallArguments(call);
+                  const custom = toolResultRenderer?.({
+                    name: result.name,
+                    data: result.data,
+                    call: { arguments: parsedArgs },
+                  });
+                  if (custom != null) {
+                    return custom;
+                  }
+                  if (result.data !== undefined) {
+                    return (
+                      <FunctionResultDisplay
+                        value={result.data}
+                        variant="terminalPlain"
+                      />
+                    );
+                  }
+                  return (
+                    <p
+                      className={`whitespace-pre-wrap break-words text-secondary ${TERMINAL_SESSION_INSET}`}
+                    >
+                      {result.summary}
+                    </p>
+                  );
+                })()}
               </div>
-            </div>
+              {toolResultActions
+                ? (() => {
+                    const actions = toolResultActions({
+                      call: {
+                        name: call.name,
+                        arguments: parseToolCallArguments(call),
+                      },
+                      result: {
+                        data: result.data,
+                        summary: result.summary,
+                        name: result.name,
+                      },
+                    });
+                    return actions ? (
+                      <div className="border-t border-border/60 px-3 py-2">
+                        {actions}
+                      </div>
+                    ) : null;
+                  })()
+                : null}
+            </>
           ) : null}
         </div>
       </details>
@@ -693,6 +766,31 @@ export function InlineApprovalControls({
   );
 }
 
+function isCompactTerminalToolPair(
+  segments: BlockSegment[],
+  segIdx: number,
+): boolean {
+  if (segIdx === 0) {
+    return false;
+  }
+  const cur = segments[segIdx];
+  const prev = segments[segIdx - 1];
+  if (!cur || !prev) {
+    return false;
+  }
+  if (cur.type !== "single" || prev.type !== "single") {
+    return false;
+  }
+  const c = cur.block;
+  const p = prev.block;
+  if (c.kind !== "tool_result" || p.kind !== "tool_call") {
+    return false;
+  }
+  return (
+    c.name === HOF_BUILTIN_TERMINAL_EXEC && p.name === HOF_BUILTIN_TERMINAL_EXEC
+  );
+}
+
 export function RunBlocksList({
   blocks,
   barrier,
@@ -700,6 +798,9 @@ export function RunBlocksList({
   setApprovalDecisions,
   busy,
   mutationOutcomeByPendingId,
+  toolResultActions,
+  toolResultRenderer,
+  afterToolTableRenderer,
 }: {
   blocks: LiveBlock[];
   barrier: ApprovalBarrier | null;
@@ -709,6 +810,9 @@ export function RunBlocksList({
   >;
   busy: boolean;
   mutationOutcomeByPendingId: Record<string, boolean | undefined>;
+  toolResultActions?: ToolResultActionsRenderer;
+  toolResultRenderer?: ToolResultRendererFn;
+  afterToolTableRenderer?: AfterToolTableRendererFn;
 }) {
   const segments = segmentLiveBlocks(
     dropRedundantModelPhaseBeforeAssistant(blocks),
@@ -721,6 +825,9 @@ export function RunBlocksList({
     );
 
   const postToolAssistantIds = postToolAssistantBlockIds(blocks);
+  const postToolInfoMap = afterToolTableRenderer
+    ? postToolAssistantToolInfo(blocks)
+    : null;
 
   return (
     <div className="space-y-3">
@@ -776,7 +883,6 @@ export function RunBlocksList({
                 call={seg.call}
                 mutation={seg.mutation}
                 result={seg.result}
-                mutationApplied={seg.mutationApplied}
                 showApproval={showApproval}
                 approvalItemsForMutation={approvalItemsForMutation}
                 approvalDecisions={approvalDecisions}
@@ -784,6 +890,8 @@ export function RunBlocksList({
                 busy={busy}
                 anchorId={anchorId}
                 mutationOutcome={mutationOutcome}
+                toolResultActions={toolResultActions}
+                toolResultRenderer={toolResultRenderer}
               />
             </div>
           );
@@ -824,13 +932,40 @@ export function RunBlocksList({
         if (b.kind === "inbox_review_required") {
           return null;
         }
-        return (
+        const precedingTool = postToolInfoMap?.get(b.id);
+        const parsedToolInfo = precedingTool
+          ? parsePostToolInfo(precedingTool)
+          : null;
+        const blockTableRenderer =
+          b.kind === "assistant" &&
+          parsedToolInfo &&
+          afterToolTableRenderer
+            ? afterToolTableRenderer(parsedToolInfo)
+            : null;
+        const blockView = (
           <LiveBlockView
-            key={b.id}
             b={b}
             afterToolResult={postToolAssistantIds.has(b.id)}
             busy={busy}
+            toolResultActions={toolResultActions}
+            toolResultRenderer={toolResultRenderer}
           />
+        );
+        return (
+          <div
+            key={b.id}
+            className={
+              isCompactTerminalToolPair(segments, segIdx) ? "!mt-1" : undefined
+            }
+          >
+            {blockTableRenderer ? (
+              <AssistantMarkdownTableProvider renderer={blockTableRenderer}>
+                {blockView}
+              </AssistantMarkdownTableProvider>
+            ) : (
+              blockView
+            )}
+          </div>
         );
       })}
     </div>
@@ -1247,7 +1382,7 @@ function ReasoningStreamPeek({
         id={popoverId}
         role="dialog"
         aria-label={popoverReasoningAria}
-        className={`fixed z-[100] max-h-[min(70vh,20rem)] overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-background)] p-3 shadow-lg outline-none ring-1 ring-black/5 dark:ring-white/10 ${bodyClass}`}
+        className={`fixed z-[40] max-h-[min(70vh,20rem)] overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-background)] p-3 shadow-lg outline-none ring-1 ring-black/5 dark:ring-white/10 ${bodyClass}`}
         style={{
           top: popoverBox.top,
           left: popoverBox.left,
@@ -1349,7 +1484,7 @@ function ReasoningStreamPeek({
         </button>
       </div>
       {typeof document !== "undefined" && popoverContent
-        ? createPortal(popoverContent, document.body)
+        ? createPortal(popoverContent, getAgentUiPortalRoot())
         : null}
     </>
   );
@@ -1683,6 +1818,8 @@ export function LiveBlockView({
   b,
   afterToolResult = false,
   busy = false,
+  toolResultActions,
+  toolResultRenderer,
 }: {
   b: LiveBlock;
   afterToolResult?: boolean;
@@ -1691,6 +1828,8 @@ export function LiveBlockView({
    * on persisted thread blocks after the HTTP stream has already ended.
    */
   busy?: boolean;
+  toolResultActions?: ToolResultActionsRenderer;
+  toolResultRenderer?: ToolResultRendererFn;
 }) {
   const { agentMode, planBuiltinLane, planClarificationBarrier } =
     useHofAgentChat();
@@ -2052,15 +2191,18 @@ export function LiveBlockView({
     );
   }
   if (b.kind === "tool_result") {
-    if (
-      b.name === HOF_BUILTIN_TERMINAL_EXEC &&
-      b.data !== undefined &&
-      isTerminalExecPayload(b.data)
-    ) {
+    const termData =
+      b.name === HOF_BUILTIN_TERMINAL_EXEC && b.data !== undefined
+        ? parseTerminalExecPayload(b.data)
+        : null;
+    if (termData !== null) {
       return (
         <TerminalToolResultInlineStandalone
           b={
-            b as ToolResultBlock & {
+            {
+              ...b,
+              data: termData,
+            } as ToolResultBlock & {
               data: { exit_code: number; output: string };
             }
           }
@@ -2068,6 +2210,21 @@ export function LiveBlockView({
       );
     }
     const title = humanizeToolName(b.name);
+    const customOutput = toolResultRenderer?.({
+      name: b.name,
+      data: b.data,
+      call: undefined,
+    });
+    const actionsNode = toolResultActions
+      ? toolResultActions({
+          call: undefined,
+          result: {
+            data: b.data,
+            summary: b.summary,
+            name: b.name,
+          },
+        })
+      : null;
     return (
       <div
         className={`${AGENT_CHAT_COLUMN_CLASS} flex min-w-0 gap-2.5 pl-0.5 text-[12px] leading-snug`}
@@ -2081,24 +2238,29 @@ export function LiveBlockView({
             className="mt-2 min-w-0 max-w-full overflow-x-auto"
             aria-label="Tool output"
           >
-            {b.data !== undefined ? (
-              <FunctionResultDisplay value={b.data} />
+            {customOutput != null ? (
+              customOutput
+            ) : b.data !== undefined ? (
+              <FunctionResultDisplay
+                value={b.data}
+                variant="terminalPlain"
+              />
             ) : (
               <p className="whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-secondary">
                 {b.summary}
               </p>
             )}
           </div>
+          {actionsNode ? (
+            <div className="mt-2 border-t border-border/60 pt-2">{actionsNode}</div>
+          ) : null}
         </div>
       </div>
     );
   }
   if (b.kind === "mutation_applied") {
-    return (
-      <div className={`${AGENT_CHAT_COLUMN_CLASS}`}>
-        <PostApplyReviewHint postApplyReview={b.post_apply_review} />
-      </div>
-    );
+    /* post_apply_review is surfaced in assistant prose; no separate inbox card */
+    return null;
   }
   if (b.kind === "mutation_pending") {
     const title = humanizeToolName(b.name);
@@ -2119,11 +2281,17 @@ export function LiveBlockView({
             className="mt-2 overflow-hidden rounded-md border border-border/60 bg-surface/30"
             aria-label="Tool command"
           >
-            <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)] px-2.5 py-2 font-mono text-[10px] text-secondary">
+            <pre
+              className={`max-h-32 overflow-auto whitespace-pre-wrap break-all ${TERMINAL_SESSION_INSET} text-foreground`}
+            >
               <span className="text-tertiary select-none" aria-hidden>
                 {"$ "}
               </span>
-              {cmd.trim()}
+              <TerminalInvocationHighlight
+                code={cmd.trim()}
+                variant="inline"
+                className="min-w-0 break-all"
+              />
             </pre>
           </div>
         ) : null}

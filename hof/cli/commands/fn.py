@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 import click
 from rich.console import Console
@@ -64,6 +65,11 @@ def _make_call_command(function_name: str) -> click.Command:
 
 def _call_function(function_name: str, input_json: str | None, output_format: str = "auto") -> None:
     from hof.cli.api_client import get_client
+
+    if output_format == "auto":
+        env_fmt = os.environ.get("HOF_FN_FORMAT", "").strip().lower()
+        if env_fmt in ("json",):
+            output_format = env_fmt
 
     kwargs = json.loads(input_json) if input_json else {}
     client = get_client()

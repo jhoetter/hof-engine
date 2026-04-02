@@ -1,42 +1,46 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { formatFunctionResultPlainText } from "./functionResultPlainText";
+import {
+  RESULT_MAX_CELL,
+  RESULT_MAX_COLUMNS,
+  RESULT_MAX_ROWS_SHOWN,
+  resultCellStr,
+  resultColumnKeyOrder,
+} from "./functionResultShared";
+import { terminalOutputAnsiToHtml } from "./terminalAnsiHtml";
+import { parseTerminalExecPayload } from "./terminalExecPayload";
 
 /**
  * Renders @function return values like ``hof fn … --format auto`` / TUI ``render_function_result``
  * (see hof-engine ``hof/cli/result_render.py``): rows+total table, list of row dicts, or key/value dict.
+ * Tables use the same monospace scale as the terminal command line (11px) for chat tool output.
  */
 
-const SAMPLE_ROWS_FOR_KEYS = 50;
-const MAX_ROWS_SHOWN = 100;
-const MAX_COLUMNS = 8;
-const MAX_CELL = 200;
+/** Shell command line (brighter strip — slightly stronger tint than stdout). */
+const TERMINAL_CMD_SURFACE =
+  "bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)]";
 
-function cellStr(val: unknown, maxCell: number): string {
-  if (val === null || val === undefined) {
-    return "";
-  }
-  if (typeof val === "object") {
-    const s = JSON.stringify(val);
-    return s.length > maxCell ? `${s.slice(0, maxCell - 1)}…` : s;
-  }
-  const s = String(val);
-  return s.length > maxCell ? `${s.slice(0, maxCell - 1)}…` : s;
-}
+/**
+ * Padding, background, and monospace scale — matches the terminal command row (`px-3 py-2`, `text-[11px]`).
+ * Export for standalone terminal blocks in `HofAgentChatBlocks`.
+ */
+export const TERMINAL_SESSION_INSET = `${TERMINAL_CMD_SURFACE} px-3 py-2 font-mono text-[11px] leading-snug`;
 
-function columnKeyOrder(rows: Record<string, unknown>[]): string[] {
-  const keys: string[] = [];
-  const seen = new Set<string>();
-  for (const row of rows.slice(0, SAMPLE_ROWS_FOR_KEYS)) {
-    for (const k of Object.keys(row)) {
-      if (!seen.has(k)) {
-        seen.add(k);
-        keys.push(k);
-      }
-    }
-  }
-  return keys;
-}
+/** Stdout / tool output: dimmer than {@link TERMINAL_SESSION_INSET} so input vs output reads like a TTY. */
+export const TERMINAL_STDOUT_SURFACE_CLASS =
+  "bg-[color:color-mix(in_srgb,var(--color-foreground)_1.25%,transparent)]";
+
+export const TERMINAL_STDOUT_BODY_CLASS = `${TERMINAL_STDOUT_SURFACE_CLASS} max-h-[min(75vh,40rem)] min-h-0 w-full overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-snug text-secondary`;
+
+/** Tables for `hof fn` JSON (rows/total, row lists, key/value dicts) — matches terminal monospace scale. */
+const RESULT_TABLE_CLASS =
+  "w-full min-w-0 border-collapse border border-border/50 text-left text-[11px] leading-snug";
+const RESULT_TABLE_HEAD_CELL =
+  "max-w-[14rem] whitespace-normal break-words px-1.5 py-1 font-semibold text-foreground";
+const RESULT_TABLE_BODY_CELL =
+  "max-w-[14rem] whitespace-pre-wrap break-words px-1.5 py-1 align-top text-secondary";
 
 function RowsTableView({
   rows,
@@ -45,12 +49,12 @@ function RowsTableView({
   rows: Record<string, unknown>[];
   total: unknown;
 }) {
-  const allKeys = columnKeyOrder(rows);
-  const cols = allKeys.slice(0, MAX_COLUMNS);
-  const shown = rows.slice(0, MAX_ROWS_SHOWN);
+  const allKeys = resultColumnKeyOrder(rows);
+  const cols = allKeys.slice(0, RESULT_MAX_COLUMNS);
+  const shown = rows.slice(0, RESULT_MAX_ROWS_SHOWN);
   if (cols.length === 0) {
     return (
-      <div className="font-mono text-[10px] text-secondary">
+      <div className="font-mono text-[11px] leading-snug text-secondary">
         <span className="italic">(empty rows)</span>
         {total !== undefined && total !== null ? (
           <p className="mt-1">
@@ -61,22 +65,19 @@ function RowsTableView({
     );
   }
   return (
-    <div className="min-w-0 max-w-full space-y-1.5 overflow-x-auto font-mono">
+    <div className="min-w-0 max-w-full space-y-1.5 overflow-x-auto font-mono text-[11px] leading-snug">
       {allKeys.length > cols.length ? (
-        <p className="text-[10px] text-tertiary">
+        <p className="text-tertiary">
           Showing {cols.length} of {allKeys.length} columns (use{" "}
           <span className="text-secondary">hof fn … --format json</span> for full
           data).
         </p>
       ) : null}
-      <table className="w-max max-w-none min-w-0 border-collapse border border-border text-left text-[10px]">
+      <table className={`${RESULT_TABLE_CLASS} w-max max-w-none`}>
         <thead>
-          <tr className="border-b border-border bg-surface/80">
+          <tr className="border-b border-border/60 bg-surface/50">
             {cols.map((c) => (
-              <th
-                key={c}
-                className="max-w-[14rem] whitespace-normal break-words px-2 py-1.5 font-semibold text-foreground"
-              >
+              <th key={c} className={RESULT_TABLE_HEAD_CELL}>
                 {c}
               </th>
             ))}
@@ -84,26 +85,23 @@ function RowsTableView({
         </thead>
         <tbody>
           {shown.map((row, ri) => (
-            <tr key={ri} className="border-b border-border/80 last:border-0">
+            <tr key={ri} className="border-b border-border/40 last:border-0">
               {cols.map((c) => (
-                <td
-                  key={c}
-                  className="max-w-[14rem] whitespace-pre-wrap break-words px-2 py-1.5 align-top text-secondary"
-                >
-                  {cellStr(row[c], MAX_CELL)}
+                <td key={c} className={RESULT_TABLE_BODY_CELL}>
+                  {resultCellStr(row[c], RESULT_MAX_CELL)}
                 </td>
               ))}
             </tr>
           ))}
         </tbody>
       </table>
-      {rows.length > MAX_ROWS_SHOWN ? (
-        <p className="text-[10px] text-tertiary">
-          … {rows.length - MAX_ROWS_SHOWN} more rows not shown
+      {rows.length > RESULT_MAX_ROWS_SHOWN ? (
+        <p className="text-tertiary">
+          … {rows.length - RESULT_MAX_ROWS_SHOWN} more rows not shown
         </p>
       ) : null}
       {total !== undefined && total !== null ? (
-        <p className="text-[10px] text-tertiary">
+        <p className="text-tertiary">
           <span className="font-medium text-secondary">total</span> = {String(total)}
         </p>
       ) : null}
@@ -111,44 +109,69 @@ function RowsTableView({
   );
 }
 
-/** True for sandbox ``hof_builtin_terminal_exec`` JSON: ``exit_code`` + ``output`` string. */
-export function isTerminalExecPayload(
-  value: unknown,
-): value is { exit_code: number; output: string } {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return false;
+export { isTerminalExecPayload } from "./terminalExecPayload";
+
+/** Curl / ``hof fn`` stdout often wraps API JSON in ``{ "result": … }`` — unwrap for table view. */
+function tryUnwrapApiFunctionStdout(output: string): unknown | null {
+  const t = output.trim();
+  if (!t || t[0] !== "{") {
+    return null;
   }
-  const o = value as Record<string, unknown>;
-  if (typeof o.exit_code !== "number" || !Number.isFinite(o.exit_code)) {
-    return false;
+  try {
+    const o = JSON.parse(t) as unknown;
+    if (o === null || typeof o !== "object" || Array.isArray(o)) {
+      return null;
+    }
+    const rec = o as Record<string, unknown>;
+    if ("result" in rec && rec.result !== undefined) {
+      return rec.result;
+    }
+    return o;
+  } catch {
+    return null;
   }
-  if (typeof o.output !== "string") {
-    return false;
-  }
-  return true;
 }
 
-/** Sandbox ``hof_builtin_terminal_exec`` return shape — show full stdout/stderr, not KV cell cap. */
+/** Sandbox ``hof_builtin_terminal_exec`` return shape — TTY-like stdout (no exit line in UI). */
 function TerminalExecResultView({
-  exitCode,
+  exitCode: _exitCode,
   output,
 }: {
   exitCode: number;
   output: string;
 }) {
-  return (
-    <div className="min-w-0 max-w-full space-y-2">
-      <p className="font-mono text-[10px] text-secondary">
-        <span className="text-tertiary">exit code</span>{" "}
-        <span className="font-medium text-foreground">{exitCode}</span>
-      </p>
-      <pre className="max-h-[min(75vh,40rem)] min-h-0 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)] px-2.5 py-2 font-mono text-[10px] leading-snug text-secondary">
-        {output.length === 0 ? (
+  const structured = tryUnwrapApiFunctionStdout(output);
+  if (structured !== null) {
+    const body = formatFunctionResultPlainText(structured);
+    return (
+      <div className="min-w-0 max-w-full" aria-label="Terminal output">
+        <pre className={`min-w-0 max-w-full ${TERMINAL_STDOUT_BODY_CLASS}`}>
+          {body.length === 0 ? (
+            <span className="italic text-tertiary">(no output)</span>
+          ) : (
+            body
+          )}
+        </pre>
+      </div>
+    );
+  }
+  if (output.length === 0) {
+    return (
+      <div className="min-w-0 max-w-full" aria-label="Terminal output">
+        <pre className={`min-w-0 max-w-full ${TERMINAL_STDOUT_BODY_CLASS}`}>
           <span className="italic text-tertiary">(no output)</span>
-        ) : (
-          output
-        )}
-      </pre>
+        </pre>
+      </div>
+    );
+  }
+  const html = terminalOutputAnsiToHtml(output);
+  return (
+    <div className="min-w-0 max-w-full" aria-label="Terminal output">
+      <div
+        className={`hof-terminal-ansi min-w-0 max-w-full ${TERMINAL_STDOUT_BODY_CLASS}`}
+        /* eslint-disable-next-line react/no-danger -- ansi_up escapes HTML; colors are SGR only */
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </div>
   );
 }
@@ -157,31 +180,33 @@ function KvTableView({ data }: { data: Record<string, unknown> }) {
   const keys = Object.keys(data).sort((a, b) => String(a).localeCompare(String(b)));
   if (keys.length === 0) {
     return (
-      <p className="font-mono text-[10px] italic text-tertiary">(empty)</p>
+      <p className="font-mono text-[11px] italic leading-snug text-tertiary">
+        (empty)
+      </p>
     );
   }
   return (
-    <div className="min-w-0 max-w-full overflow-x-auto">
-    <table className="w-full min-w-0 border-collapse border border-border text-left font-mono text-[10px]">
-      <thead>
-        <tr className="border-b border-border bg-surface/80">
-          <th className="w-[32%] px-2 py-1.5 font-semibold text-foreground">key</th>
-          <th className="px-2 py-1.5 font-semibold text-foreground">value</th>
-        </tr>
-      </thead>
-      <tbody>
-        {keys.map((k) => (
-          <tr key={k} className="border-b border-border/80 last:border-0">
-            <td className="whitespace-nowrap px-2 py-1.5 align-top text-[var(--color-accent)]">
-              {k}
-            </td>
-            <td className="max-w-[min(100%,24rem)] whitespace-pre-wrap break-words px-2 py-1.5 align-top text-secondary">
-              {cellStr(data[k], MAX_CELL)}
-            </td>
+    <div className="min-w-0 max-w-full overflow-x-auto font-mono text-[11px] leading-snug">
+      <table className={RESULT_TABLE_CLASS}>
+        <thead>
+          <tr className="border-b border-border/60 bg-surface/50">
+            <th className={`${RESULT_TABLE_HEAD_CELL} w-[32%]`}>key</th>
+            <th className={RESULT_TABLE_HEAD_CELL}>value</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {keys.map((k) => (
+            <tr key={k} className="border-b border-border/40 last:border-0">
+              <td className="whitespace-nowrap px-1.5 py-1 align-top text-[var(--color-accent)]">
+                {k}
+              </td>
+              <td className="max-w-[min(100%,24rem)] whitespace-pre-wrap break-words px-1.5 py-1 align-top text-secondary">
+                {resultCellStr(data[k], RESULT_MAX_CELL)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -205,10 +230,15 @@ function isMutationPreviewEnvelope(
   );
 }
 
+export type FunctionResultDisplayVariant = "tables" | "terminalPlain";
+
 export function FunctionResultDisplay({
   value,
+  variant = "tables",
 }: {
   value: unknown;
+  /** `terminalPlain`: monospace text (and ANSI when wrapped in terminal exec), no HTML tables — chat tool cards. */
+  variant?: FunctionResultDisplayVariant;
 }) {
   const shell = (node: ReactNode) => (
     <div className="min-w-0 max-w-full">{node}</div>
@@ -219,41 +249,40 @@ export function FunctionResultDisplay({
   }
 
   if (isMutationPreviewEnvelope(value)) {
-    const pr = value.post_apply_review;
-    const prLabel =
-      pr && typeof pr === "object" && typeof pr.label === "string"
-        ? pr.label.trim()
-        : "";
     const inner = value.data;
-    const showInner =
-      inner != null &&
-      typeof inner === "object" &&
-      !Array.isArray(inner) &&
-      Object.keys(inner as object).length > 0;
+    if (
+      inner == null ||
+      typeof inner !== "object" ||
+      Array.isArray(inner) ||
+      Object.keys(inner as object).length === 0
+    ) {
+      return null;
+    }
     return shell(
-      <div className="space-y-2">
-        <p className="text-[11px] font-medium leading-snug text-foreground">
-          {value.summary}
-        </p>
-        {showInner ? <FunctionResultDisplay value={inner} /> : null}
-        {prLabel ? (
-          <p className="text-[10px] leading-snug text-tertiary">
-            After apply: <span className="text-secondary">{prLabel}</span>
-            {typeof pr?.path === "string" && pr.path.trim() ? (
-              <span className="text-tertiary"> ({pr.path.trim()})</span>
-            ) : null}
-          </p>
-        ) : null}
-      </div>,
+      <FunctionResultDisplay value={inner} variant={variant} />,
     );
   }
 
-  if (isTerminalExecPayload(value)) {
+  const terminalPayload = parseTerminalExecPayload(value);
+  if (terminalPayload !== null) {
     return shell(
       <TerminalExecResultView
-        exitCode={value.exit_code}
-        output={value.output}
+        exitCode={terminalPayload.exit_code}
+        output={terminalPayload.output}
       />,
+    );
+  }
+
+  if (variant === "terminalPlain") {
+    const body = formatFunctionResultPlainText(value);
+    const text = body.length > 0 ? body : String(value);
+    return shell(
+      <pre
+        className={`min-w-0 max-w-full ${TERMINAL_STDOUT_BODY_CLASS}`}
+        aria-label="Tool output"
+      >
+        {text}
+      </pre>,
     );
   }
 
@@ -288,7 +317,7 @@ export function FunctionResultDisplay({
   }
 
   return shell(
-    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-snug text-secondary">
+    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-secondary">
       {String(value)}
     </pre>,
   );

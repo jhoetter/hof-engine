@@ -4,6 +4,7 @@ import type { Components } from "react-markdown";
 import {
   useEffect,
   useMemo,
+  useRef,
   type ComponentPropsWithoutRef,
   type MouseEvent,
 } from "react";
@@ -18,7 +19,9 @@ import { HLJS_SCOPED_CSS } from "./markdown/hljsTokens";
 import { MarkdownSortableTable } from "./markdown/MarkdownSortableTable";
 import { prepareAssistantMarkdownSource } from "./markdown/prepareAssistantMarkdownSource";
 import { rehypeFencedCodeClass } from "./markdown/rehypeFencedCodeClass";
+import { hastTableToMatrix } from "./markdown/hastTable";
 import { useAssistantMarkdownLinkClick } from "./assistantMarkdownLinkContext";
+import { useAssistantMarkdownTableRenderer } from "./assistantMarkdownTableContext";
 
 function MarkdownAnchor({
   href,
@@ -55,7 +58,7 @@ function MarkdownAnchor({
  * Streaming can yield ragged GFM tables or half-open fences; sortable table
  * then falls back to the default DOM until the matrix is rectangular.
  */
-const mdComponents: Components = {
+const baseMdComponents: Components = {
   p: ({ children, ...props }) => (
     <p className="mb-2 last:mb-0 [&:first-child]:mt-0" {...props}>
       {children}
@@ -134,9 +137,6 @@ const mdComponents: Components = {
       {children}
     </CodeFence>
   ),
-  table: ({ node, children }) => (
-    <MarkdownSortableTable node={node}>{children}</MarkdownSortableTable>
-  ),
   thead: ({ children, ...props }) => (
     <thead className="border-b border-border bg-surface/40" {...props}>
       {children}
@@ -176,8 +176,9 @@ export type AssistantMarkdownProps = {
 };
 
 /**
- * Renders assistant Markdown with GFM, `remark-math` + KaTeX (`$…$`, `$$…$$`,
- * or fenced ` ```math `), syntax highlighting (lowlight / hljs), spurious
+ * Renders assistant Markdown with GFM, `remark-math` + KaTeX (`$$…$$` for inline
+ * math; single `$` is not math so currency like `$12.34` renders as text; fenced
+ * ` ```math `), syntax highlighting (lowlight / hljs), spurious
  * pipe-only text neutralized so it does not become tables, sortable pipe
  * tables when structurally valid, expand-on-hover for tables, and copy on code
  * blocks.
@@ -189,9 +190,38 @@ const KATEX_STYLESHEET_HREF =
   "https://cdn.jsdelivr.net/npm/katex@0.16.41/dist/katex.min.css";
 
 export function AssistantMarkdown({ source }: AssistantMarkdownProps) {
+  const tableRenderer = useAssistantMarkdownTableRenderer();
+  const tableRendererRef = useRef(tableRenderer);
+  tableRendererRef.current = tableRenderer;
+
   const prepared = useMemo(
     () => prepareAssistantMarkdownSource(source),
     [source],
+  );
+  const mdComponents = useMemo<Components>(
+    () => ({
+      ...baseMdComponents,
+      table: ({ node, children }) => {
+        if (node && node.tagName === "table" && tableRendererRef.current) {
+          const matrix = hastTableToMatrix(node);
+          if (matrix && matrix.length > 0) {
+            const custom = tableRendererRef.current({
+              headers: matrix[0] ?? [],
+              rows: matrix.slice(1),
+            });
+            if (custom != null) {
+              return custom;
+            }
+          }
+        }
+        return <MarkdownSortableTable node={node}>{children}</MarkdownSortableTable>;
+      },
+    }),
+    // Stable — tableRendererRef captures the latest renderer without
+    // causing ReactMarkdown to receive a new `components` prop on every
+    // streaming token, which would remount charts and trigger re-animation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
   );
 
   useEffect(() => {
@@ -224,7 +254,10 @@ export function AssistantMarkdown({ source }: AssistantMarkdownProps) {
   return (
     <div className="hof-agent-md min-w-0 break-words [&_*]:max-w-full [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto">
       <ReactMarkdown
-        remarkPlugins={[remarkMath, remarkGfm]}
+        remarkPlugins={[
+          [remarkMath, { singleDollarTextMath: false }],
+          remarkGfm,
+        ]}
         rehypePlugins={[rehypeKatex, rehypeHighlight, rehypeFencedCodeClass]}
         components={mdComponents}
       >

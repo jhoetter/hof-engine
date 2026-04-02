@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import {
@@ -33,6 +34,7 @@ import {
   stripGuidanceParagraphsForStructuredSections,
 } from "./prepareSkillFieldForMarkdown";
 import { humanizeToolName } from "./hofAgentChatModel";
+import { AGENT_CHAT_ATTACHMENT_ACCEPT } from "./agentAttachmentUpload";
 import { useHofAgentChat } from "./hofAgentChatContext";
 import {
   useAgentVoiceTranscription,
@@ -72,11 +74,21 @@ export type HofAgentComposerProps = {
   controlsRowClassName?: string;
   /** Bordered shell around the two-row composer (`flex flex-col`). */
   inputShellClassName?: string;
-  disclaimerClassName?: string;
   /** Max height of the message field before it scrolls (px). */
   textareaMaxHeightPx?: number;
+  /**
+   * In Instant mode, show a “Try Plan mode” chip when the draft is longer than this many characters.
+   * Set to `0` to disable. Default `80`.
+   */
+  planModePromptMinChars?: number;
   /** Streaming speech-to-text (OpenAI Realtime); optional Vite: `VITE_AGENT_TRANSCRIBE_*`. */
   voiceTranscription?: HofAgentComposerVoiceTranscription;
+  /** Optional extra rows for the `+` composer menu. */
+  extraAttachMenuItems?: (context: {
+    closeMenu: () => void;
+    inputLocked: boolean;
+    busy: boolean;
+  }) => ReactNode;
 };
 
 /** Square ghost icon control (plus / attach menu trigger). */
@@ -337,9 +349,10 @@ export function HofAgentComposer({
   className = "w-full",
   controlsRowClassName = "flex w-full items-center justify-between gap-2",
   inputShellClassName = "flex flex-col gap-2 rounded-md border border-border bg-background p-2",
-  disclaimerClassName = "mt-2.5 mb-3 text-center text-[11px] leading-snug text-tertiary",
   textareaMaxHeightPx = 200,
+  planModePromptMinChars = 80,
   voiceTranscription: voiceTranscriptionProp,
+  extraAttachMenuItems,
 }: HofAgentComposerProps) {
   const {
     input,
@@ -357,10 +370,10 @@ export function HofAgentComposer({
     uploadErr,
     fileInputRef,
     onPickFiles,
-    conversationEmpty,
     providerWaitNotice,
     agentMode,
     setAgentMode,
+    registerComposerTextarea,
   } = useHofAgentChat();
 
   const [providerWaitComposerTick, setProviderWaitComposerTick] = useState(0);
@@ -433,6 +446,10 @@ export function HofAgentComposer({
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const modeMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    registerComposerTextarea(textareaRef.current);
+    return () => registerComposerTextarea(null);
+  }, [registerComposerTextarea]);
   const skillsDialogRef = useRef<HTMLDialogElement>(null);
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [skillsErr, setSkillsErr] = useState<string | null>(null);
@@ -447,9 +464,10 @@ export function HofAgentComposer({
     if (!el) {
       return;
     }
-    el.style.height = "0px";
-    // Force reflow so scrollHeight reflects the shrunk content (otherwise it can
-    // stick to the previous multi-line height after deleting lines).
+    // Reset to intrinsic height, reflow, then cap — required so scrollHeight drops
+    // when lines are removed. (Do not add CSS height transitions here: they can
+    // keep the used height from updating before this measurement runs.)
+    el.style.height = "auto";
     void el.offsetHeight;
     const next = Math.min(el.scrollHeight, textareaMaxHeightPx);
     el.style.height = `${Math.max(next, 36)}px`;
@@ -491,6 +509,9 @@ export function HofAgentComposer({
     fileInputRef.current?.click();
     setAttachMenuOpen(false);
   };
+  const closeAttachMenu = useCallback(() => {
+    setAttachMenuOpen(false);
+  }, []);
 
   const openSkillsDialog = () => {
     setAttachMenuOpen(false);
@@ -578,6 +599,12 @@ export function HofAgentComposer({
     Boolean(inboxReviewBarrier) ||
     (!input.trim() && attachmentQueue.length === 0);
 
+  const draftText = voiceSessionActive ? input + voiceInterim : input;
+  const showPlanModePrompt =
+    planModePromptMinChars > 0 &&
+    agentMode === "instant" &&
+    draftText.length > planModePromptMinChars;
+
   const onVoiceToggle = () => {
     clearVoiceError();
     if (voiceState === "finalizing") {
@@ -659,13 +686,29 @@ export function HofAgentComposer({
                 : "How can I help you?"
         }
         disabled={inputLocked}
-        className="min-h-9 min-w-0 w-full resize-none overflow-y-auto rounded-md border-0 bg-transparent px-1 py-0.5 text-sm leading-snug text-foreground shadow-none placeholder:text-secondary outline-none ring-0 transition-[height] focus:outline-none focus:ring-0 disabled:opacity-60 read-only:opacity-100"
+        className="min-h-9 min-w-0 w-full resize-none overflow-y-auto rounded-md border-0 bg-transparent px-1 py-0.5 text-sm leading-snug text-foreground shadow-none placeholder:text-secondary outline-none ring-0 focus:outline-none focus:ring-0 disabled:opacity-60 read-only:opacity-100"
         style={{ maxHeight: textareaMaxHeightPx } satisfies CSSProperties}
       />
       {voiceFeatureEnabled && voiceError ? (
         <p className="px-1 text-[12px] text-[var(--color-destructive)]">
           {voiceError}
         </p>
+      ) : null}
+      {showPlanModePrompt ? (
+        <div className="flex shrink-0 justify-end px-1">
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded-md border border-border bg-surface px-2 py-0.5 text-[11px] font-medium text-secondary transition-colors hover:bg-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label="Switch to Plan mode"
+            onClick={() => {
+              setAgentMode("plan");
+              setModeMenuOpen(false);
+            }}
+          >
+            Try Plan mode
+          </button>
+        </div>
       ) : null}
       <div className={controlsRowClassName}>
         <div className="flex shrink-0 items-center gap-1">
@@ -706,7 +749,7 @@ export function HofAgentComposer({
                   strokeWidth={2}
                   aria-hidden
                 />
-                <span>Attach PDF</span>
+                <span>Attach document</span>
               </button>
               <button
                 type="button"
@@ -722,6 +765,13 @@ export function HofAgentComposer({
                 />
                 <span>Show skills</span>
               </button>
+              {extraAttachMenuItems
+                ? extraAttachMenuItems({
+                    closeMenu: closeAttachMenu,
+                    inputLocked,
+                    busy,
+                  })
+                : null}
             </div>
           ) : null}
           </div>
@@ -860,11 +910,11 @@ export function HofAgentComposer({
   );
 
   return (
-    <div className={className}>
+    <div className={`relative z-[50] ${className}`}>
       <input
         ref={fileInputRef}
         type="file"
-        accept="application/pdf,.pdf"
+        accept={AGENT_CHAT_ATTACHMENT_ACCEPT}
         multiple
         className="hidden"
         onChange={(e) => void onPickFiles(e.target.files)}
@@ -918,7 +968,7 @@ export function HofAgentComposer({
         className={`${inputShellClassName}${
           voiceSessionActive
             ? " ring-2 ring-inset ring-[var(--color-accent)]/40"
-            : ""
+            : " transition-shadow duration-150 focus-within:ring-2 focus-within:ring-inset focus-within:ring-[var(--color-accent)]/40"
         }`}
       >
         {composerBody}
@@ -1109,11 +1159,6 @@ export function HofAgentComposer({
           </div>
         </div>
       </dialog>
-      {!conversationEmpty ? (
-        <p className={disclaimerClassName}>
-          AI can make mistakes. Please review the output carefully.
-        </p>
-      ) : null}
     </div>
   );
 }

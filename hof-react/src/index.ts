@@ -15,10 +15,22 @@ export {
   type PlanClarificationBarrierV1,
 } from "./agent/hofAgentChatContext";
 export type { AssistantMarkdownLinkClickHandler } from "./agent/assistantMarkdownLinkContext";
+export type {
+  AssistantMarkdownTableRenderer,
+  AssistantMarkdownTableRendererContext,
+} from "./agent/assistantMarkdownTableContext";
 export {
   HofAgentMessages,
   type HofAgentMessagesProps,
 } from "./agent/HofAgentMessages";
+export type {
+  AfterToolTableRendererFn,
+  ToolResultActionsContext,
+  ToolResultActionsRenderer,
+  ToolResultRendererContext,
+  ToolResultRendererFn,
+} from "./agent/HofAgentChatBlocks";
+export { parseToolCallArguments } from "./agent/HofAgentChatBlocks";
 export { HofAgentPendingApprovalBar } from "./agent/HofAgentPendingApprovalBar";
 export { HofAgentProviderWaitBanner } from "./agent/HofAgentProviderWaitBanner";
 export { defaultPollInboxReviewWatch } from "./agent/hofAgentChatContext";
@@ -27,6 +39,12 @@ export {
   type HofAgentComposerProps,
   type HofAgentComposerVoiceTranscription,
 } from "./agent/HofAgentComposer";
+export {
+  AGENT_CHAT_ATTACHMENT_ACCEPT,
+  AGENT_CHAT_ATTACHMENT_MIME_TYPES,
+  attachmentKindShortLabel,
+  resolveAgentChatAttachmentContentType,
+} from "./agent/agentAttachmentUpload";
 export {
   HofAgentConversationSelect,
   type HofAgentConversationOption,
@@ -81,7 +99,12 @@ export {
 export {
   FunctionResultDisplay,
   isTerminalExecPayload,
+  type FunctionResultDisplayVariant,
 } from "./agent/FunctionResultDisplay";
+export {
+  parseTerminalExecPayload,
+  type TerminalExecPayload,
+} from "./agent/terminalExecPayload";
 export { useHofTable } from "./hooks/useHofTable";
 export { useHofFunction } from "./hooks/useHofFunction";
 export {

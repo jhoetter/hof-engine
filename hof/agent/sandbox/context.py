@@ -16,6 +16,9 @@ class SandboxRunState:
     user_id: str
     policy_snapshot: Any
     terminal_session: Any | None = None
+    #: Normalized chat attachments (S3 keys) for staging into ``/workspace`` on first terminal use.
+    chat_attachments: list[dict[str, str]] | None = None
+    sandbox_attachments_staged: bool = False
 
 
 # ``ContextVar`` does not propagate into Starlette/uvicorn worker threads that iterate the
@@ -63,9 +66,15 @@ def set_sandbox_run(
     run_id: str,
     user_id: str,
     policy: Any,
+    chat_attachments: list[dict[str, str]] | None = None,
 ) -> contextvars.Token[SandboxRunState | None]:
     return _sandbox_run.set(
-        SandboxRunState(run_id=run_id, user_id=user_id, policy_snapshot=policy),
+        SandboxRunState(
+            run_id=run_id,
+            user_id=user_id,
+            policy_snapshot=policy,
+            chat_attachments=chat_attachments,
+        ),
     )
 
 

@@ -19,7 +19,6 @@ export function CodeFence({
       node && node.tagName === "pre" ? hastPreCodePlainText(node) : "",
     [node],
   );
-
   return (
     <div className="group/codefence relative mb-2 last:mb-0">
       {/* Overlay top-right; pointer-events only when visible so text stays selectable */}

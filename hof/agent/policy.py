@@ -14,6 +14,9 @@ from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
 NormalizeAttachmentsFn = Callable[[Any], tuple[list[dict[str, str]], str | None]]
 # normalized attachment list -> system prompt fragment
 AttachmentsSystemNoteFn = Callable[[list[dict[str, str]]], str]
+# Copy user chat uploads into the sandbox container ``/workspace`` (first terminal session).
+# Args: ``TerminalSession``, normalized attachments (``object_key``, optional ``filename`` / ``content_type``).
+SandboxStageChatAttachmentsFn = Callable[[Any, list[dict[str, str]]], None]
 
 
 @dataclass(frozen=True)
@@ -171,10 +174,6 @@ def mutation_preview_to_wire(
 # Framework agent tools (read-only); registered after user discovery in ``discover_all``.
 BUILTIN_AGENT_TOOL_NAMES: frozenset[str] = frozenset(
     {
-        "hof_builtin_server_time",
-        "hof_builtin_runtime_info",
-        "hof_builtin_http_get",
-        "hof_builtin_calculate",
         "hof_builtin_present_plan",
         "hof_builtin_present_plan_clarification",
         "hof_builtin_update_plan_todo_state",
@@ -300,6 +299,9 @@ class AgentPolicy:
     # Optional: Docker terminal pool; when ``terminal_only_dispatch``, domain tools are not exposed
     # to the model — only ``hof_builtin_terminal_exec`` and ``builtins_when_terminal_only``.
     sandbox: SandboxConfig | None = None
+    # Optional: when sandbox is enabled, stage chat S3 attachments into ``/workspace`` before the first
+    # ``hof_builtin_terminal_exec`` in a run (so shell tools can read uploaded files).
+    sandbox_stage_chat_attachments: SandboxStageChatAttachmentsFn | None = None
 
     def effective_allowlist(self) -> frozenset[str]:
         sc = self.sandbox.with_env_overrides() if self.sandbox is not None else None
@@ -310,6 +312,19 @@ class AgentPolicy:
         if sc is not None and sc.enabled and not sc.terminal_only_dispatch:
             return base | frozenset({HOF_BUILTIN_TERMINAL_EXEC})
         return base
+
+    def skills_catalog_allowlist(self) -> frozenset[str]:
+        """Logical tools for ``GET /api/agent/tools`` (domain read/mutation + plan builtins).
+
+        Unlike :meth:`effective_allowlist`, this always includes ``allowlist_read`` and
+        ``allowlist_mutation`` even when ``terminal_only_dispatch`` hides them from the model.
+        The terminal transport tool is never listed.
+        """
+        base = frozenset(self.allowlist_read | self.allowlist_mutation | BUILTIN_AGENT_TOOL_NAMES)
+        sc = self.sandbox.with_env_overrides() if self.sandbox is not None else None
+        if sc is not None and sc.enabled and sc.terminal_only_dispatch:
+            base = base | frozenset(sc.builtins_when_terminal_only)
+        return base - frozenset({HOF_BUILTIN_TERMINAL_EXEC})
 
     def rationale_for(self, function_name: str) -> str | None:
         key = (function_name or "").strip()

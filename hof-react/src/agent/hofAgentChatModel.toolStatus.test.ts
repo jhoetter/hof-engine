@@ -175,6 +175,49 @@ describe("toolResultUiStatus", () => {
     expect(st.detail).toContain("pending tool row");
   });
 
+  it("terminal exec: exit 0 wins over vacuous error / bad stream codes", () => {
+    expect(
+      toolResultUiStatus({
+        summary: "x",
+        name: "hof_builtin_terminal_exec",
+        ok: false,
+        status_code: 500,
+        data: { exit_code: 0, output: '{"result":{"rows":[]}}', error: "" },
+      }),
+    ).toEqual({
+      code: 200,
+      label: "OK",
+      tone: "success",
+      headline: "Succeeded",
+    });
+    expect(
+      toolResultUiStatus({
+        summary: "x",
+        name: "hof_builtin_terminal_exec",
+        ok: false,
+        status_code: 500,
+        data: '{"exit_code":0,"output":"{}"}',
+      }),
+    ).toEqual({
+      code: 200,
+      label: "OK",
+      tone: "success",
+      headline: "Succeeded",
+    });
+    expect(
+      toolResultUiStatus({
+        summary: "x",
+        name: "hof_builtin_terminal_exec",
+        data: { exit_code: 1, output: "oops" },
+      }),
+    ).toEqual({
+      code: 502,
+      label: "Tool error",
+      tone: "error",
+      headline: "Failed",
+    });
+  });
+
   it("infers error from data or summary when stream omits codes", () => {
     expect(
       toolResultUiStatus({

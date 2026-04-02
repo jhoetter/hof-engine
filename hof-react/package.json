@@ -29,6 +29,8 @@
     "react-dom": ">=18.0.0"
   },
   "dependencies": {
+    "ansi_up": "^6.0.6",
+    "hast-util-to-jsx-runtime": "^2.3.6",
     "katex": "^0.16.41",
     "lowlight": "^3.3.0",
     "react-markdown": "^10.1.0",

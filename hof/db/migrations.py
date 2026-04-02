@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
 from alembic.util.exc import CommandError
 
 if TYPE_CHECKING:
@@ -152,6 +153,22 @@ def run_migrations(project_root: Path, config: Config, *, dry_run: bool = False)
     """Apply pending migrations, then autogenerate new ones if models changed."""
     alembic_cfg = _get_alembic_config(project_root, config)
     _ensure_env_py_postgres_uuid_autogen(project_root)
+
+    script = ScriptDirectory.from_config(alembic_cfg)
+    # No revision files yet (e.g. after ``hof db reset`` cleared ``versions/``): autogenerate
+    # first, then upgrade. ``upgrade head`` cannot run without at least one script.
+    if not script.get_heads():
+        command.revision(
+            alembic_cfg,
+            message="initial_schema",
+            autogenerate=True,
+        )
+        if not dry_run:
+            _upgrade_or_restamp(alembic_cfg, config)
+        # Do not run a second autogenerate here: first upgrade can match models while
+        # PostgreSQL SERIAL introspection still triggers spurious ALTER id NULLABLE in
+        # autogenerate; the normal migrate path (below) handles ongoing drift after head exists.
+        return
 
     _upgrade_or_restamp(alembic_cfg, config)
 

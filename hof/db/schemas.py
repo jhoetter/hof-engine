@@ -9,10 +9,20 @@ import inspect
 from typing import Any
 
 import sqlalchemy as sa
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, Field, create_model
 
 # Fields that users must never set directly (managed by the framework)
 _SYSTEM_FIELDS = frozenset({"id", "created_at", "updated_at"})
+
+# ``@function`` input models subclass ``BaseModel``; these names must not be used as
+# field identifiers (they shadow ``BaseModel`` APIs and trigger Pydantic warnings).
+_BASEMODEL_RESERVED_PARAM_FIELD_NAMES = frozenset({"schema"})
+
+
+def _function_param_field_name(param_name: str) -> str:
+    if param_name in _BASEMODEL_RESERVED_PARAM_FIELD_NAMES:
+        return f"{param_name}_param"
+    return param_name
 
 # Map SQLAlchemy column types to Python types for Pydantic field generation
 _SA_TYPE_MAP: list[tuple[type, type]] = [
@@ -99,8 +109,14 @@ def build_function_input_schema(metadata: Any) -> type[BaseModel]:
         raw = getattr(param.type_annotation, "__name__", str(param.type_annotation))
         py_type = py_type_map.get(raw, Any)
 
+        field_name = _function_param_field_name(param.name)
+        use_alias = field_name != param.name
+
         if param.required:
-            fields[param.name] = (py_type, ...)
+            if use_alias:
+                fields[field_name] = (py_type, Field(..., alias=param.name))
+            else:
+                fields[field_name] = (py_type, ...)
         else:
             default_val = None
             if param.default is not inspect.Parameter.empty:
@@ -108,7 +124,13 @@ def build_function_input_schema(metadata: Any) -> type[BaseModel]:
                     default_val = param.default
                 except Exception:
                     default_val = None
-            fields[param.name] = (py_type | None, default_val)
+            if use_alias:
+                fields[field_name] = (
+                    py_type | None,
+                    Field(default=default_val, alias=param.name),
+                )
+            else:
+                fields[field_name] = (py_type | None, default_val)
 
     model_name = f"{metadata.name.replace('_', ' ').title().replace(' ', '')}InputSchema"
     return create_model(model_name, **fields)

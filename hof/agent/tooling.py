@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shlex
 import threading
 from typing import Any
@@ -17,14 +18,18 @@ from hof.functions import FunctionMetadata
 
 logger = logging.getLogger(__name__)
 
-# Propagates ``run_id`` into builtins (e.g. ``hof_builtin_terminal_exec``) when ContextVar state
-# is missing in the worker thread that runs the tool (Starlette streaming).
+# Propagates ``run_id`` / tool_call_id into builtins (e.g. ``hof_builtin_terminal_exec``) when
+# TLS state is set by the agent stream before ``execute_tool`` (Starlette streaming).
 _tls_tool_run_id = threading.local()
+_tls_tool_call_id = threading.local()
 
 
 def get_tool_execution_run_id() -> str | None:
     return getattr(_tls_tool_run_id, "run_id", None)
 
+
+def get_tool_execution_tool_call_id() -> str | None:
+    return getattr(_tls_tool_call_id, "tool_call_id", None)
 
 _REDACT_SUBSTRINGS = ("token", "password", "secret", "api_key", "authorization")
 
@@ -34,7 +39,6 @@ AGENT_TOOL_DESCRIPTION_MAX_CHARS = 2000
 # Optional tool-arguments key: model supplies a short UI label; stripped before execute/history/CLI.
 AGENT_TOOL_DISPLAY_TITLE_KEY = "_display_title"
 AGENT_TOOL_DISPLAY_TITLE_MAX_CHARS = 120
-
 
 def _json_type_for_param(type_name: str) -> str:
     return {
@@ -281,10 +285,71 @@ def _redact_for_cli(obj: Any) -> Any:
     return obj
 
 
+_TERMINAL_HOF_FN_RE = re.compile(r"\bhof\s+fn\s+([a-zA-Z0-9_]+)")
+
+
+def _hof_fn_shell_to_pseudo_cli(cmd: str, cap: int) -> str | None:
+    """Turn ``hof fn <name> '<json>'`` into the same pseudo-CLI as :func:`format_cli_line`."""
+    m = re.search(r"\bhof\s+fn\s+([a-zA-Z0-9_]+)\s*", cmd)
+    if not m:
+        return None
+    fn_name = m.group(1)
+    if fn_name in ("list", "describe", "help"):
+        return None
+    rest = cmd[m.end() :].strip()
+    if not rest:
+        return f"hof fn {fn_name}"
+    if (rest.startswith("'") and rest.endswith("'")) or (
+        rest.startswith('"') and rest.endswith('"')
+    ):
+        rest = rest[1:-1]
+    try:
+        body = json.loads(rest)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(body, dict):
+        args_wire = json.dumps(body, ensure_ascii=False)
+        return format_cli_line(fn_name, args_wire, max_cli_line_chars=cap)
+    compact = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+    line = f"hof fn {fn_name} {compact}"
+    if len(line) > cap:
+        return line[: cap - 1] + "…"
+    return line
+
+
+def _format_terminal_exec_cli_line(wire: str, cap: int) -> str:
+    """For ``hof_builtin_terminal_exec``, show the shell command itself, not the wrapper."""
+    from hof.agent.sandbox.mutation_bridge import (
+        parse_terminal_exec_command,
+    )
+
+    cmd = parse_terminal_exec_command(wire)
+    if not cmd:
+        return "(terminal)"
+    pseudo = _hof_fn_shell_to_pseudo_cli(cmd, cap)
+    if pseudo:
+        return pseudo
+    fn_match = _TERMINAL_HOF_FN_RE.search(cmd)
+    if fn_match:
+        fn_name = fn_match.group(1)
+        return f"hof fn {fn_name}" if len(cmd) > cap else cmd
+    if len(cmd) > cap:
+        cmd = cmd[: cap - 1] + "…"
+    return cmd
+
+
+
+
 def format_cli_line(name: str, arguments_json: str, *, max_cli_line_chars: int) -> str:
     """Human-readable pseudo-CLI for UI/TUI (not executed)."""
+    from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
+
     raw = arguments_json or "{}"
     wire, _ = split_agent_tool_display_metadata(raw)
+
+    if name == HOF_BUILTIN_TERMINAL_EXEC:
+        return _format_terminal_exec_cli_line(wire, max_cli_line_chars)
+
     try:
         parsed = json.loads(wire)
         if not isinstance(parsed, dict):
@@ -297,27 +362,21 @@ def format_cli_line(name: str, arguments_json: str, *, max_cli_line_chars: int) 
 
     safe = _redact_for_cli(parsed)
     parts: list[str] = ["hof", "fn", name]
-    nested = False
     for key in sorted(safe.keys()):
         val = safe[key]
-        if isinstance(val, (dict, list)):
-            nested = True
-            break
         if val is True:
             parts.append(f"--{key}")
         elif val is False:
             parts.extend((f"--{key}", "false"))
         elif val is None:
             parts.extend((f"--{key}", "null"))
+        elif isinstance(val, (dict, list)):
+            parts.append(f"--{key}")
+            parts.append(shlex.quote(json.dumps(val, separators=(",", ":"), ensure_ascii=False)))
         else:
             parts.append(f"--{key}")
             parts.append(shlex.quote(str(val)))
-    if nested:
-        compact = json.dumps(safe, separators=(",", ":"), ensure_ascii=False)
-        # Same pseudo-CLI as flat args (UI/TUI); nested payloads are JSON after the function name.
-        line = f"hof fn {name} {compact}"
-    else:
-        line = " ".join(parts)
+    line = " ".join(parts)
     if len(line) > max_cli_line_chars:
         line = line[: max_cli_line_chars - 1] + "…"
     return line
@@ -355,6 +414,7 @@ def execute_tool(
     *,
     max_tool_output_chars: int,
     run_id: str | None = None,
+    tool_call_id: str | None = None,
 ) -> tuple[str, str]:
     """Execute a tool (read or mutation). Returns (json_string_for_model, summary_for_ui)."""
     meta = registry.get_function(name)
@@ -381,7 +441,7 @@ def execute_tool(
     schema = build_function_input_schema(meta)
     try:
         validated = schema(**parsed)
-        kwargs = validated.model_dump(exclude_none=False)
+        kwargs = validated.model_dump(exclude_none=False, by_alias=True)
     except ValidationError as exc:
         logger.warning(
             "agent tool validation failed: name=%s errors=%s",
@@ -398,8 +458,11 @@ def execute_tool(
             raw = json.dumps(err)
             return raw, summarize_tool_json(name, raw)
         prev_rid = getattr(_tls_tool_run_id, "run_id", None)
+        prev_tid = getattr(_tls_tool_call_id, "tool_call_id", None)
         if run_id is not None:
             _tls_tool_run_id.run_id = run_id
+        if tool_call_id is not None:
+            _tls_tool_call_id.tool_call_id = tool_call_id
         try:
             result = meta.fn(**kwargs)
         finally:
@@ -408,6 +471,11 @@ def execute_tool(
                     _tls_tool_run_id.run_id = prev_rid
                 elif hasattr(_tls_tool_run_id, "run_id"):
                     delattr(_tls_tool_run_id, "run_id")
+            if tool_call_id is not None:
+                if prev_tid is not None:
+                    _tls_tool_call_id.tool_call_id = prev_tid
+                elif hasattr(_tls_tool_call_id, "tool_call_id"):
+                    delattr(_tls_tool_call_id, "tool_call_id")
     except Exception as exc:
         logger.exception("agent tool %s failed", name)
         err = {"error": str(exc)}
@@ -436,6 +504,35 @@ def execute_tool(
 _TOOL_TRUNCATION_MARKER = "\n…(truncated)"
 
 
+def _peel_terminal_exec_dict(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Follow ``result`` / ``data`` / string ``result`` until ``exit_code`` + ``output``."""
+    cur: Any = data
+    for _ in range(8):
+        if not isinstance(cur, dict):
+            return None
+        if "exit_code" in cur and "output" in cur:
+            return cur
+        nxt: Any = None
+        if "result" in cur:
+            r = cur["result"]
+            if isinstance(r, str) and r.strip().startswith("{"):
+                try:
+                    nxt = json.loads(r)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    nxt = None
+            elif isinstance(r, dict):
+                nxt = r
+        if nxt is None and "data" in cur:
+            dd = cur["data"]
+            if isinstance(dd, dict):
+                nxt = dd
+        if nxt is not None:
+            cur = nxt
+            continue
+        return None
+    return None
+
+
 def tool_result_status_for_ui(out_json: str) -> tuple[bool, int]:
     """Return (ok, http_shaped_code) for the assistant UI (not a real HTTP response)."""
     try:
@@ -448,6 +545,18 @@ def tool_result_status_for_ui(out_json: str) -> tuple[bool, int]:
 
     if not isinstance(data, dict):
         return True, 200
+
+    # Sandbox terminal: {"exit_code": int, "output": str, ...} — vacuous ``error`` (or bad
+    # ok/status from upstream) must not mark success as failure. Peel HTTP/proxy wrappers.
+    peeled = _peel_terminal_exec_dict(data) if isinstance(data, dict) else None
+    if peeled is not None:
+        try:
+            ec = int(peeled["exit_code"])
+        except (TypeError, ValueError):
+            ec = -1
+        if ec == 0:
+            return True, 200
+        return False, 500
 
     if "error" in data:
         err = str(data.get("error") or "").lower()

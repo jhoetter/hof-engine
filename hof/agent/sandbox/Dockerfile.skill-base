@@ -10,6 +10,10 @@ RUN pip install --no-cache-dir \
 
 RUN useradd --create-home --shell /bin/bash sandbox
 
+# Same UX as host `hof fn` — list/describe/call allowlisted skills (see HOF_AGENT_SKILLS_CATALOG at runtime).
+COPY hof/agent/sandbox/hof_cli.sh /usr/local/bin/hof
+RUN chmod +x /usr/local/bin/hof
+
 USER sandbox
 WORKDIR /workspace
 

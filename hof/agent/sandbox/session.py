@@ -46,18 +46,28 @@ class TerminalSession:
     def container_id(self) -> str:
         return self._pooled.container_id
 
-    def exec_command(self, command: str) -> TerminalResult:
-        """Run ``command`` in the container (bash -lc). Merges stdout+stderr."""
+    def exec_command(
+        self,
+        command: str,
+        *,
+        extra_env: dict[str, str] | None = None,
+    ) -> TerminalResult:
+        """Run ``command`` in the container (bash -lc). Merges stdout+stderr.
+
+        ``extra_env`` is merged into the session environment for this invocation only
+        (e.g. per-exec ``HOF_AGENT_RUN_ID`` / ``HOF_AGENT_TOOL_CALL_ID``).
+        """
         if self._released:
             return TerminalResult(1, "error: sandbox session already released")
 
+        merged = {**self._environment, **(extra_env or {})}
         env_file = None
         try:
-            if self._environment:
+            if merged:
                 fd, env_file = tempfile.mkstemp(prefix="hof-sandbox-env-", suffix=".env", text=True)
                 try:
                     with os.fdopen(fd, "w") as f:
-                        for k, v in self._environment.items():
+                        for k, v in merged.items():
                             f.write(f"{k}={v}\n")
                 except Exception:
                     os.close(fd)
@@ -119,3 +129,4 @@ def create_session_for_run(
         max_output_chars=max_output_chars,
         max_timeout_sec=max_timeout_sec,
     )
+

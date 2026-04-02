@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from hof.agent.policy import AgentPolicy, configure_agent
+from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
 from hof.agent.tooling import (
     AGENT_TOOL_DESCRIPTION_MAX_CHARS,
     AGENT_TOOL_DISPLAY_TITLE_KEY,
@@ -162,6 +163,24 @@ def test_tool_result_status_for_ui_error_payload() -> None:
     assert tool_result_status_for_ui('{"error":"boom"}') == (False, 500)
 
 
+def test_tool_result_status_for_ui_terminal_exec_exit_zero_ignores_vacuous_error() -> None:
+    raw = json.dumps(
+        {"exit_code": 0, "output": '{"result":{"rows":[]}}', "error": ""},
+    )
+    assert tool_result_status_for_ui(raw) == (True, 200)
+
+
+def test_tool_result_status_for_ui_terminal_exec_nonzero() -> None:
+    raw = json.dumps({"exit_code": 2, "output": "stderr"})
+    assert tool_result_status_for_ui(raw) == (False, 500)
+
+
+def test_tool_result_status_for_ui_terminal_nested_result_string() -> None:
+    inner = json.dumps({"exit_code": 0, "output": '{"result":{"rows":[]}}'})
+    raw = json.dumps({"result": inner, "duration_ms": 0, "error": ""})
+    assert tool_result_status_for_ui(raw) == (True, 200)
+
+
 def test_tool_result_status_for_ui_validation() -> None:
     raw = '{"error":"validation failed","detail":[]}'
     assert tool_result_status_for_ui(raw) == (False, 422)
@@ -173,12 +192,12 @@ def test_tool_result_status_for_ui_rejected() -> None:
     ) == (False, 499)
 
 
-def test_format_cli_line_nested_payload_uses_hof_fn_not_post() -> None:
+def test_format_cli_line_nested_payload_uses_flags() -> None:
     args = json.dumps({"rows": [{"description": "x", "amount": 1.0}]})
     line = format_cli_line("bulk_create_expenses", args, max_cli_line_chars=800)
     assert line.startswith("hof fn bulk_create_expenses ")
     assert "POST /api/functions/" not in line
-    assert '"rows"' in line
+    assert "--rows" in line
 
 
 def test_format_cli_line_flat_args_uses_flags() -> None:
@@ -204,3 +223,21 @@ def test_format_cli_line_omits_display_title() -> None:
     assert AGENT_TOOL_DISPLAY_TITLE_KEY not in line
     assert "List page" not in line
     assert "--page" in line
+
+
+def test_format_cli_line_terminal_exec_hof_fn_json_to_flags() -> None:
+    """Sandbox ``hof fn name '<json>'`` is shown as pseudo-CLI flags (same as direct calls)."""
+    wire = json.dumps(
+        {
+            "command": (
+                "hof fn create_expense "
+                '\'{"description":"Coffee","amount":12.5,"date":"2026-03-29","category":"Food"}\''
+            ),
+        },
+    )
+    line = format_cli_line(HOF_BUILTIN_TERMINAL_EXEC, wire, max_cli_line_chars=500)
+    assert "hof fn create_expense" in line
+    assert "--description" in line
+    assert "Coffee" in line
+    assert "--amount" in line
+    assert "'{\\" not in line

@@ -50,7 +50,7 @@ class SandboxConfig:
     pool_size: int = 3
     pool_max_idle_sec: int = 600
     max_exec_timeout_sec: int = 30
-    max_output_chars: int = 10_000
+    max_output_chars: int = 32_768
     memory_limit: str = "512m"
     cpu_period: int = 100_000
     cpu_quota: int = 100_000

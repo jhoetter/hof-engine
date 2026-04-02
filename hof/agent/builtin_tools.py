@@ -128,6 +128,7 @@ def _sandbox_api_environment() -> dict[str, str]:
         except Exception:
             base = "http://127.0.0.1:8001"
     env["API_BASE_URL"] = base.rstrip("/")
+    env["HOF_FN_FORMAT"] = "json"
     tok = (sc.api_token or "").strip()
     if not tok:
         tok = (os.environ.get("HOF_SANDBOX_API_TOKEN") or os.environ.get("HOF_TOKEN") or "").strip()

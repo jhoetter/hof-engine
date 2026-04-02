@@ -7,16 +7,13 @@ Registered when ``discover_all`` finishes so app ``@function`` modules load firs
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+import os
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from hof.agent.sandbox.context import resolve_sandbox_run_state
 from hof.agent.sandbox.token import mint_sandbox_bearer_token
 from hof.agent.tooling import get_tool_execution_run_id, get_tool_execution_tool_call_id
 from hof.functions import function
-import os
-import socket
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +153,8 @@ def _sandbox_api_environment() -> dict[str, str]:
                 except Exception:
                     default_user = "admin"
                 env["HOF_BASIC_USER"] = (
-                    (os.environ.get("HOF_SANDBOX_BASIC_USER") or "").strip() or default_user
-                )
+                    os.environ.get("HOF_SANDBOX_BASIC_USER") or ""
+                ).strip() or default_user
                 env["HOF_BASIC_PASSWORD"] = basic_pw
     pol = try_get_agent_policy()
     if pol is not None:
@@ -222,8 +219,7 @@ def hof_builtin_terminal_exec(command: str) -> dict[str, Any]:
     run = resolve_sandbox_run_state(tool_rid)
     if run is None:
         logger.warning(
-            "hof_builtin_terminal_exec: missing sandbox state "
-            "(tool_run_id=%r ctx_var=%s)",
+            "hof_builtin_terminal_exec: missing sandbox state (tool_run_id=%r ctx_var=%s)",
             tool_rid,
             get_sandbox_run() is not None,
         )
@@ -249,8 +245,7 @@ def hof_builtin_terminal_exec(command: str) -> dict[str, Any]:
                     return {
                         "exit_code": 1,
                         "output": (
-                            "error: could not copy chat attachments into /workspace: "
-                            f"{exc}"
+                            f"error: could not copy chat attachments into /workspace: {exc}"
                         ),
                     }
             run.sandbox_attachments_staged = True

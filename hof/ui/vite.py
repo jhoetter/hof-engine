@@ -169,6 +169,27 @@ class ViteManager:
             self.process.wait(timeout=5)
             self.process = None
 
+    @staticmethod
+    def _component_export_kind(path: Path) -> str | None:
+        """Detect whether *path* has a named export matching its stem or a default export.
+
+        Returns ``"named"``, ``"default"``, or ``None`` (skip this file).
+        """
+        import re
+
+        stem = path.stem
+        if not stem.isidentifier():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        if re.search(rf"export\s+(?:function|const|class)\s+{re.escape(stem)}\b", text):
+            return "named"
+        if re.search(r"export\s+default\s", text):
+            return "default"
+        return None
+
     def _generate_entry_point(self) -> None:
         """Auto-generate _hof_entry.tsx that registers all components."""
         components_dir = self.ui_dir / "components"
@@ -179,7 +200,13 @@ class ViteManager:
 
         for f in tsx_files:
             stem = f.stem
-            imports.append(f'import {{ {stem} }} from "./components/{stem}";')
+            kind = self._component_export_kind(f)
+            if kind is None:
+                continue
+            if kind == "default":
+                imports.append(f'import {stem} from "./components/{stem}";')
+            else:
+                imports.append(f'import {{ {stem} }} from "./components/{stem}";')
             registry_entries.append(f'  "{stem}": {stem},')
 
         imports_block = "\n".join(imports) + "\n" if imports else ""

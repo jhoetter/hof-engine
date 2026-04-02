@@ -74,7 +74,6 @@ export type HofAgentComposerProps = {
   controlsRowClassName?: string;
   /** Bordered shell around the two-row composer (`flex flex-col`). */
   inputShellClassName?: string;
-  disclaimerClassName?: string;
   /** Max height of the message field before it scrolls (px). */
   textareaMaxHeightPx?: number;
   /**
@@ -350,7 +349,6 @@ export function HofAgentComposer({
   className = "w-full",
   controlsRowClassName = "flex w-full items-center justify-between gap-2",
   inputShellClassName = "flex flex-col gap-2 rounded-md border border-border bg-background p-2",
-  disclaimerClassName = "mt-2.5 mb-3 text-center text-[11px] leading-snug text-tertiary",
   textareaMaxHeightPx = 200,
   planModePromptMinChars = 80,
   voiceTranscription: voiceTranscriptionProp,
@@ -372,7 +370,6 @@ export function HofAgentComposer({
     uploadErr,
     fileInputRef,
     onPickFiles,
-    conversationEmpty,
     providerWaitNotice,
     agentMode,
     setAgentMode,
@@ -1162,11 +1159,6 @@ export function HofAgentComposer({
           </div>
         </div>
       </dialog>
-      {!conversationEmpty ? (
-        <p className={disclaimerClassName}>
-          AI can make mistakes. Please review the output carefully.
-        </p>
-      ) : null}
     </div>
   );
 }

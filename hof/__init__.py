@@ -1,6 +1,7 @@
 """hof-engine: Full-stack Python + React framework."""
 
-from hof.app import HofApp
+from __future__ import annotations
+
 from hof.config import Config
 from hof.core.registry import registry
 from hof.core.types import types
@@ -13,6 +14,19 @@ from hof.flows.node import node
 from hof.functions import function
 from hof.logging_config import configure_logging
 from hof.scaffold import get_project_files
+
+
+def __getattr__(name: str):
+    """Lazy HofApp so importing ``hof`` does not force-load ``hof.app`` first.
+
+    Avoids rare circular-import / reload races where ``hof.app`` is still
+    initializing when something does ``from hof.app import HofApp``.
+    """
+    if name == "HofApp":
+        from hof.app import HofApp as _HofApp
+
+        return _HofApp
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def emit_computation_event(channel_id: str, event: dict) -> None:

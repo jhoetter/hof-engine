@@ -1,7 +1,21 @@
-"""Pooled Docker containers for sandbox terminal execution."""
+"""Pooled Docker containers for sandbox terminal execution.
+
+Lifecycle guarantees
+--------------------
+* **Startup orphan reaper** — ``_reap_orphans()`` removes every ``hof-sandbox-*``
+  container from previous processes so they never accumulate across restarts.
+* **atexit handler** — ``shutdown()`` is registered via :func:`atexit.register`
+  so idle *and* in-use containers are cleaned up on graceful exit.
+* **Background reaper** — a daemon thread periodically evicts idle containers
+  that exceed ``pool_max_idle_sec`` even when no ``acquire``/``release`` traffic
+  flows through the pool.
+* **Docker labels** — every container is tagged with ``hof.sandbox=true`` and a
+  per-pool ``hof.sandbox.pool_id`` so the reaper can filter efficiently.
+"""
 
 from __future__ import annotations
 
+import atexit
 import logging
 import threading
 import time
@@ -17,6 +31,12 @@ except ImportError:  # pragma: no cover - optional dependency
     docker = None  # type: ignore[assignment]
     DockerException = Exception  # type: ignore[misc, assignment]
     ImageNotFound = NotFound = Exception  # type: ignore[misc, assignment]
+
+_SANDBOX_LABEL = "hof.sandbox"
+_POOL_ID_LABEL = "hof.sandbox.pool_id"
+_CONTAINER_NAME_PREFIX = "hof-sandbox-"
+
+_REAPER_INTERVAL_SEC = 60
 
 
 class _PooledContainer:
@@ -48,8 +68,12 @@ class ContainerPool:
         self._cpu_period = cpu_period
         self._cpu_quota = cpu_quota
         self._pool_max_idle_sec = max(60, pool_max_idle_sec)
+        self._pool_id = uuid.uuid4().hex[:16]
         self._lock = threading.Lock()
         self._idle: list[_PooledContainer] = []
+        self._in_use: dict[str, _PooledContainer] = {}
+        self._shutdown = False
+        self._reaper_thread: threading.Thread | None = None
 
     def _client(self) -> Any:
         if docker is None:
@@ -59,10 +83,14 @@ class ContainerPool:
             raise RuntimeError(msg)
         return docker.from_env()
 
+    # -- public API -----------------------------------------------------------
+
     def ensure_pool(self) -> None:
         """Create idle containers up to ``pool_size`` (best-effort)."""
         with self._lock:
-            self._reap_unlocked()
+            if self._shutdown:
+                return
+            self._reap_idle_unlocked()
             need = self._pool_size - len(self._idle)
             for _ in range(max(0, need)):
                 try:
@@ -72,15 +100,108 @@ class ContainerPool:
                     logger.exception("sandbox pool: failed to create container")
                     break
 
+    def acquire(self) -> _PooledContainer:
+        """Return a container handle; may create one synchronously if pool empty."""
+        with self._lock:
+            if self._shutdown:
+                raise RuntimeError("sandbox pool is shut down")
+            self._reap_idle_unlocked()
+            if self._idle:
+                pc = self._idle.pop()
+                self._in_use[pc.container_id] = pc
+                return pc
+        with self._lock:
+            if self._shutdown:
+                raise RuntimeError("sandbox pool is shut down")
+            try:
+                pc = self._create_container_unlocked()
+                self._in_use[pc.container_id] = pc
+                return pc
+            except ImageNotFound:
+                logger.exception(
+                    "sandbox pool: image %r not found — build skill image or set HOF_SANDBOX_IMAGE",
+                    self._image,
+                )
+                raise
+            except DockerException:
+                logger.exception("sandbox pool: docker error creating container")
+                raise
+
+    def release(self, pc: _PooledContainer, *, reset_workspace: bool = True) -> None:
+        """Reset workspace and return container to the pool, or destroy if pool full."""
+        with self._lock:
+            self._in_use.pop(pc.container_id, None)
+            if self._shutdown:
+                self._destroy_container_quiet(pc)
+                return
+        client = self._client()
+        if reset_workspace:
+            try:
+                c = client.containers.get(pc.container_id)
+                c.exec_run(
+                    [
+                        "bash",
+                        "-lc",
+                        "shopt -s dotglob; rm -rf /workspace/* /tmp/* 2>/dev/null || true",
+                    ],
+                )
+            except NotFound:
+                return
+            except Exception:
+                logger.debug("sandbox pool: workspace reset failed", exc_info=True)
+                self._destroy_container_quiet(pc)
+                return
+        pc.created_at = time.monotonic()
+        with self._lock:
+            if self._shutdown:
+                self._destroy_container_quiet(pc)
+                return
+            self._reap_idle_unlocked()
+            if len(self._idle) < self._pool_size:
+                self._idle.append(pc)
+            else:
+                self._destroy_container_unlocked(pc, client)
+
+    def shutdown(self) -> None:
+        """Stop and remove all containers (idle + in-use). Idempotent."""
+        with self._lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            all_containers = list(self._idle) + list(self._in_use.values())
+            self._idle.clear()
+            self._in_use.clear()
+        client = self._client()
+        for pc in all_containers:
+            try:
+                c = client.containers.get(pc.container_id)
+                c.stop(timeout=5)
+                c.remove(force=True)
+            except NotFound:
+                pass
+            except Exception:
+                logger.debug("sandbox pool: shutdown failed for container", exc_info=True)
+
+    def start_reaper(self) -> None:
+        """Start the background reaper daemon thread (idempotent)."""
+        with self._lock:
+            if self._reaper_thread is not None:
+                return
+            t = threading.Thread(target=self._reaper_loop, daemon=True, name="hof-sandbox-reaper")
+            self._reaper_thread = t
+            t.start()
+
+    # -- internal helpers -----------------------------------------------------
+
     def _create_container_unlocked(self) -> _PooledContainer:
         client = self._client()
-        name = f"hof-sandbox-{uuid.uuid4().hex[:12]}"
-        # So ``host.docker.internal`` resolves inside the container (Mac/Win Docker Desktop;
-        # Linux Docker 20.10+ with ``host-gateway``). Skip for ``host`` network mode.
+        name = f"{_CONTAINER_NAME_PREFIX}{uuid.uuid4().hex[:12]}"
+        labels = {_SANDBOX_LABEL: "true", _POOL_ID_LABEL: self._pool_id}
         run_kw: dict[str, Any] = {
             "command": ["sleep", "infinity"],
             "detach": True,
             "name": name,
+            "labels": labels,
             "network_mode": self._network_mode,
             "mem_limit": self._memory_limit,
             "cpu_period": self._cpu_period,
@@ -92,7 +213,8 @@ class ContainerPool:
         container = client.containers.run(self._image, **run_kw)
         return _PooledContainer(container_id=container.id, created_at=time.monotonic())
 
-    def _reap_unlocked(self) -> None:
+    def _reap_idle_unlocked(self) -> None:
+        """Remove idle containers that have exceeded ``pool_max_idle_sec``."""
         now = time.monotonic()
         kept: list[_PooledContainer] = []
         client = self._client()
@@ -110,53 +232,7 @@ class ContainerPool:
                 kept.append(pc)
         self._idle = kept
 
-    def acquire(self) -> _PooledContainer:
-        """Return a container handle; may create one synchronously if pool empty."""
-        with self._lock:
-            self._reap_unlocked()
-            if self._idle:
-                return self._idle.pop()
-        with self._lock:
-            try:
-                return self._create_container_unlocked()
-            except ImageNotFound:
-                logger.exception(
-                    "sandbox pool: image %r not found — build skill image or set HOF_SANDBOX_IMAGE",
-                    self._image,
-                )
-                raise
-            except DockerException:
-                logger.exception("sandbox pool: docker error creating container")
-                raise
-
-    def release(self, pc: _PooledContainer, *, reset_workspace: bool = True) -> None:
-        """Reset workspace and return container to the pool, or destroy if pool full."""
-        client = self._client()
-        if reset_workspace:
-            try:
-                c = client.containers.get(pc.container_id)
-                c.exec_run(
-                    [
-                        "bash",
-                        "-lc",
-                        "shopt -s dotglob; rm -rf /workspace/* /tmp/* 2>/dev/null || true",
-                    ],
-                )
-            except NotFound:
-                return
-            except Exception:
-                logger.debug("sandbox pool: workspace reset failed", exc_info=True)
-                self._destroy_container(pc)
-                return
-        pc.created_at = time.monotonic()
-        with self._lock:
-            self._reap_unlocked()
-            if len(self._idle) < self._pool_size:
-                self._idle.append(pc)
-            else:
-                self._destroy_container_unlocked(pc, client)
-
-    def _destroy_container(self, pc: _PooledContainer) -> None:
+    def _destroy_container_quiet(self, pc: _PooledContainer) -> None:
         try:
             client = self._client()
             self._destroy_container_unlocked(pc, client)
@@ -173,30 +249,113 @@ class ContainerPool:
         except Exception:
             logger.debug("sandbox pool: destroy failed", exc_info=True)
 
-    def shutdown(self) -> None:
-        """Shutdown the pool by stopping and removing all idle containers."""
-        with self._lock:
-            client = self._client()
-            for pc in self._idle:
-                try:
-                    c = client.containers.get(pc.container_id)
-                    c.stop(timeout=5)
-                    c.remove(force=True)
-                except NotFound:
-                    pass
-                except Exception:
-                    logger.debug("sandbox pool: shutdown failed for container", exc_info=True)
-            self._idle.clear()
+    def _reaper_loop(self) -> None:
+        """Daemon thread that periodically evicts expired idle containers."""
+        while not self._shutdown:
+            time.sleep(_REAPER_INTERVAL_SEC)
+            if self._shutdown:
+                break
+            try:
+                with self._lock:
+                    self._reap_idle_unlocked()
+            except Exception:
+                logger.debug("sandbox reaper: tick failed", exc_info=True)
 
+
+# -- module-level singleton + lifecycle ---------------------------------------
 
 _pool_lock = threading.Lock()
 _global_pool: ContainerPool | None = None
 _global_pool_key: tuple[Any, ...] | None = None
+_atexit_registered = False
+
+
+def _reap_orphans(image: str) -> None:
+    """Remove **all** ``hof-sandbox-*`` containers from previous processes.
+
+    Called once when the first pool is created in this process. Uses Docker
+    label filtering so only containers we created are touched.
+    """
+    if docker is None:
+        return
+    try:
+        client = docker.from_env()
+        orphans = client.containers.list(
+            all=True,
+            filters={"label": f"{_SANDBOX_LABEL}=true"},
+        )
+        if not orphans:
+            return
+        logger.info(
+            "sandbox pool: cleaning up %d orphaned containers from previous runs",
+            len(orphans),
+        )
+        for c in orphans:
+            try:
+                c.stop(timeout=5)
+            except Exception:
+                pass
+            try:
+                c.remove(force=True)
+            except NotFound:
+                pass
+            except Exception:
+                logger.debug("sandbox pool: orphan removal failed for %s", c.id[:12], exc_info=True)
+    except Exception:
+        logger.debug("sandbox pool: orphan reap failed", exc_info=True)
+
+
+def _reap_orphans_by_name() -> None:
+    """Fallback: remove containers matching the ``hof-sandbox-`` name prefix.
+
+    Catches containers created before labels were added (upgrade path).
+    """
+    if docker is None:
+        return
+    try:
+        client = docker.from_env()
+        orphans = client.containers.list(
+            all=True,
+            filters={"name": _CONTAINER_NAME_PREFIX},
+        )
+        unlabeled = [c for c in orphans if c.labels.get(_SANDBOX_LABEL) != "true"]
+        if not unlabeled:
+            return
+        logger.info(
+            "sandbox pool: cleaning up %d legacy (unlabeled) orphaned containers",
+            len(unlabeled),
+        )
+        for c in unlabeled:
+            try:
+                c.stop(timeout=5)
+            except Exception:
+                pass
+            try:
+                c.remove(force=True)
+            except NotFound:
+                pass
+            except Exception:
+                logger.debug("sandbox pool: legacy orphan removal failed", exc_info=True)
+    except Exception:
+        logger.debug("sandbox pool: legacy orphan reap failed", exc_info=True)
+
+
+def _atexit_shutdown() -> None:
+    """Called by :func:`atexit.register` to drain all containers on process exit."""
+    global _global_pool
+    with _pool_lock:
+        pool = _global_pool
+        _global_pool = None
+    if pool is not None:
+        try:
+            pool.shutdown()
+        except Exception:
+            pass
 
 
 def get_container_pool(config: Any) -> ContainerPool:
     """Return a process-wide pool for the given resolved :class:`SandboxConfig`."""
-    global _global_pool, _global_pool_key
+    global _global_pool, _global_pool_key, _atexit_registered
     key = (
         config.image,
         config.pool_size,
@@ -210,6 +369,14 @@ def get_container_pool(config: Any) -> ContainerPool:
         if _global_pool is not None and _global_pool_key == key:
             return _global_pool
         old_pool = _global_pool
+
+        first_pool = old_pool is None and not _atexit_registered
+        if first_pool:
+            _reap_orphans(config.image)
+            _reap_orphans_by_name()
+            atexit.register(_atexit_shutdown)
+            _atexit_registered = True
+
         _global_pool = ContainerPool(
             image=config.image,
             pool_size=config.pool_size,
@@ -220,6 +387,19 @@ def get_container_pool(config: Any) -> ContainerPool:
             pool_max_idle_sec=config.pool_max_idle_sec,
         )
         _global_pool_key = key
+        _global_pool.start_reaper()
         if old_pool is not None:
             old_pool.shutdown()
         return _global_pool
+
+
+def _reset_module_state() -> None:
+    """Reset global pool state. **Test helper only** — not for production use."""
+    global _global_pool, _global_pool_key, _atexit_registered
+    with _pool_lock:
+        pool = _global_pool
+        _global_pool = None
+        _global_pool_key = None
+        _atexit_registered = False
+    if pool is not None:
+        pool.shutdown()

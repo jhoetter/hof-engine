@@ -30,6 +30,7 @@ import type {
   InboxReviewWatchWire,
   LiveBlock,
   ThreadItem,
+  WebSessionBarrier,
 } from "./hofAgentChatModel";
 import { resolveAgentChatAttachmentContentType } from "./agentAttachmentUpload";
 import {
@@ -43,6 +44,7 @@ import {
   collectThreadAttachments,
   compactBlocksForHistory,
   coerceRunId,
+  defaultPollWebSession,
   finalizeLiveBlocksAfterUserStop,
   inboxReviewBarrierFromStreamEvent,
   inferAssistantUiLane,
@@ -54,6 +56,7 @@ import {
   parsePlanClarificationBarrierFromTerm,
   PLAN_EXECUTE_USER_MARKER,
   toolResultAwaitingUserConfirmation,
+  webSessionBarrierFromStreamEvent,
 } from "./hofAgentChatModel";
 import { parseStructuredPlan } from "./planMarkdownTodos";
 import {
@@ -297,6 +300,10 @@ export type HofAgentChatProps = {
   prepareAgentResumeInboxRequest?: () => Promise<Record<string, unknown>>;
   /** Override inbox polling; default uses ``get_expense`` / ``get_revenue`` by ``record_type``. */
   pollInboxReviewWatch?: (w: InboxReviewWatchWire) => Promise<boolean>;
+  /** Poll ``GET /api/web-sessions/:id`` until terminal ``status`` (async browse barrier). */
+  pollWebSession?: (sessionId: string) => Promise<boolean>;
+  /** Merged into ``agent_resume_web_session`` after ``run_id``. Defaults to ``prepareAgentResumeRequest``. */
+  prepareAgentResumeWebSessionRequest?: () => Promise<Record<string, unknown>>;
   /**
    * Runs before default link behavior in assistant Markdown. Call ``event.preventDefault()`` to handle
    * the URL in the host (e.g. open same-origin inbox in an iframe).
@@ -344,6 +351,10 @@ export type HofAgentChatContextValue = {
   inboxReviewBarrier: InboxReviewBarrier | null;
   inboxPollWaiting: boolean;
   inboxResumeError: string | null;
+  /** Paused on ``awaiting_web_session``; UI polls web session then POSTs ``agent_resume_web_session``. */
+  webSessionBarrier: WebSessionBarrier | null;
+  webSessionPollWaiting: boolean;
+  webSessionResumeError: string | null;
   approvalDecisions: Record<string, boolean | null>;
   setApprovalDecisions: Dispatch<
     SetStateAction<Record<string, boolean | null>>
@@ -363,6 +374,8 @@ export type HofAgentChatContextValue = {
   dismissApprovalBarrier: () => void;
   /** Clears the inbox-review gate and polling state without calling inbox resume. */
   dismissInboxReviewBarrier: () => void;
+  /** Clears the web-session gate without calling ``agent_resume_web_session``. */
+  dismissWebSessionBarrier: () => void;
   conversationEmpty: boolean;
   /**
    * Wall-clock start of the current “thinking” episode (model round), for live timers.
@@ -441,7 +454,9 @@ export function HofAgentChatProvider({
   prepareAgentChatRequest,
   prepareAgentResumeRequest,
   prepareAgentResumeInboxRequest,
+  prepareAgentResumeWebSessionRequest,
   pollInboxReviewWatch,
+  pollWebSession,
   onAssistantMarkdownLinkClick,
   initialAgentMode = "instant",
   prepareAgentResumePlanClarificationRequest,
@@ -474,6 +489,12 @@ export function HofAgentChatProvider({
     useState<InboxReviewBarrier | null>(null);
   const [inboxPollWaiting, setInboxPollWaiting] = useState(false);
   const [inboxResumeError, setInboxResumeError] = useState<string | null>(null);
+  const [webSessionBarrier, setWebSessionBarrier] =
+    useState<WebSessionBarrier | null>(null);
+  const [webSessionPollWaiting, setWebSessionPollWaiting] = useState(false);
+  const [webSessionResumeError, setWebSessionResumeError] = useState<
+    string | null
+  >(null);
   const [providerWaitNotice, setProviderWaitNotice] =
     useState<ProviderWaitNotice | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -496,9 +517,16 @@ export function HofAgentChatProvider({
   const runInboxResumeRef = useRef<(b: InboxReviewBarrier) => Promise<void>>(
     async () => {},
   );
+  const runWebSessionResumeRef = useRef<
+    (b: WebSessionBarrier) => Promise<void>
+  >(async () => {});
   const inboxReviewBarrierRef = useRef<InboxReviewBarrier | null>(null);
+  const webSessionBarrierRef = useRef<WebSessionBarrier | null>(null);
   const pollInboxWatchRef = useRef(
     pollInboxReviewWatch ?? defaultPollInboxReviewWatch,
+  );
+  const pollWebSessionRef = useRef(
+    pollWebSession ?? defaultPollWebSession,
   );
   const resumeMergeContinuationRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -599,9 +627,17 @@ export function HofAgentChatProvider({
   }, [inboxReviewBarrier]);
 
   useEffect(() => {
+    webSessionBarrierRef.current = webSessionBarrier;
+  }, [webSessionBarrier]);
+
+  useEffect(() => {
     pollInboxWatchRef.current =
       pollInboxReviewWatch ?? defaultPollInboxReviewWatch;
   }, [pollInboxReviewWatch]);
+
+  useEffect(() => {
+    pollWebSessionRef.current = pollWebSession ?? defaultPollWebSession;
+  }, [pollWebSession]);
 
   useLayoutEffect(() => {
     skipNextPersistRef.current = true;
@@ -636,10 +672,14 @@ export function HofAgentChatProvider({
       const draftInbox = (
         d as { inboxReviewBarrier?: { runId?: string } | null }
       ).inboxReviewBarrier;
+      const draftWeb = (
+        d as { webSessionBarrier?: { runId?: string } | null }
+      ).webSessionBarrier;
       const discardDraftLive =
         lb.length > 0 &&
         !d.approvalBarrier?.runId &&
         !draftInbox?.runId &&
+        !draftWeb?.runId &&
         last?.kind === "run";
       if (discardDraftLive) {
         liveBlocksRef.current = [];
@@ -660,6 +700,18 @@ export function HofAgentChatProvider({
       } else {
         setInboxReviewBarrier(null);
       }
+      const wb = (d as { webSessionBarrier?: WebSessionBarrier | null })
+        .webSessionBarrier;
+      if (
+        wb?.runId &&
+        wb.sessionId &&
+        wb.toolCallId &&
+        wb.canvasPath
+      ) {
+        setWebSessionBarrier(wb);
+      } else {
+        setWebSessionBarrier(null);
+      }
       setApprovalDecisions(
         d.approvalDecisions && typeof d.approvalDecisions === "object"
           ? { ...d.approvalDecisions }
@@ -670,6 +722,7 @@ export function HofAgentChatProvider({
       setLiveBlocks([]);
       setApprovalBarrier(null);
       setInboxReviewBarrier(null);
+      setWebSessionBarrier(null);
       setApprovalDecisions({});
     }
     setAttachmentQueue([]);
@@ -738,6 +791,7 @@ export function HofAgentChatProvider({
         !busy &&
         !approvalBarrier &&
         !inboxReviewBarrier &&
+        !webSessionBarrier &&
         lastForDraft?.kind === "run" &&
         liveBlocks.length > 0;
       const draftLiveBlocks = draftLiveStale ? [] : liveBlocks;
@@ -745,6 +799,7 @@ export function HofAgentChatProvider({
         draftLiveBlocks.length > 0 ||
         approvalBarrier !== null ||
         inboxReviewBarrier !== null ||
+        webSessionBarrier !== null ||
         busy;
       const hasPlan =
         planPhase !== null ||
@@ -760,6 +815,7 @@ export function HofAgentChatProvider({
               liveBlocks: structuredClone(draftLiveBlocks) as unknown[],
               approvalBarrier,
               inboxReviewBarrier,
+              webSessionBarrier,
               approvalDecisions: { ...approvalDecisions },
             }
           : undefined,
@@ -787,6 +843,7 @@ export function HofAgentChatProvider({
     mutationOutcomeByPendingId,
     approvalBarrier,
     inboxReviewBarrier,
+    webSessionBarrier,
     approvalDecisions,
     busy,
     onPersist,
@@ -805,7 +862,7 @@ export function HofAgentChatProvider({
 
   /** Drop ``liveBlocks`` when they are leftover from a turn already stored as the last ``run`` row. */
   useEffect(() => {
-    if (busy || approvalBarrier || inboxReviewBarrier) {
+    if (busy || approvalBarrier || inboxReviewBarrier || webSessionBarrier) {
       return;
     }
     if (liveBlocks.length === 0) {
@@ -817,7 +874,14 @@ export function HofAgentChatProvider({
     }
     liveBlocksRef.current = [];
     setLiveBlocks([]);
-  }, [thread, liveBlocks, busy, approvalBarrier, inboxReviewBarrier]);
+  }, [
+    thread,
+    liveBlocks,
+    busy,
+    approvalBarrier,
+    inboxReviewBarrier,
+    webSessionBarrier,
+  ]);
 
   const threadToApiMessages = useCallback((items: ThreadItem[]) => {
     const out: { role: "user" | "assistant"; content: string }[] = [];
@@ -973,6 +1037,7 @@ export function HofAgentChatProvider({
               typ === "final" ||
               typ === "awaiting_confirmation" ||
               typ === "awaiting_inbox_review" ||
+              typ === "awaiting_web_session" ||
               typ === "awaiting_plan_clarification" ||
               typ === "error"
             ) {
@@ -985,6 +1050,7 @@ export function HofAgentChatProvider({
               typ === "final" ||
               typ === "awaiting_confirmation" ||
               typ === "awaiting_inbox_review" ||
+              typ === "awaiting_web_session" ||
               typ === "error"
             ) {
               setPlanBuiltinToolActive(null);
@@ -999,6 +1065,8 @@ export function HofAgentChatProvider({
               setApprovalDecisions({});
               setInboxReviewBarrier(null);
               setInboxResumeError(null);
+              setWebSessionBarrier(null);
+              setWebSessionResumeError(null);
               setProviderWaitNotice(null);
               setDiscoverStreamPhase(null);
               reasoningLabelRef.current = null;
@@ -1107,6 +1175,14 @@ export function HofAgentChatProvider({
                     } as HofStreamEvent)
                   : ev;
             }
+            applyLiveBlocksTail(
+              evForBlocks,
+              assistantStreamPhaseRef,
+              thinkingEpisodeStartedAtRef,
+              liveBlocksRef,
+              setLiveBlocks,
+              reasoningLabelRef,
+            );
             if (typ === "awaiting_inbox_review") {
               const parsed = inboxReviewBarrierFromStreamEvent(ev);
               if (parsed) {
@@ -1116,14 +1192,17 @@ export function HofAgentChatProvider({
                 setApprovalDecisions({});
               }
             }
-            applyLiveBlocksTail(
-              evForBlocks,
-              assistantStreamPhaseRef,
-              thinkingEpisodeStartedAtRef,
-              liveBlocksRef,
-              setLiveBlocks,
-              reasoningLabelRef,
-            );
+            if (typ === "awaiting_web_session") {
+              const parsed = webSessionBarrierFromStreamEvent(ev);
+              if (parsed) {
+                setWebSessionBarrier(parsed);
+                setWebSessionResumeError(null);
+                setApprovalBarrier(null);
+                setApprovalDecisions({});
+                setInboxReviewBarrier(null);
+                setInboxResumeError(null);
+              }
+            }
           },
         });
         if (myId !== reqIdRef.current) {
@@ -1569,6 +1648,7 @@ export function HofAgentChatProvider({
             rtyp === "final" ||
             rtyp === "awaiting_confirmation" ||
             rtyp === "awaiting_inbox_review" ||
+            rtyp === "awaiting_web_session" ||
             rtyp === "awaiting_plan_clarification" ||
             rtyp === "error"
           ) {
@@ -1578,6 +1658,7 @@ export function HofAgentChatProvider({
             rtyp === "final" ||
             rtyp === "awaiting_confirmation" ||
             rtyp === "awaiting_inbox_review" ||
+            rtyp === "awaiting_web_session" ||
             rtyp === "error"
           ) {
             setPlanBuiltinToolActive(null);
@@ -1591,6 +1672,8 @@ export function HofAgentChatProvider({
             mutationPendingIdsThisRunRef.current = [];
             setInboxReviewBarrier(null);
             setInboxResumeError(null);
+            setWebSessionBarrier(null);
+            setWebSessionResumeError(null);
             setProviderWaitNotice(null);
             setDiscoverStreamPhase(null);
             setPlanBuiltinToolActive(null);
@@ -1692,6 +1775,14 @@ export function HofAgentChatProvider({
                   } as HofStreamEvent)
                 : ev;
           }
+          applyLiveBlocksTail(
+            evForBlocks,
+            assistantStreamPhaseRef,
+            thinkingEpisodeStartedAtRef,
+            liveBlocksRef,
+            setLiveBlocks,
+            reasoningLabelRef,
+          );
           if (rtyp === "awaiting_inbox_review") {
             const parsed = inboxReviewBarrierFromStreamEvent(ev);
             if (parsed) {
@@ -1701,14 +1792,15 @@ export function HofAgentChatProvider({
               setApprovalDecisions({});
             }
           }
-          applyLiveBlocksTail(
-            evForBlocks,
-            assistantStreamPhaseRef,
-            thinkingEpisodeStartedAtRef,
-            liveBlocksRef,
-            setLiveBlocks,
-            reasoningLabelRef,
-          );
+          if (rtyp === "awaiting_web_session") {
+            const parsed = webSessionBarrierFromStreamEvent(ev);
+            if (parsed) {
+              setWebSessionBarrier(parsed);
+              setWebSessionResumeError(null);
+              setApprovalBarrier(null);
+              setApprovalDecisions({});
+            }
+          }
         },
       });
       if (myId !== reqIdRef.current) {
@@ -1871,6 +1963,7 @@ export function HofAgentChatProvider({
               rtyp === "final" ||
               rtyp === "awaiting_confirmation" ||
               rtyp === "awaiting_inbox_review" ||
+              rtyp === "awaiting_web_session" ||
               rtyp === "awaiting_plan_clarification" ||
               rtyp === "error"
             ) {
@@ -1890,6 +1983,8 @@ export function HofAgentChatProvider({
               mutationPendingIdsThisRunRef.current = [];
               setInboxReviewBarrier(null);
               setInboxResumeError(null);
+              setWebSessionBarrier(null);
+              setWebSessionResumeError(null);
               setProviderWaitNotice(null);
               setPersistedPlanDiscoverLabel(null);
               planDiscoverLastLiveRef.current = null;
@@ -1956,6 +2051,14 @@ export function HofAgentChatProvider({
                     } as HofStreamEvent)
                   : ev;
             }
+            applyLiveBlocksTail(
+              evForBlocks,
+              assistantStreamPhaseRef,
+              thinkingEpisodeStartedAtRef,
+              liveBlocksRef,
+              setLiveBlocks,
+              reasoningLabelRef,
+            );
             if (rtyp === "awaiting_inbox_review") {
               const parsed = inboxReviewBarrierFromStreamEvent(ev);
               if (parsed) {
@@ -1965,14 +2068,15 @@ export function HofAgentChatProvider({
                 setApprovalDecisions({});
               }
             }
-            applyLiveBlocksTail(
-              evForBlocks,
-              assistantStreamPhaseRef,
-              thinkingEpisodeStartedAtRef,
-              liveBlocksRef,
-              setLiveBlocks,
-              reasoningLabelRef,
-            );
+            if (rtyp === "awaiting_web_session") {
+              const parsed = webSessionBarrierFromStreamEvent(ev);
+              if (parsed) {
+                setWebSessionBarrier(parsed);
+                setWebSessionResumeError(null);
+                setApprovalBarrier(null);
+                setApprovalDecisions({});
+              }
+            }
           },
         });
         if (myId !== reqIdRef.current) {
@@ -2089,8 +2193,276 @@ export function HofAgentChatProvider({
     ],
   );
 
+  const runWebSessionResume = useCallback(
+    async (barrier: WebSessionBarrier) => {
+      const myId = ++reqIdRef.current;
+      abortRef.current?.abort();
+      abortRef.current = new AbortController();
+      setBusy(true);
+      setWebSessionResumeError(null);
+      updateThinkingEpisodeStart(Date.now());
+      liveBlocksRef.current = [];
+      setLiveBlocks([]);
+      mutationPendingIdsThisRunRef.current = [];
+      const rid = barrier.runId;
+      try {
+        const resumeBody: Record<string, unknown> = { run_id: rid };
+        const prep =
+          prepareAgentResumeWebSessionRequest ?? prepareAgentResumeRequest;
+        if (prep) {
+          const extra = await prep();
+          Object.assign(resumeBody, extra);
+        }
+        await streamHofFunction("agent_resume_web_session", resumeBody, {
+          signal: abortRef.current.signal,
+          onEvent: (ev) => {
+            if (myId !== reqIdRef.current) {
+              return;
+            }
+            const { evForBlocks: evfb, typ: rtyp } = applyPlanTodoWireHead(
+              ev,
+              planTextRef,
+              setPlanTodoDoneIndices,
+            );
+            let evForBlocks = evfb;
+            agentChatDebugNdjson(rtyp, ev as Record<string, unknown>);
+            if (
+              rtyp === "final" ||
+              rtyp === "awaiting_confirmation" ||
+              rtyp === "awaiting_inbox_review" ||
+              rtyp === "awaiting_web_session" ||
+              rtyp === "awaiting_plan_clarification" ||
+              rtyp === "error"
+            ) {
+              lastTerminalStreamEventRef.current = ev;
+            }
+            if (rtyp === "error") {
+              const detail =
+                typeof ev.detail === "string" ? ev.detail : "error";
+              setWebSessionResumeError(detail);
+            }
+            if (rtyp === "resume_start") {
+              resumeMergeContinuationRef.current =
+                (ev as { continuation?: unknown }).continuation === true;
+              assistantStreamPhaseRef.current = null;
+              currentAgentRunIdRef.current = coerceRunId(ev.run_id);
+              pendingDetailsRef.current.clear();
+              mutationPendingIdsThisRunRef.current = [];
+              setWebSessionBarrier(null);
+              setWebSessionResumeError(null);
+              setInboxReviewBarrier(null);
+              setInboxResumeError(null);
+              setProviderWaitNotice(null);
+              setPersistedPlanDiscoverLabel(null);
+              planDiscoverLastLiveRef.current = null;
+              setClarificationGenerationStartedAtMs(null);
+              setClarificationVisibleAtMs(null);
+              setPlanPreparationStartedAtMs(null);
+              updateThinkingEpisodeStart(Date.now());
+            }
+            updateProviderWaitFromStreamType(rtyp, ev, setProviderWaitNotice);
+            if (rtyp === "phase") {
+              const ph = typeof ev.phase === "string" ? ev.phase : "";
+              if (ph === "model") {
+                updateThinkingEpisodeStart(Date.now());
+              }
+              if (ph === "model" || ph === "summary") {
+                assistantStreamPhaseRef.current = ph;
+              }
+            }
+            if (rtyp === "mutation_pending") {
+              const pid =
+                typeof ev.pending_id === "string" ? ev.pending_id : "";
+              if (pid) {
+                pendingDetailsRef.current.set(
+                  pid,
+                  pendingDetailsFromMutationPendingEvent(ev),
+                );
+                const acc = mutationPendingIdsThisRunRef.current;
+                if (!acc.includes(pid)) {
+                  acc.push(pid);
+                }
+              }
+            }
+            if (rtyp === "awaiting_confirmation") {
+              const awRid =
+                coerceRunId(ev.run_id) || currentAgentRunIdRef.current.trim();
+              const fromEvent = Array.isArray(ev.pending_ids)
+                ? (ev.pending_ids as unknown[])
+                    .map((x) => String(x))
+                    .filter(Boolean)
+                : [];
+              const pids = mergePendingIdLists(
+                fromEvent,
+                mutationPendingIdsThisRunRef.current,
+                mutationPendingIdsFromBlocks(liveBlocksRef.current),
+              );
+              const itemsBarrier = pids.map((pid) =>
+                approvalBarrierItemFromDetails(
+                  pid,
+                  pendingDetailsRef.current.get(pid),
+                ),
+              );
+              setApprovalBarrier({ runId: awRid, items: itemsBarrier });
+              const dec: Record<string, boolean | null> = {};
+              for (const p of pids) {
+                dec[p] = null;
+              }
+              setApprovalDecisions(dec);
+              evForBlocks =
+                pids.length > 0
+                  ? ({
+                      ...ev,
+                      run_id: awRid,
+                      pending_ids: pids,
+                    } as HofStreamEvent)
+                  : ev;
+            }
+            applyLiveBlocksTail(
+              evForBlocks,
+              assistantStreamPhaseRef,
+              thinkingEpisodeStartedAtRef,
+              liveBlocksRef,
+              setLiveBlocks,
+              reasoningLabelRef,
+            );
+            if (rtyp === "awaiting_inbox_review") {
+              const parsed = inboxReviewBarrierFromStreamEvent(ev);
+              if (parsed) {
+                setInboxReviewBarrier(parsed);
+                setInboxResumeError(null);
+                setApprovalBarrier(null);
+                setApprovalDecisions({});
+              }
+            }
+            if (rtyp === "awaiting_web_session") {
+              const parsed = webSessionBarrierFromStreamEvent(ev);
+              if (parsed) {
+                setWebSessionBarrier(parsed);
+                setWebSessionResumeError(null);
+                setApprovalBarrier(null);
+                setApprovalDecisions({});
+              }
+            }
+          },
+        });
+        if (myId !== reqIdRef.current) {
+          return;
+        }
+        {
+          const term = lastTerminalStreamEventRef.current;
+          const termTyp =
+            term && typeof term.type === "string" ? String(term.type) : "";
+          applyPlanExecuteStreamCompletion(termTyp);
+        }
+        let doneBlocks = liveBlocksRef.current;
+        const ridForSynth = currentAgentRunIdRef.current.trim();
+        const hasApprovalBlock = doneBlocks.some(
+          (b) => b.kind === "approval_required",
+        );
+        const synthPids = mergePendingIdLists(
+          mutationPendingIdsFromBlocks(doneBlocks),
+          mutationPendingIdsThisRunRef.current,
+        );
+        if (
+          !hasApprovalBlock &&
+          synthPids.length > 0 &&
+          toolResultAwaitingUserConfirmation(doneBlocks) &&
+          ridForSynth
+        ) {
+          doneBlocks = [
+            ...doneBlocks,
+            {
+              kind: "approval_required",
+              id: newId(),
+              run_id: ridForSynth,
+              pending_ids: synthPids,
+            },
+          ];
+          liveBlocksRef.current = doneBlocks;
+          const itemsSynth = synthPids.map((pid) =>
+            approvalBarrierItemFromDetails(
+              pid,
+              pendingDetailsRef.current.get(pid),
+            ),
+          );
+          setApprovalBarrier({ runId: ridForSynth, items: itemsSynth });
+          setApprovalDecisions(
+            Object.fromEntries(synthPids.map((p) => [p, null])) as Record<
+              string,
+              boolean | null
+            >,
+          );
+        } else if (!hasApprovalBlock && synthPids.length === 0) {
+          setApprovalBarrier(null);
+          setApprovalDecisions({});
+          pendingDetailsRef.current.clear();
+        }
+        const mergeCont = resumeMergeContinuationRef.current;
+        resumeMergeContinuationRef.current = false;
+        if (doneBlocks.length > 0) {
+          flushLiveToThread(structuredClone(doneBlocks), {
+            mergeContinuation: mergeCont,
+          });
+        }
+        liveBlocksRef.current = [];
+        setLiveBlocks([]);
+      } catch (e) {
+        if (myId !== reqIdRef.current) {
+          return;
+        }
+        if (e instanceof Error && e.name === "AbortError") {
+          const raw = liveBlocksRef.current;
+          if (raw.length > 0) {
+            const frozen = finalizeLiveBlocksAfterUserStop(
+              structuredClone(raw),
+            );
+            if (frozen.length > 0) {
+              flushLiveToThread(structuredClone(frozen));
+            }
+          }
+          liveBlocksRef.current = [];
+          setLiveBlocks([]);
+          return;
+        }
+        const msg = e instanceof Error ? e.message : String(e);
+        setWebSessionResumeError(msg);
+        const merged = [
+          ...liveBlocksRef.current,
+          { kind: "error", id: newId(), detail: msg } as LiveBlock,
+        ];
+        if (merged.length > 0) {
+          flushLiveToThread(structuredClone(merged));
+        }
+        liveBlocksRef.current = [];
+        setLiveBlocks([]);
+      } finally {
+        const cleanupId = myId;
+        scheduleAgentStreamIdleCleanup(() => {
+          if (cleanupId !== reqIdRef.current) {
+            return;
+          }
+          setBusy(false);
+          setDiscoverStreamPhase(null);
+          setPlanBuiltinToolActive(null);
+          updateThinkingEpisodeStart(null);
+          setProviderWaitNotice(null);
+        });
+      }
+    },
+    [
+      applyPlanExecuteStreamCompletion,
+      flushLiveToThread,
+      finalizeLiveBlocksAfterUserStop,
+      prepareAgentResumeWebSessionRequest,
+      prepareAgentResumeRequest,
+      updateThinkingEpisodeStart,
+    ],
+  );
+
   runResumeRef.current = runResume;
   runInboxResumeRef.current = runInboxResume;
+  runWebSessionResumeRef.current = runWebSessionResume;
 
   useEffect(() => {
     if (!approvalBarrier?.items.length || busy) {
@@ -2182,6 +2554,50 @@ export function HofAgentChatProvider({
     };
   }, [inboxBarrierPollKey, busy]);
 
+  const webSessionBarrierPollKey = useMemo(() => {
+    if (!webSessionBarrier?.runId || !webSessionBarrier.sessionId) {
+      return "";
+    }
+    return `${webSessionBarrier.runId}:${webSessionBarrier.sessionId}`;
+  }, [webSessionBarrier]);
+
+  useEffect(() => {
+    if (!webSessionBarrierPollKey || busy) {
+      return;
+    }
+    let cancelled = false;
+    let delayMs = 2000;
+
+    void (async () => {
+      while (!cancelled) {
+        const b = webSessionBarrierRef.current;
+        if (!b?.sessionId) {
+          return;
+        }
+        setWebSessionPollWaiting(true);
+        let done = false;
+        try {
+          done = await pollWebSessionRef.current(b.sessionId);
+        } finally {
+          setWebSessionPollWaiting(false);
+        }
+        if (cancelled) {
+          return;
+        }
+        if (done) {
+          await runWebSessionResumeRef.current(b);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, delayMs));
+        delayMs = Math.min(Math.round(delayMs * 1.35), 60_000);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [webSessionBarrierPollKey, busy]);
+
   const confirmPendingMutations = useCallback(() => {
     void runResumeRef.current();
   }, []);
@@ -2252,7 +2668,7 @@ export function HofAgentChatProvider({
   const submitUserTurn = useCallback(
     (trimmedMessage: string) => {
       const t = trimmedMessage;
-      if (approvalBarrier || inboxReviewBarrier) {
+      if (approvalBarrier || inboxReviewBarrier || webSessionBarrier) {
         return;
       }
       if (
@@ -2292,6 +2708,7 @@ export function HofAgentChatProvider({
     [
       approvalBarrier,
       inboxReviewBarrier,
+      webSessionBarrier,
       attachmentQueue,
       busy,
       runAgent,
@@ -2326,6 +2743,13 @@ export function HofAgentChatProvider({
     setInboxReviewBarrier(null);
     setInboxResumeError(null);
     setInboxPollWaiting(false);
+  }, []);
+
+  const dismissWebSessionBarrier = useCallback(() => {
+    abortRef.current?.abort();
+    setWebSessionBarrier(null);
+    setWebSessionResumeError(null);
+    setWebSessionPollWaiting(false);
   }, []);
 
   const conversationEmpty = thread.length === 0 && liveBlocks.length === 0;
@@ -2449,6 +2873,9 @@ export function HofAgentChatProvider({
       inboxReviewBarrier,
       inboxPollWaiting,
       inboxResumeError,
+      webSessionBarrier,
+      webSessionPollWaiting,
+      webSessionResumeError,
       approvalDecisions,
       setApprovalDecisions,
       mutationOutcomeByPendingId,
@@ -2459,6 +2886,7 @@ export function HofAgentChatProvider({
       stop,
       dismissApprovalBarrier,
       dismissInboxReviewBarrier,
+      dismissWebSessionBarrier,
       conversationEmpty,
       thinkingEpisodeStartedAtMs,
       providerWaitNotice,
@@ -2497,6 +2925,9 @@ export function HofAgentChatProvider({
       inboxReviewBarrier,
       inboxPollWaiting,
       inboxResumeError,
+      webSessionBarrier,
+      webSessionPollWaiting,
+      webSessionResumeError,
       approvalDecisions,
       mutationOutcomeByPendingId,
       onPickFiles,
@@ -2505,6 +2936,7 @@ export function HofAgentChatProvider({
       stop,
       dismissApprovalBarrier,
       dismissInboxReviewBarrier,
+      dismissWebSessionBarrier,
       conversationEmpty,
       thinkingEpisodeStartedAtMs,
       providerWaitNotice,

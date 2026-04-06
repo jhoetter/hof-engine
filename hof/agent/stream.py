@@ -7,6 +7,7 @@ import logging
 import os
 import time
 import uuid
+from urllib.parse import quote
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal
@@ -44,23 +45,37 @@ from hof.agent.state import (
     save_pending,
 )
 from hof.agent.tooling import (
+    ToolExecResult,
     execute_tool,
     format_cli_line,
     format_tool_result_for_model,
     openai_tool_specs,
     parsed_tool_result_for_stream,
     split_agent_tool_display_metadata,
+    summarize_tool_json,
     tool_result_status_for_ui,
 )
+from hof.browser.config import resolve_browser_api_key_value
+from hof.browser.constants import HOF_BUILTIN_BROWSE_WEB
+from hof.browser.store import load_web_session
 from hof.config import get_config
 
 logger = logging.getLogger(__name__)
 
+_WEB_SESSION_TERMINAL = frozenset({"idle", "stopped", "timed_out", "error"})
+
+
+def _browser_async_enabled(policy: AgentPolicy) -> bool:
+    if not policy.browser_async:
+        return False
+    return (os.environ.get("HOF_BROWSER_ASYNC", "1") or "").strip() != "0"
+
 
 def _save_agent_run_merge_attachments(run_id: str, payload: dict[str, Any]) -> None:
-    """Persist run state; keep ``chat_attachments`` from a previous save if not set in ``payload``."""
+    """Persist run state; keep ``chat_attachments`` if missing from ``payload``."""
     prev = load_agent_run(run_id)
-    if prev and isinstance(prev.get("chat_attachments"), list) and "chat_attachments" not in payload:
+    has_prev_att = prev and isinstance(prev.get("chat_attachments"), list)
+    if has_prev_att and "chat_attachments" not in payload:
         payload = {**payload, "chat_attachments": prev["chat_attachments"]}
     save_agent_run(run_id, payload)
 
@@ -71,7 +86,8 @@ def _save_agent_run_with_ttl_merge_attachments(
     ttl_sec: int,
 ) -> None:
     prev = load_agent_run(run_id)
-    if prev and isinstance(prev.get("chat_attachments"), list) and "chat_attachments" not in payload:
+    has_prev_att = prev and isinstance(prev.get("chat_attachments"), list)
+    if has_prev_att and "chat_attachments" not in payload:
         payload = {**payload, "chat_attachments": prev["chat_attachments"]}
     save_agent_run_with_ttl(run_id, payload, ttl_sec)
 
@@ -1049,6 +1065,31 @@ def default_attachments_system_note(items: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _browser_system_prompt_suffix(policy: AgentPolicy) -> str:
+    bc = policy.browser
+    if bc is None:
+        return ""
+    keys = list(bc.sensitive_keys_for_prompt)
+    keys_block = ""
+    if keys:
+        lines = "\n".join(f"- {k}" for k in keys)
+        keys_block = (
+            "\n\nAvailable sensitive data keys (use in the task as `<secret:key>`):\n" + lines
+        )
+    return (
+        "\n\n## Web browsing\n\n"
+        "Use the `hof_builtin_browse_web` tool to run a real browser in Browser Use Cloud. "
+        "Pass a clear `task` string. For credentials or secrets configured in the app, "
+        "reference them as `<secret:key_name>` in the task text.\n\n"
+        "Public sites often show **cookie banners** and **login/register modals** (e.g. “Hallo”, "
+        "“Einloggen”, newsletter popups). In the `task`, tell the browser agent to **close or dismiss "
+        "those first** (Schließen, Später, Not now, X, or continue without account) **before** "
+        "searching or clicking results — otherwise the run can appear to stop with the UI blocked "
+        "behind a modal."
+        + keys_block
+    )
+
+
 def _build_system_prompt(policy: AgentPolicy, *, attachment_note: str) -> str:
     text = (
         policy.system_prompt_intro
@@ -1057,7 +1098,467 @@ def _build_system_prompt(policy: AgentPolicy, *, attachment_note: str) -> str:
     )
     if attachment_note.strip():
         text += "\n\n## User file attachments\n" + attachment_note.strip()
+    text += _browser_system_prompt_suffix(policy)
     return text
+
+
+def _browser_tool_exec_result_from_raw(name: str, raw: str) -> ToolExecResult:
+    ok, code = tool_result_status_for_ui(raw)
+    return ToolExecResult(
+        raw_json=raw,
+        summary=summarize_tool_json(name, raw),
+        ok=ok,
+        status_code=code,
+        parsed_data=parsed_tool_result_for_stream(raw),
+    )
+
+
+def _yield_awaiting_web_session_barrier(
+    *,
+    provider: Any,
+    model: str,
+    policy: AgentPolicy,
+    oa_messages: list[dict[str, Any]],
+    start_round: int,
+    rid: str,
+    session_id: str,
+    tool_call_id: str,
+    canvas_path: str,
+    task: str,
+    lm_backend: str,
+    reasoning: ReasoningConfig,
+    max_tool_output_chars: int,
+    max_cli_line_chars: int,
+    agent_chat_mode: str,
+    chat_attachments: list[dict[str, str]] | None,
+) -> Iterator[dict[str, Any]]:
+    """Optional summary turn (like inbox review), then persist and emit ``awaiting_web_session``."""
+    if policy.web_session_barrier_summary_mode != "none":
+        yield from _stream_web_session_barrier_summary_for_ui(
+            provider,
+            model,
+            policy,
+            oa_messages,
+            start_round,
+            rid,
+            task=task,
+            session_id=session_id,
+            lm_backend=lm_backend,
+            reasoning=reasoning,
+            max_tool_output_chars=max_tool_output_chars,
+            max_cli_line_chars=max_cli_line_chars,
+        )
+    ttl = max(60, int(policy.inbox_review_state_ttl_sec))
+    payload: dict[str, Any] = {
+        "oa_messages": oa_messages,
+        "model": model,
+        "llm_backend": lm_backend,
+        "rounds": start_round,
+        "open_web_session": {
+            "session_id": session_id,
+            "tool_call_id": tool_call_id,
+        },
+        "agent_chat_mode": agent_chat_mode,
+    }
+    if chat_attachments is not None:
+        payload["chat_attachments"] = chat_attachments
+    _save_agent_run_with_ttl_merge_attachments(rid, payload, ttl)
+    yield {
+        "type": "awaiting_web_session",
+        "run_id": rid,
+        "session_id": session_id,
+        "tool_call_id": tool_call_id,
+        "canvas_path": canvas_path,
+    }
+    _agent_stream_debug_append(
+        {
+            "kind": "awaiting_web_session",
+            "run_id": rid,
+            "session_id": session_id,
+        },
+    )
+    logger.debug(
+        "agent_chat awaiting_web_session run_id=%s session_id=%s tool_call_id=%s",
+        rid,
+        session_id,
+        tool_call_id,
+    )
+
+
+def _stream_hof_browser_tool_async_barrier(
+    *,
+    policy: AgentPolicy,
+    provider: Any,
+    args_wire: str,
+    run_id: str,
+    tid: str,
+    oa_messages: list[dict[str, Any]],
+    rounds: int,
+    model: str,
+    lm_backend: str,
+    reasoning: ReasoningConfig,
+    max_tool_output_chars: int,
+    max_cli_line_chars: int,
+    agent_chat_mode: str,
+    chat_attachments: list[dict[str, str]] | None,
+) -> Iterator[dict[str, Any]]:
+    """Fast create + background poll; placeholder tool row; ``awaiting_web_session`` barrier."""
+    from hof.browser.runner import create_browser_cloud_session_sync, spawn_browser_poll_background
+    from hof.browser.sensitive import resolve_sensitive_data_sync
+
+    bc = policy.browser
+    if bc is None:
+        err = {
+            "error": "browser is not configured on AgentPolicy (set browser=BrowserConfig(...))",
+        }
+        raw = json.dumps(err)
+        tex = _browser_tool_exec_result_from_raw(HOF_BUILTIN_BROWSE_WEB, raw)
+        tr_out: dict[str, Any] = {
+            "type": "tool_result",
+            "name": HOF_BUILTIN_BROWSE_WEB,
+            "summary": tex.summary,
+            "tool_call_id": tid,
+            "ok": tex.ok,
+            "status_code": tex.status_code,
+        }
+        if tex.parsed_data is not None:
+            tr_out["data"] = tex.parsed_data
+        yield tr_out
+        oa_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tid,
+                "content": format_tool_result_for_model(HOF_BUILTIN_BROWSE_WEB, tex.raw_json),
+            },
+        )
+        return
+    try:
+        parsed = json.loads(args_wire) if args_wire else {}
+        if not isinstance(parsed, dict):
+            parsed = {}
+    except json.JSONDecodeError:
+        parsed = {}
+    task = str(parsed.get("task") or "").strip()
+    sk_raw = parsed.get("sensitive_keys")
+    sensitive_keys: list[str] | None = None
+    if isinstance(sk_raw, list):
+        sensitive_keys = [str(x) for x in sk_raw if x is not None]
+
+    if not task:
+        err = {"error": "task is required"}
+        raw = json.dumps(err)
+        tex = _browser_tool_exec_result_from_raw(HOF_BUILTIN_BROWSE_WEB, raw)
+        tr_err: dict[str, Any] = {
+            "type": "tool_result",
+            "name": HOF_BUILTIN_BROWSE_WEB,
+            "summary": tex.summary,
+            "tool_call_id": tid,
+            "ok": tex.ok,
+            "status_code": tex.status_code,
+        }
+        if tex.parsed_data is not None:
+            tr_err["data"] = tex.parsed_data
+        yield tr_err
+        oa_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tid,
+                "content": format_tool_result_for_model(HOF_BUILTIN_BROWSE_WEB, tex.raw_json),
+            },
+        )
+        return
+
+    sensitive = resolve_sensitive_data_sync(policy, sensitive_keys)
+
+    try:
+        api_key_resolved = resolve_browser_api_key_value(bc.api_key)
+        if not api_key_resolved:
+            raise ValueError(
+                "browser API key is empty after resolving ${VAR} placeholders "
+                "(set BROWSER_USE_API_KEY or pass a literal key in BrowserConfig)"
+            )
+        created = create_browser_cloud_session_sync(
+            task=task,
+            api_key=api_key_resolved,
+            model=(bc.default_model or "").strip() or None,
+            enable_recording=bc.enable_recording,
+            http_timeout_sec=bc.http_timeout_sec,
+            sensitive_data=sensitive if sensitive else None,
+            on_progress=None,
+        )
+    except Exception as exc:
+        logger.exception("hof_builtin_browse_web async create failed run_id=%s", run_id)
+        err = {"error": str(exc)}
+        raw = json.dumps(err)
+        tex = _browser_tool_exec_result_from_raw(HOF_BUILTIN_BROWSE_WEB, raw)
+        tr_exc: dict[str, Any] = {
+            "type": "tool_result",
+            "name": HOF_BUILTIN_BROWSE_WEB,
+            "summary": tex.summary,
+            "tool_call_id": tid,
+            "ok": tex.ok,
+            "status_code": tex.status_code,
+        }
+        if tex.parsed_data is not None:
+            tr_exc["data"] = tex.parsed_data
+        yield tr_exc
+        oa_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tid,
+                "content": format_tool_result_for_model(HOF_BUILTIN_BROWSE_WEB, tex.raw_json),
+            },
+        )
+        return
+
+    sid = str(created.get("session_id") or "")
+    live_url = str(created.get("live_url") or "")
+    sse_ch = str(created.get("sse_channel") or "")
+    yield {
+        "type": "web_session_started",
+        "session_id": sid,
+        "live_url": live_url,
+        "task": task,
+        "sse_channel": sse_ch,
+    }
+    canvas_path = f"/web-sessions?id={sid}" if sid else "/web-sessions"
+    ph_obj: dict[str, Any] = {
+        "web_session_pending": True,
+        "session_id": sid,
+        "live_url": live_url,
+        "message": "Browser session running in Browser Use Cloud.",
+        "canvas_path": canvas_path,
+    }
+    placeholder = json.dumps(ph_obj)
+    yield {
+        "type": "tool_result",
+        "name": HOF_BUILTIN_BROWSE_WEB,
+        "summary": "Browser session running in cloud (resume when complete).",
+        "status_code": 202,
+        "tool_call_id": tid,
+        "data": ph_obj,
+    }
+    oa_messages.append(
+        {
+            "role": "tool",
+            "tool_call_id": tid,
+            "content": placeholder,
+        },
+    )
+    spawn_browser_poll_background(
+        session_id=sid,
+        live_url=live_url,
+        sse_channel=sse_ch,
+        api_key=api_key_resolved,
+        enable_recording=bc.enable_recording,
+        poll_interval_sec=bc.poll_interval_sec,
+        task_timeout_sec=bc.task_timeout_sec,
+        http_timeout_sec=bc.http_timeout_sec,
+        on_progress=None,
+    )
+    yield from _yield_awaiting_web_session_barrier(
+        provider=provider,
+        model=model,
+        policy=policy,
+        oa_messages=oa_messages,
+        start_round=rounds,
+        rid=run_id,
+        session_id=sid,
+        tool_call_id=tid,
+        canvas_path=canvas_path,
+        task=task,
+        lm_backend=lm_backend,
+        reasoning=reasoning,
+        max_tool_output_chars=max_tool_output_chars,
+        max_cli_line_chars=max_cli_line_chars,
+        agent_chat_mode=agent_chat_mode,
+        chat_attachments=chat_attachments,
+    )
+
+
+def _stream_hof_browser_tool(
+    *,
+    policy: AgentPolicy,
+    args_wire: str,
+    run_id: str,
+    tid: str,
+    max_tool_output_chars: int,
+    oa_messages: list[dict[str, Any]],
+) -> Iterator[dict[str, Any]]:
+    """Emit ``web_session_*`` NDJSON events, then ``tool_result`` for the browse tool."""
+    from hof.browser.sensitive import resolve_sensitive_data_sync
+    from hof.browser.stream_bridge import start_browser_tool_progress
+
+    if policy.browser is None:
+        err = {
+            "error": "browser is not configured on AgentPolicy (set browser=BrowserConfig(...))",
+        }
+        raw = json.dumps(err)
+        tex = _browser_tool_exec_result_from_raw(HOF_BUILTIN_BROWSE_WEB, raw)
+        tr_out: dict[str, Any] = {
+            "type": "tool_result",
+            "name": HOF_BUILTIN_BROWSE_WEB,
+            "summary": tex.summary,
+            "tool_call_id": tid,
+            "ok": tex.ok,
+            "status_code": tex.status_code,
+        }
+        if tex.parsed_data is not None:
+            tr_out["data"] = tex.parsed_data
+        yield tr_out
+        oa_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tid,
+                "content": format_tool_result_for_model(HOF_BUILTIN_BROWSE_WEB, tex.raw_json),
+            },
+        )
+        return
+
+    bc = policy.browser
+    try:
+        parsed = json.loads(args_wire) if args_wire else {}
+        if not isinstance(parsed, dict):
+            parsed = {}
+    except json.JSONDecodeError:
+        parsed = {}
+    task = str(parsed.get("task") or "").strip()
+    sk_raw = parsed.get("sensitive_keys")
+    sensitive_keys: list[str] | None = None
+    if isinstance(sk_raw, list):
+        sensitive_keys = [str(x) for x in sk_raw if x is not None]
+
+    if not task:
+        err = {"error": "task is required"}
+        raw = json.dumps(err)
+        tex = _browser_tool_exec_result_from_raw(HOF_BUILTIN_BROWSE_WEB, raw)
+        tr_out = {
+            "type": "tool_result",
+            "name": HOF_BUILTIN_BROWSE_WEB,
+            "summary": tex.summary,
+            "tool_call_id": tid,
+            "ok": tex.ok,
+            "status_code": tex.status_code,
+        }
+        if tex.parsed_data is not None:
+            tr_out["data"] = tex.parsed_data
+        yield tr_out
+        oa_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tid,
+                "content": format_tool_result_for_model(HOF_BUILTIN_BROWSE_WEB, tex.raw_json),
+            },
+        )
+        return
+
+    sensitive = resolve_sensitive_data_sync(policy, sensitive_keys)
+
+    try:
+        api_key_resolved = resolve_browser_api_key_value(bc.api_key)
+        if not api_key_resolved:
+            raise ValueError(
+                "browser API key is empty after resolving ${VAR} placeholders "
+                "(set BROWSER_USE_API_KEY or pass a literal key in BrowserConfig)"
+            )
+        gen, holder = start_browser_tool_progress(
+            task=task,
+            api_key=api_key_resolved,
+            model=(bc.default_model or "").strip() or None,
+            enable_recording=bc.enable_recording,
+            poll_interval_sec=bc.poll_interval_sec,
+            task_timeout_sec=bc.task_timeout_sec,
+            http_timeout_sec=bc.http_timeout_sec,
+            sensitive_data=sensitive if sensitive else None,
+        )
+        yield from gen
+        result = holder.get("result")
+    except Exception as exc:
+        logger.exception("hof_builtin_browse_web failed run_id=%s", run_id)
+        err = {"error": str(exc)}
+        raw = json.dumps(err)
+        tex = _browser_tool_exec_result_from_raw(HOF_BUILTIN_BROWSE_WEB, raw)
+        tr_out = {
+            "type": "tool_result",
+            "name": HOF_BUILTIN_BROWSE_WEB,
+            "summary": tex.summary,
+            "tool_call_id": tid,
+            "ok": tex.ok,
+            "status_code": tex.status_code,
+        }
+        if tex.parsed_data is not None:
+            tr_out["data"] = tex.parsed_data
+        yield tr_out
+        oa_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tid,
+                "content": format_tool_result_for_model(HOF_BUILTIN_BROWSE_WEB, tex.raw_json),
+            },
+        )
+        return
+
+    if not isinstance(result, dict):
+        err = {"error": "browser task produced no result"}
+        raw = json.dumps(err)
+        tex = _browser_tool_exec_result_from_raw(HOF_BUILTIN_BROWSE_WEB, raw)
+        tr_out = {
+            "type": "tool_result",
+            "name": HOF_BUILTIN_BROWSE_WEB,
+            "summary": tex.summary,
+            "tool_call_id": tid,
+            "ok": tex.ok,
+            "status_code": tex.status_code,
+        }
+        if tex.parsed_data is not None:
+            tr_out["data"] = tex.parsed_data
+        yield tr_out
+        oa_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tid,
+                "content": format_tool_result_for_model(HOF_BUILTIN_BROWSE_WEB, tex.raw_json),
+            },
+        )
+        return
+
+    sid = str(result.get("session_id") or "")
+    out_payload: dict[str, Any] = {
+        "session_id": sid,
+        "live_url": result.get("live_url"),
+        "output": result.get("output"),
+        "recording_urls": result.get("recording_urls"),
+        "status": result.get("status"),
+        "sse_channel": result.get("sse_channel"),
+    }
+    if sid:
+        out_payload["canvas_path"] = f"/web-sessions?id={sid}"
+        out_payload["canvas_href"] = (
+            f"[Open browser session]({out_payload['canvas_path']}?hof_chat_embed=1)"
+        )
+    raw = json.dumps(out_payload, default=str)
+    truncated = len(raw) > max_tool_output_chars
+    if truncated:
+        raw = raw[: max_tool_output_chars - 24] + "\n…(truncated)"
+    tex = _browser_tool_exec_result_from_raw(HOF_BUILTIN_BROWSE_WEB, raw)
+    tr_out = {
+        "type": "tool_result",
+        "name": HOF_BUILTIN_BROWSE_WEB,
+        "summary": tex.summary,
+        "tool_call_id": tid,
+        "ok": tex.ok,
+        "status_code": tex.status_code,
+    }
+    if tex.parsed_data is not None:
+        tr_out["data"] = tex.parsed_data
+    yield tr_out
+    oa_messages.append(
+        {
+            "role": "tool",
+            "tool_call_id": tid,
+            "content": format_tool_result_for_model(HOF_BUILTIN_BROWSE_WEB, tex.raw_json),
+        },
+    )
 
 
 def _build_discover_tools(
@@ -1333,6 +1834,27 @@ def collect_agent_chat_from_stream(
                 "tool_rounds_used": rounds,
                 "model": model_out,
             }
+        elif t == "awaiting_web_session":
+            legacy.append(
+                {
+                    "type": "thinking",
+                    "detail": (
+                        "Waiting for browser session to complete "
+                        "(agent_resume_web_session stream)."
+                    ),
+                },
+            )
+            return {
+                "awaiting_web_session": True,
+                "run_id": str(ev.get("run_id") or ""),
+                "session_id": str(ev.get("session_id") or ""),
+                "tool_call_id": str(ev.get("tool_call_id") or ""),
+                "canvas_path": str(ev.get("canvas_path") or ""),
+                "reply": "",
+                "events": legacy,
+                "tool_rounds_used": rounds,
+                "model": model_out,
+            }
         elif t == "resume_start":
             legacy.append(
                 {"type": "thinking", "detail": "Continuing after confirmation…"}
@@ -1449,6 +1971,312 @@ def _stream_confirmation_summary_for_ui(
 
 
 _INBOX_REVIEW_SUMMARY_MAX_ROUNDS = 5
+
+
+def _format_web_session_barrier_block(
+    *,
+    task: str,
+    session_id: str,
+) -> str:
+    """Human- and model-readable lines; in-app markdown link opens the embed panel (no external URLs)."""
+    qid = quote(session_id, safe="")
+    app_path = f"/web-sessions?id={qid}"
+    return "\n".join(
+        [
+            f"- **Session id:** `{session_id}`",
+            f"- **Task:** {task or '—'}",
+            f"- **Watch in side panel:** [Open Web sessions]({app_path})",
+        ],
+    )
+
+
+def _web_session_barrier_static_message(
+    *,
+    task: str,
+    session_id: str,
+) -> str:
+    parts = [
+        "The assistant started a **browser session**. "
+        "Open **Web sessions** in the side panel (in-app link below) to see the live view and activity; "
+        "the chat continues automatically when the session finishes.",
+        "",
+        "### Session",
+        _format_web_session_barrier_block(
+            task=task,
+            session_id=session_id,
+        ),
+    ]
+    return "\n".join(parts)
+
+
+def _stream_web_session_barrier_summary_for_ui(
+    provider: Any,
+    model: str,
+    policy: AgentPolicy,
+    oa_messages: list[dict[str, Any]],
+    start_round: int,
+    run_id: str,
+    *,
+    task: str,
+    session_id: str,
+    lm_backend: str,
+    reasoning: ReasoningConfig,
+    max_tool_output_chars: int,
+    max_cli_line_chars: int,
+) -> Iterator[dict[str, Any]]:
+    """Stream assistant guidance before ``awaiting_web_session`` (mirrors inbox review summary)."""
+    mode = policy.web_session_barrier_summary_mode
+    if mode == "none":
+        return
+
+    block = _format_web_session_barrier_block(
+        task=task,
+        session_id=session_id,
+    )
+    user_content = (
+        f"{policy.web_session_barrier_summary_user_message}\n\n"
+        f"### Active browser session\n{block}"
+    )
+
+    if mode == "static":
+        text = _web_session_barrier_static_message(
+            task=task,
+            session_id=session_id,
+        )
+        oa_messages.append({"role": "user", "content": user_content})
+        yield {
+            "type": "phase",
+            "round": start_round + 1,
+            "phase": "web_session_barrier_summary",
+        }
+        yield {"type": "assistant_delta", "text": text}
+        yield {"type": "assistant_done", "finish_reason": "stop"}
+        oa_messages.append({"role": "assistant", "content": text})
+        return
+
+    if mode != "llm_stream":
+        yield {
+            "type": "error",
+            "detail": (
+                f"invalid web_session_barrier_summary_mode={mode!r} "
+                "(expected llm_stream, static, or none)"
+            ),
+        }
+        return
+
+    oa_messages.append({"role": "user", "content": user_content})
+    sc_wb = (
+        policy.sandbox.with_env_overrides() if policy.sandbox is not None else None
+    )
+    if sc_wb is not None and sc_wb.enabled and sc_wb.terminal_only_dispatch:
+        read_allowlist = policy.effective_allowlist()
+    else:
+        read_allowlist = frozenset(policy.allowlist_read | BUILTIN_AGENT_TOOL_NAMES)
+    read_tools = openai_tool_specs(read_allowlist)
+
+    from llm_markdown.agent_stream import (
+        AgentContentDelta,
+        AgentMessageFinish,
+        AgentReasoningDelta,
+        AgentSegmentStart,
+        AgentToolCallDelta,
+    )
+
+    sub_start = start_round
+    for sub_i in range(_INBOX_REVIEW_SUMMARY_MAX_ROUNDS):
+        phase_round = sub_start + sub_i + 1
+        yield {
+            "type": "phase",
+            "round": phase_round,
+            "phase": "web_session_barrier_summary",
+        }
+
+        parts: dict[int, dict[str, str]] = {}
+        assistant_text = ""
+        finish_reason: str | None = None
+        last_usage: dict[str, Any] | None = None
+
+        try:
+            for ev in _iter_stream_agent_turn_with_engine_retries(
+                provider,
+                lm_backend,
+                oa_messages,
+                model=model,
+                tools=read_tools,
+                tool_choice="auto",
+                max_tokens=_AGENT_SUMMARY_MAX_TOKENS,
+                reasoning=reasoning,
+                **_anthropic_stream_turn_extras(lm_backend, reasoning),
+            ):
+                pw = _provider_wait_wire(ev)
+                if pw is not None:
+                    yield pw
+                    continue
+                if isinstance(ev, AgentSegmentStart):
+                    yield {"type": "segment_start", "segment": ev.segment}
+                elif isinstance(ev, AgentContentDelta):
+                    assistant_text += ev.text
+                    yield {"type": "assistant_delta", "text": ev.text}
+                elif isinstance(ev, AgentReasoningDelta):
+                    yield {"type": "reasoning_delta", "text": ev.text}
+                elif isinstance(ev, AgentToolCallDelta):
+                    idx = int(ev.index)
+                    if idx not in parts:
+                        parts[idx] = {"id": "", "name": "", "arguments": ""}
+                    if ev.tool_call_id:
+                        parts[idx]["id"] = ev.tool_call_id
+                    if ev.name:
+                        parts[idx]["name"] += ev.name
+                    if ev.arguments:
+                        parts[idx]["arguments"] += ev.arguments
+                elif isinstance(ev, AgentMessageFinish):
+                    finish_reason = ev.finish_reason
+                    last_usage = ev.usage
+        except _AgentStreamTurnExhaustedError:
+            logger.warning(
+                "web session barrier summary model call failed after engine stream retries, "
+                "using static fallback",
+            )
+            fb = _web_session_barrier_static_message(
+                task=task,
+                session_id=session_id,
+            )
+            yield {"type": "assistant_delta", "text": fb}
+            yield {"type": "assistant_done", "finish_reason": "stop"}
+            oa_messages.append({"role": "assistant", "content": fb})
+            return
+        except Exception as exc:
+            logger.warning("web session barrier summary model call failed: %s", exc)
+            fb = _web_session_barrier_static_message(
+                task=task,
+                session_id=session_id,
+            )
+            yield {"type": "assistant_delta", "text": fb}
+            yield {"type": "assistant_done", "finish_reason": "stop"}
+            oa_messages.append({"role": "assistant", "content": fb})
+            return
+
+        if finish_reason != "tool_calls":
+            final_text = (
+                assistant_text.strip()
+                or _web_session_barrier_static_message(
+                    task=task,
+                    session_id=session_id,
+                )
+            )
+            if not assistant_text.strip():
+                yield {"type": "assistant_delta", "text": final_text}
+            done_ev_stop: dict[str, Any] = {
+                "type": "assistant_done",
+                "finish_reason": finish_reason or "stop",
+            }
+            if last_usage:
+                done_ev_stop["usage"] = last_usage
+            yield done_ev_stop
+            oa_messages.append({"role": "assistant", "content": final_text})
+            return
+
+        done_ev_tc: dict[str, Any] = {
+            "type": "assistant_done",
+            "finish_reason": finish_reason,
+        }
+        if last_usage:
+            done_ev_tc["usage"] = last_usage
+        yield done_ev_tc
+
+        if not parts:
+            fb = _web_session_barrier_static_message(
+                task=task,
+                session_id=session_id,
+            )
+            yield {"type": "assistant_delta", "text": fb}
+            yield {"type": "assistant_done", "finish_reason": "stop"}
+            oa_messages.append({"role": "assistant", "content": fb})
+            return
+
+        yield {
+            "type": "phase",
+            "round": phase_round,
+            "phase": "web_session_barrier_summary_tools",
+        }
+        sorted_idx = sorted(parts.keys())
+        tool_calls_payload: list[dict[str, Any]] = []
+        for idx in sorted_idx:
+            tc = parts[idx]
+            tid = tc["id"] or f"call_{idx}"
+            name = tc["name"]
+            args_raw = tc["arguments"] or "{}"
+            args_wire, _ = split_agent_tool_display_metadata(args_raw)
+            tool_calls_payload.append(
+                {
+                    "id": tid,
+                    "type": "function",
+                    "function": {"name": name, "arguments": args_wire},
+                },
+            )
+        oa_messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_text or None,
+                "tool_calls": tool_calls_payload,
+            },
+        )
+        for idx in sorted_idx:
+            tc = parts[idx]
+            name = tc["name"]
+            args_raw = tc["arguments"] or "{}"
+            args_wire, display_title = split_agent_tool_display_metadata(args_raw)
+            tid = tc["id"] or f"call_{idx}"
+            cap = _cli_line_cap_for_tool(name, max_cli_line_chars)
+            cli = format_cli_line(name, args_wire, max_cli_line_chars=cap)
+            arg_cap = _args_wire_emit_cap_chars(name)
+            tc_ev: dict[str, Any] = {
+                "type": "tool_call",
+                "name": name,
+                "arguments": args_wire[:arg_cap],
+                "cli_line": cli,
+                "tool_call_id": tid,
+            }
+            if display_title:
+                tc_ev["display_title"] = display_title
+            note = policy.rationale_for(name)
+            if note:
+                tc_ev["internal_rationale"] = note
+            yield tc_ev
+            tex = execute_tool(
+                name,
+                args_wire,
+                read_allowlist,
+                max_tool_output_chars=max_tool_output_chars,
+                run_id=run_id,
+                tool_call_id=tid,
+            )
+            tr_out: dict[str, Any] = {
+                "type": "tool_result",
+                "name": name,
+                "summary": tex.summary,
+                "tool_call_id": tid,
+                "ok": tex.ok,
+                "status_code": tex.status_code,
+            }
+            if tex.parsed_data is not None:
+                tr_out["data"] = tex.parsed_data
+            yield tr_out
+            oa_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tid,
+                    "content": format_tool_result_for_model(name, tex.raw_json),
+                },
+            )
+
+    fb = _web_session_barrier_static_message(
+        task=task,
+        session_id=session_id,
+    )
+    yield {"type": "assistant_delta", "text": fb}
+    yield {"type": "assistant_done", "finish_reason": "stop"}
+    oa_messages.append({"role": "assistant", "content": fb})
 
 
 def _format_inbox_watches_block(wires: list[dict[str, Any]]) -> str:
@@ -1700,7 +2528,7 @@ def _stream_inbox_review_summary_for_ui(
             if note:
                 tc_ev["internal_rationale"] = note
             yield tc_ev
-            out_json, summary = execute_tool(
+            tex = execute_tool(
                 name,
                 args_wire,
                 read_allowlist,
@@ -1708,24 +2536,22 @@ def _stream_inbox_review_summary_for_ui(
                 run_id=run_id,
                 tool_call_id=tid,
             )
-            ok, status_code = tool_result_status_for_ui(out_json)
             tr_out: dict[str, Any] = {
                 "type": "tool_result",
                 "name": name,
-                "summary": summary,
+                "summary": tex.summary,
                 "tool_call_id": tid,
-                "ok": ok,
-                "status_code": status_code,
+                "ok": tex.ok,
+                "status_code": tex.status_code,
             }
-            pdata = parsed_tool_result_for_stream(out_json)
-            if pdata is not None:
-                tr_out["data"] = pdata
+            if tex.parsed_data is not None:
+                tr_out["data"] = tex.parsed_data
             yield tr_out
             oa_messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": tid,
-                    "content": format_tool_result_for_model(name, out_json),
+                    "content": format_tool_result_for_model(name, tex.raw_json),
                 },
             )
 
@@ -2100,6 +2926,12 @@ def _run_agent_llm_tool_loop(
                     return
                 yield {"type": "phase", "round": rounds, "phase": "tools"}
                 sorted_idx = sorted(parts.keys())
+                browse_only_async = (
+                    _browser_async_enabled(policy)
+                    and len(sorted_idx) == 1
+                    and str(parts[sorted_idx[0]].get("name") or "")
+                    == HOF_BUILTIN_BROWSE_WEB
+                )
                 if agent_chat_mode == "plan_discover":
                     _plan_terminal_tools = {
                         _HOF_BUILTIN_PRESENT_PLAN,
@@ -2438,8 +3270,47 @@ def _run_agent_llm_tool_loop(
                             pid,
                             tid,
                         )
+                    elif name == HOF_BUILTIN_BROWSE_WEB:
+                        if browse_only_async:
+                            yield from _stream_hof_browser_tool_async_barrier(
+                                policy=policy,
+                                provider=provider,
+                                args_wire=args_wire,
+                                run_id=run_id,
+                                tid=tid,
+                                oa_messages=oa_messages,
+                                rounds=rounds,
+                                model=model,
+                                lm_backend=lm_backend,
+                                reasoning=reasoning,
+                                max_tool_output_chars=max_tool_output_chars,
+                                max_cli_line_chars=max_cli_line_chars,
+                                agent_chat_mode=agent_chat_mode,
+                                chat_attachments=chat_attachments,
+                            )
+                            logger.info(
+                                "agent_chat browser_async_barrier run_id=%s round=%d tool_call_id=%s",
+                                run_id,
+                                rounds,
+                                tid,
+                            )
+                            return
+                        yield from _stream_hof_browser_tool(
+                            policy=policy,
+                            args_wire=args_wire,
+                            run_id=run_id,
+                            tid=tid,
+                            max_tool_output_chars=max_tool_output_chars,
+                            oa_messages=oa_messages,
+                        )
+                        logger.info(
+                            "agent_chat browser_tool_done run_id=%s round=%d tool_call_id=%s",
+                            run_id,
+                            rounds,
+                            tid,
+                        )
                     else:
-                        out_json, summary = execute_tool(
+                        tex = execute_tool(
                             name,
                             args_wire,
                             active_allowlist,
@@ -2449,7 +3320,7 @@ def _run_agent_llm_tool_loop(
                         )
                         if name == HOF_BUILTIN_TERMINAL_EXEC:
                             coerced = _try_coerce_terminal_exec_mutation_events(
-                                out_json=out_json,
+                                out_json=tex.raw_json,
                                 run_id=run_id,
                                 tid=tid,
                                 mutation_allowlist=mutation_allowlist,
@@ -2468,7 +3339,6 @@ def _run_agent_llm_tool_loop(
                                     tid,
                                 )
                                 continue
-                        ok, status_code = tool_result_status_for_ui(out_json)
                         logger.info(
                             "agent_chat tool_result emit run_id=%s round=%d name=%s "
                             "tool_call_id=%s ok=%s status_code=%s summary_chars=%d",
@@ -2476,21 +3346,20 @@ def _run_agent_llm_tool_loop(
                             rounds,
                             name,
                             tid,
-                            ok,
-                            status_code,
-                            len(summary or ""),
+                            tex.ok,
+                            tex.status_code,
+                            len(tex.summary or ""),
                         )
                         tr_out: dict[str, Any] = {
                             "type": "tool_result",
                             "name": name,
-                            "summary": summary,
+                            "summary": tex.summary,
                             "tool_call_id": tid,
-                            "ok": ok,
-                            "status_code": status_code,
+                            "ok": tex.ok,
+                            "status_code": tex.status_code,
                         }
-                        pdata = parsed_tool_result_for_stream(out_json)
-                        if pdata is not None:
-                            tr_out["data"] = pdata
+                        if tex.parsed_data is not None:
+                            tr_out["data"] = tex.parsed_data
                         if name in BUILTIN_AGENT_TOOL_NAMES:
                             tr_out["internal"] = True
                         yield tr_out
@@ -2498,16 +3367,18 @@ def _run_agent_llm_tool_loop(
                             {
                                 "role": "tool",
                                 "tool_call_id": tid,
-                                "content": format_tool_result_for_model(name, out_json),
+                                "content": format_tool_result_for_model(
+                                    name, tex.raw_json
+                                ),
                             },
                         )
                         if (
                             name == _HOF_BUILTIN_UPDATE_PLAN_TODO_STATE
                             and agent_chat_mode == "plan_execute"
                         ):
-                            try:
-                                body = json.loads(out_json)
-                                di = body.get("done_indices")
+                            pdata_todo = tex.parsed_data
+                            if isinstance(pdata_todo, dict):
+                                di = pdata_todo.get("done_indices")
                                 if isinstance(di, list) and di:
                                     idxs: list[int] = []
                                     for x in di:
@@ -2516,17 +3387,10 @@ def _run_agent_llm_tool_loop(
                                         except (TypeError, ValueError):
                                             continue
                                     if idxs:
-                                        # Wire contract + client normalization: hof-react
-                                        # docs/plan-todo-contract.md
                                         yield {
                                             "type": "plan_todo_update",
                                             "done_indices": idxs,
                                         }
-                            except (json.JSONDecodeError, TypeError):
-                                logger.warning(
-                                    "plan_todo_update: failed to parse tool output: %s",
-                                    out_json[:200],
-                                )
                 if plan_proposal_halt is not None:
                     delete_agent_run(run_id)
                     plan_md = plan_proposal_halt["markdown"]
@@ -3084,14 +3948,13 @@ def _run_agent_resume_stream(
             if not isinstance(parsed_args_loop, dict):
                 parsed_args_loop = {}
             if confirm:
-                out_json, _s = execute_tool(
+                tex = execute_tool(
                     fname,
                     args,
                     exec_allowlist,
                     max_tool_output_chars=max_tool_output_chars,
                     run_id=rid,
                 )
-                _ok, _code = tool_result_status_for_ui(out_json)
                 logger.info(
                     "agent_resume_mutations confirmed_tool run_id=%s pending_id=%s name=%s "
                     "tool_call_id=%s ok=%s status_code=%s",
@@ -3099,13 +3962,15 @@ def _run_agent_resume_stream(
                     pid,
                     fname,
                     tid,
-                    _ok,
-                    _code,
+                    tex.ok,
+                    tex.status_code,
                 )
                 parsed_args = parsed_args_loop
-                parsed_result = json.loads(out_json) if out_json else {}
-                if not isinstance(parsed_result, dict):
-                    parsed_result = {}
+                parsed_result = (
+                    tex.parsed_data
+                    if isinstance(tex.parsed_data, dict)
+                    else {}
+                )
                 batch_entries.append(
                     MutationBatchEntry(
                         function_name=fname,
@@ -3114,7 +3979,7 @@ def _run_agent_resume_stream(
                         confirmed=True,
                     ),
                 )
-                model_tool_body = format_tool_result_for_model(fname, out_json)
+                model_tool_body = format_tool_result_for_model(fname, tex.raw_json)
                 post_apply_fn = policy.mutation_post_apply.get(fname)
                 if post_apply_fn is not None:
                     try:
@@ -3680,6 +4545,153 @@ def _run_agent_resume_inbox_stream(
         ),
         chat_attachments=inbox_resume_chat_attachments,
     )
+
+
+def _run_agent_resume_web_session_stream(
+    run_id: str,
+    *,
+    policy: AgentPolicy,
+) -> Iterator[dict[str, Any]]:
+    """After web session reaches a terminal state: inject tool result and continue the tool loop."""
+    max_rounds, max_tool_output_chars, _m, max_cli_line_chars = _agent_limits()
+
+    rid = (run_id or "").strip()
+    if not rid:
+        yield {"type": "error", "detail": "run_id is required"}
+        return
+
+    run = load_agent_run(rid)
+    if not run:
+        yield {
+            "type": "error",
+            "detail": "Unknown or expired run_id; start a new chat.",
+        }
+        return
+
+    ows = run.get("open_web_session")
+    if not isinstance(ows, dict):
+        yield {"type": "error", "detail": "No pending web session for this run."}
+        return
+
+    session_id = str(ows.get("session_id") or "").strip()
+    tool_call_id = str(ows.get("tool_call_id") or "").strip()
+    if not session_id or not tool_call_id:
+        yield {"type": "error", "detail": "Invalid open_web_session state."}
+        return
+
+    ws = load_web_session(session_id)
+    if not ws:
+        yield {"type": "error", "detail": "Web session not found in storage."}
+        return
+
+    st = str(ws.get("status") or "").strip()
+    if st not in _WEB_SESSION_TERMINAL:
+        yield {
+            "type": "error",
+            "detail": "Web session is still running; wait until it completes.",
+        }
+        return
+
+    oa_messages = run["oa_messages"]
+    if not isinstance(oa_messages, list):
+        yield {"type": "error", "detail": "Invalid saved agent state"}
+        return
+
+    model = str(run.get("model") or "gpt-4o-mini").strip() or "gpt-4o-mini"
+    lm_backend = str(run.get("llm_backend") or "openai").strip().lower()
+    if lm_backend not in ("openai", "anthropic"):
+        lm_backend = "openai"
+    start_round = int(run.get("rounds") or 0)
+    resume_chat_mode = _normalize_agent_chat_mode(str(run.get("agent_chat_mode") or ""))
+    try:
+        reasoning = _resolve_agent_reasoning_config_for_chat_mode(
+            lm_backend,
+            resume_chat_mode,
+            model,
+        )
+    except ValueError as exc:
+        yield {"type": "error", "detail": str(exc)}
+        return
+    allowlist = policy.effective_allowlist()
+    tools = openai_tool_specs(allowlist)
+
+    try:
+        provider = _resolve_provider(lm_backend, model)
+    except _ProviderSetupError as exc:
+        yield {"type": "error", "detail": exc.detail}
+        return
+
+    sid = session_id
+    live_url = ws.get("live_url")
+    out = ws.get("output")
+    rec = ws.get("recording_urls")
+    recording_urls = list(rec) if isinstance(rec, list) else []
+    out_payload: dict[str, Any] = {
+        "session_id": sid,
+        "live_url": live_url,
+        "output": out,
+        "recording_urls": recording_urls,
+        "status": st,
+        "sse_channel": ws.get("sse_channel"),
+    }
+    if sid:
+        out_payload["canvas_path"] = f"/web-sessions?id={sid}"
+        out_payload["canvas_href"] = (
+            f"[Open browser session]({out_payload['canvas_path']}?hof_chat_embed=1)"
+        )
+    raw = json.dumps(out_payload, default=str)
+    truncated = len(raw) > max_tool_output_chars
+    if truncated:
+        raw = raw[: max_tool_output_chars - 24] + "\n…(truncated)"
+    _replace_tool_message_content(
+        oa_messages,
+        tool_call_id,
+        format_tool_result_for_model(HOF_BUILTIN_BROWSE_WEB, raw),
+    )
+
+    resume_chat_attachments = _coerce_persisted_chat_attachments(
+        run.get("chat_attachments"),
+    )
+
+    delete_agent_run(rid)
+    yield {"type": "resume_start", "run_id": rid, "model": model, "continuation": True}
+    logger.debug(
+        "agent_chat web_session resume_start run_id=%s model=%s start_round=%d",
+        rid,
+        model,
+        start_round,
+    )
+
+    yield from _maybe_wrap_sandbox(
+        policy,
+        rid,
+        _run_agent_llm_tool_loop(
+            provider,
+            model,
+            policy,
+            allowlist,
+            tools,
+            oa_messages,
+            start_round,
+            rid,
+            lm_backend=lm_backend,
+            reasoning=reasoning,
+            max_rounds=max_rounds,
+            max_tool_output_chars=max_tool_output_chars,
+            max_cli_line_chars=max_cli_line_chars,
+            agent_chat_mode=resume_chat_mode,
+            chat_attachments=resume_chat_attachments,
+        ),
+        chat_attachments=resume_chat_attachments,
+    )
+
+
+def iter_agent_resume_web_session_stream(
+    run_id: str,
+) -> Iterator[dict[str, Any]]:
+    """Continue after ``awaiting_web_session`` when the Browser Use session has finished."""
+    policy = get_agent_policy()
+    yield from _run_agent_resume_web_session_stream(run_id, policy=policy)
 
 
 def iter_agent_resume_inbox_stream(

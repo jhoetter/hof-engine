@@ -7,6 +7,7 @@ import logging
 import re
 import shlex
 import threading
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import ValidationError
@@ -31,6 +32,7 @@ def get_tool_execution_run_id() -> str | None:
 def get_tool_execution_tool_call_id() -> str | None:
     return getattr(_tls_tool_call_id, "tool_call_id", None)
 
+
 _REDACT_SUBSTRINGS = ("token", "password", "secret", "api_key", "authorization")
 
 # OpenAI and other providers accept long descriptions; keep a hard cap for stability.
@@ -39,6 +41,7 @@ AGENT_TOOL_DESCRIPTION_MAX_CHARS = 2000
 # Optional tool-arguments key: model supplies a short UI label; stripped before execute/history/CLI.
 AGENT_TOOL_DISPLAY_TITLE_KEY = "_display_title"
 AGENT_TOOL_DISPLAY_TITLE_MAX_CHARS = 120
+
 
 def _json_type_for_param(type_name: str) -> str:
     return {
@@ -338,8 +341,6 @@ def _format_terminal_exec_cli_line(wire: str, cap: int) -> str:
     return cmd
 
 
-
-
 def format_cli_line(name: str, arguments_json: str, *, max_cli_line_chars: int) -> str:
     """Human-readable pseudo-CLI for UI/TUI (not executed)."""
     from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
@@ -407,6 +408,17 @@ def parsed_tool_result_for_stream(out_json: str) -> Any | None:
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class ToolExecResult:
+    """Rich result from :func:`execute_tool` — status computed before truncation."""
+
+    raw_json: str
+    summary: str
+    ok: bool
+    status_code: int
+    parsed_data: Any
+
+
 def execute_tool(
     name: str,
     arguments_json: str,
@@ -415,8 +427,13 @@ def execute_tool(
     max_tool_output_chars: int,
     run_id: str | None = None,
     tool_call_id: str | None = None,
-) -> tuple[str, str]:
-    """Execute a tool (read or mutation). Returns (json_string_for_model, summary_for_ui)."""
+) -> ToolExecResult:
+    """Execute a tool (read or mutation).
+
+    Returns a :class:`ToolExecResult` with the (possibly truncated) JSON for
+    the model, the human summary, and pre-truncation ``ok``/``status_code``/
+    ``parsed_data`` so callers never need to re-derive status from broken JSON.
+    """
     meta = registry.get_function(name)
     if meta is None or name not in allowlist:
         logger.warning(
@@ -426,7 +443,7 @@ def execute_tool(
         )
         err = {"error": f"unknown or disallowed function: {name}"}
         raw = json.dumps(err)
-        return raw, summarize_tool_json(name, raw)
+        return _tool_exec_result_from_raw(name, raw)
 
     try:
         parsed = json.loads(arguments_json) if arguments_json else {}
@@ -436,7 +453,7 @@ def execute_tool(
         logger.warning("agent tool bad JSON args: name=%s error=%s", name, exc)
         err = {"error": f"invalid JSON arguments: {exc}"}
         raw = json.dumps(err)
-        return raw, summarize_tool_json(name, raw)
+        return _tool_exec_result_from_raw(name, raw)
 
     schema = build_function_input_schema(meta)
     try:
@@ -450,13 +467,13 @@ def execute_tool(
         )
         err = {"error": "validation failed", "detail": exc.errors()}
         raw = json.dumps(err, default=str)
-        return raw, summarize_tool_json(name, raw)
+        return _tool_exec_result_from_raw(name, raw)
 
     try:
         if meta.is_async:
             err = {"error": "async functions are not supported in the agent runner"}
             raw = json.dumps(err)
-            return raw, summarize_tool_json(name, raw)
+            return _tool_exec_result_from_raw(name, raw)
         prev_rid = getattr(_tls_tool_run_id, "run_id", None)
         prev_tid = getattr(_tls_tool_call_id, "tool_call_id", None)
         if run_id is not None:
@@ -480,16 +497,17 @@ def execute_tool(
         logger.exception("agent tool %s failed", name)
         err = {"error": str(exc)}
         raw = json.dumps(err)
-        return raw, summarize_tool_json(name, raw)
+        return _tool_exec_result_from_raw(name, raw)
 
     try:
         raw = json.dumps(result, default=str)
     except TypeError:
         raw = json.dumps({"result": repr(result)})
+    ok, code = tool_result_status_for_ui(raw)
+    pdata = parsed_tool_result_for_stream(raw)
     truncated = len(raw) > max_tool_output_chars
     if truncated:
         raw = raw[: max_tool_output_chars - 24] + "\n…(truncated)"
-    ok, code = tool_result_status_for_ui(raw)
     logger.info(
         "agent tool executed: name=%s ok=%s status_code=%s json_chars=%d truncated=%s",
         name,
@@ -498,7 +516,24 @@ def execute_tool(
         len(raw),
         truncated,
     )
-    return raw, summarize_tool_json(name, raw)
+    return ToolExecResult(
+        raw_json=raw,
+        summary=summarize_tool_json(name, raw),
+        ok=ok,
+        status_code=code,
+        parsed_data=pdata,
+    )
+
+
+def _tool_exec_result_from_raw(name: str, raw: str) -> ToolExecResult:
+    ok, code = tool_result_status_for_ui(raw)
+    return ToolExecResult(
+        raw_json=raw,
+        summary=summarize_tool_json(name, raw),
+        ok=ok,
+        status_code=code,
+        parsed_data=parsed_tool_result_for_stream(raw),
+    )
 
 
 _TOOL_TRUNCATION_MARKER = "\n…(truncated)"

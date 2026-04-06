@@ -46,6 +46,37 @@ export type InboxReviewBarrier = {
   watches: InboxReviewWatchWire[];
 };
 
+/** Engine ``awaiting_web_session`` (Browser Use async barrier). */
+export type WebSessionBarrier = {
+  runId: string;
+  sessionId: string;
+  toolCallId: string;
+  canvasPath: string;
+};
+
+/** Terminal ``status`` values from ``GET /api/web-sessions/:id`` (aligned with engine). */
+export const WEB_SESSION_TERMINAL_STATUSES = new Set([
+  "idle",
+  "stopped",
+  "timed_out",
+  "error",
+]);
+
+/** Default poll until ``status`` is terminal (same-origin ``/api/web-sessions/:id``). */
+export async function defaultPollWebSession(
+  sessionId: string,
+): Promise<boolean> {
+  const r = await fetch(
+    `/api/web-sessions/${encodeURIComponent(sessionId)}`,
+  );
+  if (!r.ok) {
+    return false;
+  }
+  const j = (await r.json()) as { status?: string };
+  const st = String(j.status ?? "").trim();
+  return WEB_SESSION_TERMINAL_STATUSES.has(st);
+}
+
 export type LiveBlock =
   | { kind: "phase"; id: string; round: number; phase: string }
   /** Ephemeral: shown from `phase: model` until first token or `tool_call` (models often emit no `assistant_delta` before tools). */
@@ -153,6 +184,14 @@ export type LiveBlock =
       watches: InboxReviewWatchWire[];
     }
   | {
+      kind: "web_session_barrier";
+      id: string;
+      run_id: string;
+      session_id: string;
+      tool_call_id: string;
+      canvas_path: string;
+    }
+  | {
       kind: "error";
       id: string;
       detail: string;
@@ -170,6 +209,26 @@ export type LiveBlock =
       kind: "plan_step_progress";
       id: string;
       done_indices: number[];
+    }
+  /** Browser Use Cloud session (NDJSON ``web_session_*``); steps append until ``ended`` is set. */
+  | {
+      kind: "web_session";
+      id: string;
+      sessionId: string;
+      liveUrl: string;
+      task: string;
+      sseChannel: string;
+      steps: Array<{
+        role: string;
+        summary: string;
+        messageType?: string;
+        screenshotUrl?: string;
+      }>;
+      ended?: {
+        output: string;
+        recordingUrls: string[];
+        status: string;
+      };
     };
 
 export type ThreadItem =
@@ -770,6 +829,31 @@ export function mergePendingIdLists(
 }
 
 /** Parse NDJSON ``awaiting_inbox_review`` for context + ``applyStreamEvent``. */
+export function webSessionBarrierFromStreamEvent(
+  ev: HofStreamEvent,
+): WebSessionBarrier | null {
+  if (typeof ev.type !== "string" || ev.type !== "awaiting_web_session") {
+    return null;
+  }
+  const runId = coerceRunId(ev.run_id);
+  const sessionId = String(
+    (ev as { session_id?: unknown }).session_id ?? "",
+  ).trim();
+  const toolCallId = String(
+    (ev as { tool_call_id?: unknown }).tool_call_id ?? "",
+  ).trim();
+  const rawPath = String(
+    (ev as { canvas_path?: unknown }).canvas_path ?? "",
+  ).trim();
+  const canvasPath =
+    rawPath ||
+    (sessionId ? `/web-sessions?id=${encodeURIComponent(sessionId)}` : "");
+  if (!runId || !sessionId || !toolCallId) {
+    return null;
+  }
+  return { runId, sessionId, toolCallId, canvasPath };
+}
+
 export function inboxReviewBarrierFromStreamEvent(
   ev: HofStreamEvent,
 ): InboxReviewBarrier | null {
@@ -1009,6 +1093,19 @@ function assistantRowMatchesAssistantDone(
   );
 }
 
+function findLastWebSessionBlockIndex(
+  blocks: LiveBlock[],
+  sessionId: string,
+): number {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i];
+    if (b.kind === "web_session" && b.sessionId === sessionId) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 export function stampStreamPhase(
   ctx: AgentApplyStreamCtx,
   existing?: "model" | "summary",
@@ -1036,7 +1133,11 @@ export function applyStreamEvent(
     // *no* content deltas (straight to `tool_calls`), so we show `thinking_skeleton` until tokens
     // or `tool_call`. Plain `phase` rows were too easy to miss; empty `liveBlocks` forced only
     // “Connecting…”.
-    if (phase === "model" || phase === "inbox_review_summary") {
+    if (
+      phase === "model" ||
+      phase === "inbox_review_summary" ||
+      phase === "web_session_barrier_summary"
+    ) {
       const base = withoutThinkingSkeleton(prev);
       // Always tag model rounds from the wire event. Do not rely on ctx.assistantStreamPhase here:
       // React may run this updater after later events batched ref updates, leaving streamPhase
@@ -1298,6 +1399,84 @@ export function applyStreamEvent(
       },
     ];
   }
+  if (t === "web_session_started") {
+    const sessionId = typeof ev.session_id === "string" ? ev.session_id : "";
+    const liveUrl = typeof ev.live_url === "string" ? ev.live_url : "";
+    const task = typeof ev.task === "string" ? ev.task : "";
+    const sseChannel = typeof ev.sse_channel === "string" ? ev.sse_channel : "";
+    const ready = finalizeStreamingAssistantBeforeStructuredStep(
+      withoutThinkingSkeleton(prev),
+    );
+    return [
+      ...ready,
+      {
+        kind: "web_session",
+        id: newId(),
+        sessionId,
+        liveUrl,
+        task,
+        sseChannel,
+        steps: [],
+      },
+    ];
+  }
+  if (t === "web_session_step") {
+    const sessionId = typeof ev.session_id === "string" ? ev.session_id : "";
+    const role = typeof ev.role === "string" ? ev.role : "";
+    const summary = typeof ev.summary === "string" ? ev.summary : "";
+    const messageType =
+      typeof ev.message_type === "string" ? ev.message_type : undefined;
+    const su = (ev as { screenshot_url?: unknown }).screenshot_url;
+    const screenshotUrl =
+      typeof su === "string" && su.trim() ? su.trim() : undefined;
+    const idx = findLastWebSessionBlockIndex(prev, sessionId);
+    if (idx < 0) {
+      return prev;
+    }
+    const b = prev[idx];
+    if (b.kind !== "web_session") {
+      return prev;
+    }
+    const nextSteps = [
+      ...b.steps,
+      {
+        role,
+        summary,
+        ...(messageType ? { messageType } : {}),
+        ...(screenshotUrl ? { screenshotUrl } : {}),
+      },
+    ];
+    return [
+      ...prev.slice(0, idx),
+      { ...b, steps: nextSteps },
+      ...prev.slice(idx + 1),
+    ];
+  }
+  if (t === "web_session_ended") {
+    const sessionId = typeof ev.session_id === "string" ? ev.session_id : "";
+    const output = typeof ev.output === "string" ? ev.output : "";
+    const status = typeof ev.status === "string" ? ev.status : "";
+    const rec = (ev as { recording_urls?: unknown }).recording_urls;
+    const recordingUrls = Array.isArray(rec)
+      ? (rec as unknown[]).map((x) => String(x)).filter(Boolean)
+      : [];
+    const idx = findLastWebSessionBlockIndex(prev, sessionId);
+    if (idx < 0) {
+      return prev;
+    }
+    const b = prev[idx];
+    if (b.kind !== "web_session") {
+      return prev;
+    }
+    return [
+      ...prev.slice(0, idx),
+      {
+        ...b,
+        ended: { output, recordingUrls, status },
+      },
+      ...prev.slice(idx + 1),
+    ];
+  }
   if (t === "mutation_pending") {
     const pending_id = typeof ev.pending_id === "string" ? ev.pending_id : "";
     const name = typeof ev.name === "string" ? ev.name : "";
@@ -1393,6 +1572,26 @@ export function applyStreamEvent(
         id: newId(),
         run_id: parsed.runId,
         watches: parsed.watches,
+      },
+    ];
+  }
+  if (t === "awaiting_web_session") {
+    const parsed = webSessionBarrierFromStreamEvent(ev);
+    const ready = finalizeStreamingAssistantBeforeStructuredStep(
+      withoutThinkingSkeleton(prev),
+    );
+    if (!parsed) {
+      return ready;
+    }
+    return [
+      ...ready,
+      {
+        kind: "web_session_barrier",
+        id: newId(),
+        run_id: parsed.runId,
+        session_id: parsed.sessionId,
+        tool_call_id: parsed.toolCallId,
+        canvas_path: parsed.canvasPath,
       },
     ];
   }
@@ -1702,6 +1901,9 @@ export function compactBlocksForHistory(blocks: LiveBlock[]): LiveBlock[] {
       return false;
     }
     if (b.kind === "inbox_review_required") {
+      return false;
+    }
+    if (b.kind === "web_session_barrier") {
       return false;
     }
     return b.kind !== "thinking_skeleton";

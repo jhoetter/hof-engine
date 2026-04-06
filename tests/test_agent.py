@@ -47,6 +47,7 @@ from hof.agent.stream import (
     iter_agent_chat_stream,
     iter_agent_resume_inbox_stream,
     iter_agent_resume_stream,
+    iter_agent_resume_web_session_stream,
 )
 
 
@@ -1237,7 +1238,7 @@ def test_two_terminal_exec_deferred_mutations_one_turn_then_mixed_resume(monkeyp
         max_tool_output_chars: int,
         run_id: str | None = None,
         tool_call_id: str | None = None,
-    ) -> tuple[str, str]:
+    ) -> agent_tooling.ToolExecResult:
         nonlocal term_round
         if name == HOF_BUILTIN_TERMINAL_EXEC:
             term_round += 1
@@ -1260,7 +1261,14 @@ def test_two_terminal_exec_deferred_mutations_one_turn_then_mixed_resume(monkeyp
             wrapper = {"result": inner, "duration_ms": 0, "function": fn}
             raw_out = json.dumps(wrapper)
             body = {"exit_code": 0, "output": raw_out}
-            return json.dumps(body), "deferred"
+            raw_json = json.dumps(body)
+            return agent_tooling.ToolExecResult(
+                raw_json=raw_json,
+                summary="deferred",
+                ok=True,
+                status_code=200,
+                parsed_data=body,
+            )
         return agent_tooling.execute_tool(
             name,
             arguments_json,
@@ -1646,3 +1654,104 @@ def test_agent_stream_error_event_plain_exception() -> None:
         "type": "error",
         "detail": "plain oops",
     }
+
+
+def test_collect_agent_chat_awaiting_web_session_fold() -> None:
+    def fake_stream() -> Any:
+        yield {"type": "run_start", "run_id": "r1", "model": "gpt-4o-mini"}
+        yield {
+            "type": "awaiting_web_session",
+            "run_id": "r1",
+            "session_id": "s1",
+            "tool_call_id": "tc",
+            "canvas_path": "/web-sessions?id=s1",
+        }
+
+    out = collect_agent_chat_from_stream(fake_stream())
+    assert out.get("awaiting_web_session") is True
+    assert out.get("run_id") == "r1"
+    assert out.get("session_id") == "s1"
+
+
+def test_iter_agent_resume_web_session_stream_errors_when_not_terminal(monkeypatch) -> None:
+    from hof.browser.store import save_web_session
+
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="test ",
+        ),
+    )
+    rid = "run-ws-nonterm"
+    sid = "sess-ws-1"
+    save_agent_run(
+        rid,
+        {
+            "oa_messages": [
+                {"role": "tool", "tool_call_id": "tc1", "content": "{}"},
+            ],
+            "model": "gpt-4o-mini",
+            "llm_backend": "openai",
+            "rounds": 1,
+            "open_web_session": {"session_id": sid, "tool_call_id": "tc1"},
+        },
+    )
+    save_web_session(
+        sid,
+        {"session_id": sid, "status": "running", "task": "t"},
+    )
+    ev = list(iter_agent_resume_web_session_stream(rid))
+    assert any(e.get("type") == "error" for e in ev)
+    assert load_agent_run(rid) is not None
+
+
+def test_iter_agent_resume_web_session_stream_resume_start(monkeypatch) -> None:
+    from hof.browser.store import save_web_session
+
+    configure_agent(
+        AgentPolicy(
+            allowlist_read=frozenset(),
+            allowlist_mutation=frozenset(),
+            system_prompt_intro="test ",
+        ),
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AGENT_REASONING_MODE", raising=False)
+
+    rid = "run-ws-term"
+    sid = "sess-ws-2"
+    save_agent_run(
+        rid,
+        {
+            "oa_messages": [
+                {"role": "tool", "tool_call_id": "tc2", "content": "{}"},
+            ],
+            "model": "gpt-4o-mini",
+            "llm_backend": "openai",
+            "rounds": 1,
+            "open_web_session": {"session_id": sid, "tool_call_id": "tc2"},
+        },
+    )
+    save_web_session(
+        sid,
+        {
+            "session_id": sid,
+            "status": "idle",
+            "task": "t",
+            "output": "done",
+            "live_url": "https://example.com",
+            "recording_urls": [],
+            "sse_channel": "ch1",
+        },
+    )
+
+    def fake_stream(*_a, **_kw):
+        yield AgentContentDelta(text="Hi.")
+        yield AgentMessageFinish(finish_reason="stop", usage=None)
+
+    with patch("hof.agent.stream.stream_agent_turn", side_effect=fake_stream):
+        ev = list(iter_agent_resume_web_session_stream(rid))
+
+    assert any(e.get("type") == "resume_start" for e in ev)
+    assert load_agent_run(rid) is None

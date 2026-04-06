@@ -51,6 +51,7 @@ from hof.agent.stream import (
     iter_agent_resume_inbox_stream,
     iter_agent_resume_plan_clarification_stream,
     iter_agent_resume_stream,
+    iter_agent_resume_web_session_stream,
 )
 from hof.agent.tooling import format_cli_line
 
@@ -97,6 +98,7 @@ __all__ = [
     "iter_agent_resume_inbox_stream",
     "iter_agent_resume_plan_clarification_stream",
     "iter_agent_resume_stream",
+    "iter_agent_resume_web_session_stream",
     "normalize_conversation_state_for_storage",
     "try_get_agent_policy",
     "validate_conversation_state",

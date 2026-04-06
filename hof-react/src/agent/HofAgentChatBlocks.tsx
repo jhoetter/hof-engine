@@ -932,6 +932,9 @@ export function RunBlocksList({
         if (b.kind === "inbox_review_required") {
           return null;
         }
+        if (b.kind === "web_session") {
+          return null;
+        }
         const precedingTool = postToolInfoMap?.get(b.id);
         const parsedToolInfo = precedingTool
           ? parsePostToolInfo(precedingTool)
@@ -2302,6 +2305,12 @@ export function LiveBlockView({
     return null;
   }
   if (b.kind === "inbox_review_required") {
+    return null;
+  }
+  if (b.kind === "web_session_barrier") {
+    return null;
+  }
+  if (b.kind === "web_session") {
     return null;
   }
   if (b.kind === "error") {

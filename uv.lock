@@ -238,6 +238,19 @@ wheels = [
 ]
 
 [[package]]
+name = "browser-use-sdk"
+version = "3.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1d/f0/e897f4b75d76c96017f0cff4d7264426ae5f7e26ad68656e2731b9c166a7/browser_use_sdk-3.4.2.tar.gz", hash = "sha256:be050bc803b31ec4e9f23dfd71d9dc5f1160d7dec0b962327915caf743a10208", size = 70523, upload-time = "2026-04-04T20:49:22.707Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/84/e9/6dd224f9056b09622751821a91aa899b6d99447a761c74c4aabf4afd6e45/browser_use_sdk-3.4.2-py3-none-any.whl", hash = "sha256:1c6dac6e44f4ac4d552a3249d0282cb743d0d02bbadda093d78e599392c504d3", size = 57169, upload-time = "2026-04-04T20:49:21.389Z" },
+]
+
+[[package]]
 name = "celery"
 version = "5.6.2"
 source = { registry = "https://pypi.org/simple" }
@@ -784,6 +797,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "browser-use-sdk" },
     { name = "celery", extra = ["redis"] },
     { name = "docker" },
     { name = "fastapi" },
@@ -822,6 +836,7 @@ docs = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.14.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
+    { name = "browser-use-sdk", specifier = ">=3.0.0" },
     { name = "celery", extras = ["redis"], specifier = ">=5.4.0" },
     { name = "docker", specifier = ">=7.0.0" },
     { name = "fastapi", specifier = ">=0.115.0" },

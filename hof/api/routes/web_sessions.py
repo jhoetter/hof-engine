@@ -10,7 +10,12 @@ from pydantic import BaseModel
 
 from hof.agent.policy import try_get_agent_policy
 from hof.browser.config import resolve_browser_api_key_value
-from hof.browser.store import list_recent_web_session_ids, load_web_session
+from hof.browser.store import (
+    list_recent_web_session_ids,
+    load_web_session,
+    save_web_session,
+)
+from hof.browser.web_session_view import build_web_session_view_extras
 
 router = APIRouter()
 
@@ -21,6 +26,12 @@ class WebSessionListItem(BaseModel):
     live_url: str | None = None
     status: str | None = None
     sse_channel: str | None = None
+    phase: str
+    status_label: str
+    status_detail: str | None = None
+    checkpoint_last: str | None = None
+    checkpoint_count: int = 0
+    cloud_status: str | None = None
 
 
 @router.get("/web-sessions")
@@ -32,6 +43,7 @@ async def list_web_sessions() -> dict[str, Any]:
         data = load_web_session(sid)
         if not data:
             continue
+        extras = build_web_session_view_extras(data)
         sessions.append(
             WebSessionListItem(
                 session_id=str(data.get("session_id") or sid),
@@ -43,6 +55,12 @@ async def list_web_sessions() -> dict[str, Any]:
                 sse_channel=data.get("sse_channel")
                 if isinstance(data.get("sse_channel"), str)
                 else None,
+                phase=str(extras["phase"]),
+                status_label=str(extras["status_label"]),
+                status_detail=extras["status_detail"],
+                checkpoint_last=extras.get("checkpoint_last"),
+                checkpoint_count=int(extras.get("checkpoint_count") or 0),
+                cloud_status=extras.get("cloud_status"),
             )
         )
     return {"sessions": sessions}
@@ -57,6 +75,15 @@ class WebSessionView(BaseModel):
     output: Any = None
     recording_urls: list[str] | None = None
     messages: list[dict[str, Any]] | None = None
+    phase: str
+    status_label: str
+    status_detail: str | None = None
+    failure_code: str | None = None
+    failure_message: str | None = None
+    checkpoints: list[str] | None = None
+    checkpoint_last: str | None = None
+    checkpoint_count: int = 0
+    cloud_status: str | None = None
 
 
 def _resolve_browser_api_key() -> str:
@@ -73,6 +100,7 @@ async def get_web_session(session_id: str) -> WebSessionView:
     data = load_web_session(session_id)
     if not data:
         raise HTTPException(status_code=404, detail="Unknown web session")
+    extras = build_web_session_view_extras(data)
     return WebSessionView(
         session_id=str(data.get("session_id") or session_id),
         task=data.get("task") if isinstance(data.get("task"), str) else None,
@@ -84,6 +112,15 @@ async def get_web_session(session_id: str) -> WebSessionView:
         if isinstance(data.get("recording_urls"), list)
         else None,
         messages=data.get("messages") if isinstance(data.get("messages"), list) else None,
+        phase=str(extras["phase"]),
+        status_label=str(extras["status_label"]),
+        status_detail=extras["status_detail"],
+        failure_code=extras.get("failure_code"),
+        failure_message=extras.get("failure_message"),
+        checkpoints=extras.get("checkpoints"),
+        checkpoint_last=extras.get("checkpoint_last"),
+        checkpoint_count=int(extras.get("checkpoint_count") or 0),
+        cloud_status=extras.get("cloud_status"),
     )
 
 
@@ -114,7 +151,17 @@ async def stop_web_session(session_id: str) -> dict[str, Any]:
     client = AsyncBrowserUse(api_key=key, timeout=120.0)
     try:
         stopped = await client.sessions.stop(session_id, strategy="task")
-        return {"session_id": session_id, "status": stopped.status.value}
+        prev = load_web_session(session_id) or {}
+        prev["session_id"] = str(prev.get("session_id") or session_id)
+        prev["status"] = "stopped"
+        prev["failure_message"] = None
+        prev["failure_code"] = None
+        save_web_session(session_id, prev)
+        return {
+            "session_id": session_id,
+            "status": stopped.status.value,
+            "phase": "cancelled",
+        }
     finally:
         await client.close()
 

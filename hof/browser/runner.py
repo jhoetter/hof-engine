@@ -10,7 +10,12 @@ from collections.abc import Callable
 from typing import Any
 
 from hof.browser import events as browser_events
-from hof.browser.store import append_web_session_message, load_web_session, save_web_session
+from hof.browser.store import (
+    append_web_session_message,
+    load_web_session,
+    merge_web_session_runtime_fields,
+    save_web_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +51,8 @@ def _persist_poll_failure(
     prev = load_web_session(session_id) or {}
     prev["status"] = "error"
     prev["error"] = message
+    prev["failure_code"] = "poll_error"
+    prev["failure_message"] = message[:2000]
     save_web_session(session_id, prev)
     _emit_sse(
         sse_channel,
@@ -174,6 +181,7 @@ async def poll_browser_cloud_session(
 
             sess = await client.sessions.get(session_id)
             st = sess.status.value if sess.status is not None else ""
+            merge_web_session_runtime_fields(session_id, cloud_status=st)
             if st in _TERMINAL:
                 while True:
                     resp2 = await client.sessions.messages(
@@ -228,16 +236,25 @@ async def poll_browser_cloud_session(
         _emit_sse(sse_channel, {**ended, "status": "done"})
 
         merged = load_web_session(session_id) or {}
+        fin_st = (
+            final_session.status.value if final_session.status is not None else ""
+        )
         merged.update(
             {
-                "status": final_session.status.value
-                if final_session.status is not None
-                else "",
+                "status": fin_st,
                 "output": out,
                 "recording_urls": recording_urls,
                 "live_url": live_url,
             }
         )
+        if fin_st == "error":
+            merged["failure_code"] = merged.get("failure_code") or "cloud_error"
+            out_err = final_session.output
+            err_txt = (
+                out_err if isinstance(out_err, str) else str(out_err or "")
+            ).strip()
+            if err_txt:
+                merged["failure_message"] = err_txt[:2000]
         save_web_session(session_id, merged)
 
         return {

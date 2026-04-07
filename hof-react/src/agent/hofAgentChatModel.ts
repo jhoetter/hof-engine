@@ -62,6 +62,14 @@ export const WEB_SESSION_TERMINAL_STATUSES = new Set([
   "error",
 ]);
 
+/** Normalized terminal phases from the same endpoint (defensive if ``status`` is stale). */
+const WEB_SESSION_TERMINAL_PHASES = new Set([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timed_out",
+]);
+
 /** Default poll until ``status`` is terminal (same-origin ``/api/web-sessions/:id``). */
 export async function defaultPollWebSession(
   sessionId: string,
@@ -72,9 +80,13 @@ export async function defaultPollWebSession(
   if (!r.ok) {
     return false;
   }
-  const j = (await r.json()) as { status?: string };
+  const j = (await r.json()) as { status?: string; phase?: string };
   const st = String(j.status ?? "").trim();
-  return WEB_SESSION_TERMINAL_STATUSES.has(st);
+  if (WEB_SESSION_TERMINAL_STATUSES.has(st)) {
+    return true;
+  }
+  const ph = String(j.phase ?? "").trim();
+  return WEB_SESSION_TERMINAL_PHASES.has(ph);
 }
 
 export type LiveBlock =

@@ -14,6 +14,8 @@ _WEB_SESSION_TTL_SEC = 172_800  # 48h — align with inbox review barrier
 _KEY = "hof:web_session:{session_id}"
 _WEB_SESSIONS_INDEX_KEY = "hof:web_sessions:index"
 _MAX_INDEX_IDS = 100
+# Align with ``hof.browser.runner`` / ``hof.agent.stream`` terminal cloud statuses.
+_CLOUD_STATUS_TERMINAL = frozenset({"idle", "stopped", "timed_out", "error"})
 _web_redis = None
 _web_memory: dict[str, tuple[float, str]] = {}
 _web_lock = threading.Lock()
@@ -125,6 +127,22 @@ def list_recent_web_session_ids(limit: int = 100) -> list[str]:
     return out
 
 
+def _append_checkpoint(prev: dict[str, Any], summary: str) -> None:
+    s = summary.strip()
+    if not s:
+        return
+    cp = prev.get("checkpoints")
+    if not isinstance(cp, list):
+        cp = []
+    trimmed = s[:500]
+    if cp and isinstance(cp[-1], str) and cp[-1] == trimmed:
+        return
+    cp.append(trimmed)
+    if len(cp) > 80:
+        cp = cp[-80:]
+    prev["checkpoints"] = cp
+
+
 def append_web_session_message(session_id: str, message: dict[str, Any]) -> None:
     prev = load_web_session(session_id) or {}
     msgs = prev.get("messages")
@@ -132,4 +150,34 @@ def append_web_session_message(session_id: str, message: dict[str, Any]) -> None
         msgs = []
     msgs.append(message)
     prev["messages"] = msgs
+    if isinstance(message, dict):
+        summ = message.get("summary")
+        if isinstance(summ, str):
+            _append_checkpoint(prev, summ)
+    save_web_session(session_id, prev)
+
+
+def merge_web_session_runtime_fields(
+    session_id: str,
+    *,
+    cloud_status: str | None = None,
+) -> None:
+    """Update volatile fields during polling (e.g. latest cloud status).
+
+    Never overwrite a **terminal** stored status with a **non-terminal** cloud
+    value — the background poll can lag behind ``POST /web-sessions/:id/stop`` or
+    the final idle snapshot, which would otherwise leave Redis stuck on
+    ``running`` and block ``agent_resume_web_session`` + client poll completion.
+    """
+    prev = load_web_session(session_id) or {}
+    if cloud_status is not None:
+        new_st = str(cloud_status).strip()
+        old_st = str(prev.get("status") or "").strip()
+        if (
+            old_st in _CLOUD_STATUS_TERMINAL
+            and new_st not in _CLOUD_STATUS_TERMINAL
+        ):
+            pass
+        else:
+            prev["status"] = new_st
     save_web_session(session_id, prev)

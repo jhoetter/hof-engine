@@ -15,7 +15,6 @@ import {
   type Dispatch,
 } from "react";
 import {
-  postHofFunction,
   streamHofFunction,
   type HofStreamEvent,
 } from "../hooks/streamHofFunction";
@@ -137,47 +136,84 @@ const RECEIPT_PROCESSING_TERMINAL = new Set([
   "failed",
 ]);
 
-/** Default client poll: expense/revenue/receipt row no longer needs Inbox HITL. */
+/**
+ * ``record_type`` (wire value from engine) → actual hof ORM table name.
+ *
+ * The Table metaclass lowercases the Python class name when no explicit
+ * ``__tablename__`` is defined: ``ReceiptDocument`` → ``receiptdocument``.
+ */
+const RECORD_TYPE_TO_TABLE: Record<string, string> = {
+  expense: "expense",
+  revenue: "revenue",
+  receipt: "receiptdocument",
+  receipt_document: "receiptdocument",
+};
+
+async function fetchTableRecord(
+  tableName: string,
+  recordId: string,
+): Promise<Record<string, unknown> | null> {
+  const token =
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem("hof_token")
+      : null;
+  let r: Response;
+  try {
+    r = await fetch(
+      `/api/tables/${encodeURIComponent(tableName)}/${encodeURIComponent(recordId)}`,
+      token
+        ? { headers: { Authorization: `Bearer ${token}` } }
+        : undefined,
+    );
+  } catch {
+    return null;
+  }
+  if (!r.ok) {
+    return null;
+  }
+  try {
+    return (await r.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Status-field check per ``record_type``.  Mirrors the server-side
+ * ``register_inbox_watch_verifier`` registrations in ``inbox_hooks.py``.
+ */
+function isInboxReviewResolved(
+  rt: string,
+  row: Record<string, unknown>,
+): boolean {
+  if (rt === "expense") {
+    return String(row.approval_status ?? "") !== "pending_review";
+  }
+  if (rt === "revenue") {
+    return String(row.confirmation_status ?? "") !== "pending_review";
+  }
+  if (rt === "receipt" || rt === "receipt_document") {
+    const ps = String(row.processing_status ?? "").toLowerCase();
+    if (!RECEIPT_PROCESSING_TERMINAL.has(ps)) {
+      return false;
+    }
+    return String(row.match_review_status ?? "") !== "pending_review";
+  }
+  return false;
+}
+
 export async function defaultPollInboxReviewWatch(
   w: InboxReviewWatchWire,
 ): Promise<boolean> {
   const rt = w.record_type.trim().toLowerCase();
+  const table = RECORD_TYPE_TO_TABLE[rt] ?? rt;
   try {
-    if (rt === "expense") {
-      const row = await postHofFunction<Record<string, unknown>>(
-        "get_expense",
-        {
-          id: w.record_id,
-        },
-      );
-      return String(row?.approval_status ?? "") !== "pending_review";
-    }
-    if (rt === "revenue") {
-      const row = await postHofFunction<Record<string, unknown>>(
-        "get_revenue",
-        {
-          id: w.record_id,
-        },
-      );
-      return String(row?.confirmation_status ?? "") !== "pending_review";
-    }
-    if (rt === "receipt" || rt === "receipt_document") {
-      const row = await postHofFunction<Record<string, unknown>>(
-        "get_receipt_document",
-        {
-          id: w.record_id,
-        },
-      );
-      const ps = String(row?.processing_status ?? "").toLowerCase();
-      if (!RECEIPT_PROCESSING_TERMINAL.has(ps)) {
-        return false;
-      }
-      return String(row?.match_review_status ?? "") !== "pending_review";
-    }
+    const row = await fetchTableRecord(table, w.record_id);
+    if (!row) return false;
+    return isInboxReviewResolved(rt, row);
   } catch {
     return false;
   }
-  return false;
 }
 
 export type HofAgentChatPresignInput = {
@@ -2569,8 +2605,15 @@ export function HofAgentChatProvider({
 
   useEffect(() => {
     if (!inboxBarrierPollKey || busy) {
+      agentChatDebugLog("inboxPoll:skip", {
+        key: inboxBarrierPollKey,
+        busy,
+      });
       return;
     }
+    agentChatDebugLog("inboxPoll:start", {
+      key: inboxBarrierPollKey,
+    });
     let cancelled = false;
     let delayMs = 2000;
 
@@ -2578,6 +2621,7 @@ export function HofAgentChatProvider({
       while (!cancelled) {
         const b = inboxReviewBarrierRef.current;
         if (!b || !b.watches.length) {
+          agentChatDebugLog("inboxPoll:noBarrier", {});
           return;
         }
         setInboxPollWaiting(true);
@@ -2587,13 +2631,26 @@ export function HofAgentChatProvider({
             b.watches.map((w) => pollInboxWatchRef.current(w)),
           );
           allDone = results.every(Boolean);
+        } catch (err) {
+          agentChatDebugLog("inboxPoll:error", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          allDone = false;
         } finally {
           setInboxPollWaiting(false);
         }
+        agentChatDebugLog("inboxPoll:tick", {
+          allDone,
+          cancelled,
+          delayMs,
+        });
         if (cancelled) {
           return;
         }
         if (allDone) {
+          agentChatDebugLog("inboxPoll:terminal", {
+            runId: b.runId,
+          });
           await runInboxResumeRef.current(b);
           return;
         }

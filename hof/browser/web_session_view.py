@@ -19,8 +19,10 @@ PhaseHint = Literal["structured_type", "summary_heuristic"]
 
 _RAW_TERMINAL = frozenset({"idle", "stopped", "timed_out", "error"})
 
-# Recent messages scanned for user-gate signals (Browser Use message stream is append-only).
-_RECENT_MESSAGE_LIMIT = 15
+# Only the last few messages are checked for user-gate signals so that stale
+# triggers (e.g. a cookie consent page the agent already dismissed) don't keep
+# the phase stuck at "waiting_for_user".
+_RECENT_MESSAGE_LIMIT = 3
 
 # Substrings matched against normalized ``MessageResponse.type`` (SDK: free-form category).
 # See browser_use_sdk ``MessageResponse.type`` — extend when vendor documents new values.

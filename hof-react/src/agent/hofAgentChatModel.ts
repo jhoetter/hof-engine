@@ -52,6 +52,8 @@ export type WebSessionBarrier = {
   sessionId: string;
   toolCallId: string;
   canvasPath: string;
+  /** SSE channel for Browser Use progress; ``web_session_ended`` arrives here before stream closes. */
+  sseChannel?: string;
 };
 
 /** Terminal ``status`` values from ``GET /api/web-sessions/:id`` (aligned with engine). */
@@ -74,13 +76,23 @@ const WEB_SESSION_TERMINAL_PHASES = new Set([
 export async function defaultPollWebSession(
   sessionId: string,
 ): Promise<boolean> {
-  const r = await fetch(
-    `/api/web-sessions/${encodeURIComponent(sessionId)}`,
-  );
+  let r: Response;
+  try {
+    r = await fetch(
+      `/api/web-sessions/${encodeURIComponent(sessionId)}`,
+    );
+  } catch {
+    return false;
+  }
   if (!r.ok) {
     return false;
   }
-  const j = (await r.json()) as { status?: string; phase?: string };
+  let j: { status?: string; phase?: string };
+  try {
+    j = (await r.json()) as { status?: string; phase?: string };
+  } catch {
+    return false;
+  }
   const st = String(j.status ?? "").trim();
   if (WEB_SESSION_TERMINAL_STATUSES.has(st)) {
     return true;
@@ -860,10 +872,19 @@ export function webSessionBarrierFromStreamEvent(
   const canvasPath =
     rawPath ||
     (sessionId ? `/web-sessions?id=${encodeURIComponent(sessionId)}` : "");
+  const rawSse = String(
+    (ev as { sse_channel?: unknown }).sse_channel ?? "",
+  ).trim();
   if (!runId || !sessionId || !toolCallId) {
     return null;
   }
-  return { runId, sessionId, toolCallId, canvasPath };
+  return {
+    runId,
+    sessionId,
+    toolCallId,
+    canvasPath,
+    ...(rawSse ? { sseChannel: rawSse } : {}),
+  };
 }
 
 export function inboxReviewBarrierFromStreamEvent(

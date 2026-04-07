@@ -520,6 +520,8 @@ export function HofAgentChatProvider({
   const runWebSessionResumeRef = useRef<
     (b: WebSessionBarrier) => Promise<void>
   >(async () => {});
+  /** Avoid duplicate poll+resume when both SSE and the polling loop see terminal. */
+  const webSessionTerminalResumeLockRef = useRef(false);
   const inboxReviewBarrierRef = useRef<InboxReviewBarrier | null>(null);
   const webSessionBarrierRef = useRef<WebSessionBarrier | null>(null);
   const pollInboxWatchRef = useRef(
@@ -1194,6 +1196,15 @@ export function HofAgentChatProvider({
             }
             if (typ === "awaiting_web_session") {
               const parsed = webSessionBarrierFromStreamEvent(ev);
+              agentChatDebugLog("webSessionBarrier:set", {
+                parsed: parsed
+                  ? {
+                      runId: parsed.runId,
+                      sessionId: parsed.sessionId,
+                      sseChannel: parsed.sseChannel ?? "(none)",
+                    }
+                  : null,
+              });
               if (parsed) {
                 setWebSessionBarrier(parsed);
                 setWebSessionResumeError(null);
@@ -2195,6 +2206,10 @@ export function HofAgentChatProvider({
 
   const runWebSessionResume = useCallback(
     async (barrier: WebSessionBarrier) => {
+      agentChatDebugLog("runWebSessionResume:enter", {
+        sessionId: barrier.sessionId,
+        runId: barrier.runId,
+      });
       const myId = ++reqIdRef.current;
       abortRef.current?.abort();
       abortRef.current = new AbortController();
@@ -2460,6 +2475,44 @@ export function HofAgentChatProvider({
     ],
   );
 
+  const finalizeWebSessionBarrierResume = useCallback(
+    async (b: WebSessionBarrier) => {
+      if (webSessionTerminalResumeLockRef.current) {
+        agentChatDebugLog("webSessionResume:locked", {
+          sessionId: b.sessionId,
+        });
+        return;
+      }
+      webSessionTerminalResumeLockRef.current = true;
+      try {
+        if (webSessionBarrierRef.current?.sessionId !== b.sessionId) {
+          agentChatDebugLog("webSessionResume:staleBarrier", {
+            sessionId: b.sessionId,
+            current: webSessionBarrierRef.current?.sessionId,
+          });
+          return;
+        }
+        agentChatDebugLog("webSessionResume:firing", {
+          sessionId: b.sessionId,
+          runId: b.runId,
+        });
+        await runWebSessionResumeRef.current(b);
+        agentChatDebugLog("webSessionResume:done", {
+          sessionId: b.sessionId,
+        });
+      } catch (err) {
+        agentChatDebugLog("webSessionResume:error", {
+          sessionId: b.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      } finally {
+        webSessionTerminalResumeLockRef.current = false;
+      }
+    },
+    [],
+  );
+
   runResumeRef.current = runResume;
   runInboxResumeRef.current = runInboxResume;
   runWebSessionResumeRef.current = runWebSessionResume;
@@ -2563,8 +2616,15 @@ export function HofAgentChatProvider({
 
   useEffect(() => {
     if (!webSessionBarrierPollKey || busy) {
+      agentChatDebugLog("webSessionPoll:skip", {
+        key: webSessionBarrierPollKey,
+        busy,
+      });
       return;
     }
+    agentChatDebugLog("webSessionPoll:start", {
+      key: webSessionBarrierPollKey,
+    });
     let cancelled = false;
     let delayMs = 2000;
 
@@ -2572,20 +2632,36 @@ export function HofAgentChatProvider({
       while (!cancelled) {
         const b = webSessionBarrierRef.current;
         if (!b?.sessionId) {
+          agentChatDebugLog("webSessionPoll:noBarrier", {});
           return;
         }
         setWebSessionPollWaiting(true);
         let done = false;
         try {
           done = await pollWebSessionRef.current(b.sessionId);
+        } catch (err) {
+          agentChatDebugLog("webSessionPoll:error", {
+            sessionId: b.sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          done = false;
         } finally {
           setWebSessionPollWaiting(false);
         }
+        agentChatDebugLog("webSessionPoll:tick", {
+          sessionId: b.sessionId,
+          done,
+          cancelled,
+          delayMs,
+        });
         if (cancelled) {
           return;
         }
         if (done) {
-          await runWebSessionResumeRef.current(b);
+          agentChatDebugLog("webSessionPoll:terminal", {
+            sessionId: b.sessionId,
+          });
+          await finalizeWebSessionBarrierResume(b);
           return;
         }
         await new Promise((r) => setTimeout(r, delayMs));
@@ -2596,7 +2672,80 @@ export function HofAgentChatProvider({
     return () => {
       cancelled = true;
     };
-  }, [webSessionBarrierPollKey, busy]);
+  }, [webSessionBarrierPollKey, busy, finalizeWebSessionBarrierResume]);
+
+  /** When the engine emits ``web_session_ended`` on the session SSE channel, resume immediately
+   *  (same signal the Web session canvas uses) instead of waiting for the next HTTP poll tick.
+   */
+  useEffect(() => {
+    const ch = webSessionBarrier?.sseChannel?.trim();
+    if (!webSessionBarrierPollKey || !ch || busy) {
+      agentChatDebugLog("webSessionSSE:skip", {
+        key: webSessionBarrierPollKey,
+        ch: ch ?? "(none)",
+        busy,
+      });
+      return;
+    }
+    agentChatDebugLog("webSessionSSE:open", { channel: ch });
+    let cancelled = false;
+    const es = new EventSource(
+      `/api/sse/${encodeURIComponent(ch)}`,
+    );
+    es.onerror = () => {
+      agentChatDebugLog("webSessionSSE:error", { channel: ch });
+    };
+    es.onmessage = (evt) => {
+      if (cancelled) {
+        return;
+      }
+      let raw: { type?: string; status?: string };
+      try {
+        raw = JSON.parse(evt.data) as { type?: string; status?: string };
+      } catch {
+        return;
+      }
+      agentChatDebugLog("webSessionSSE:msg", {
+        type: raw.type,
+        status: raw.status,
+      });
+      if (raw.type !== "web_session_ended" && raw.status !== "done") {
+        return;
+      }
+      void (async () => {
+        const b = webSessionBarrierRef.current;
+        if (!b?.sessionId || cancelled) {
+          return;
+        }
+        let terminal = false;
+        try {
+          terminal = await pollWebSessionRef.current(b.sessionId);
+        } catch {
+          return;
+        }
+        agentChatDebugLog("webSessionSSE:pollAfterEnd", {
+          sessionId: b.sessionId,
+          terminal,
+        });
+        if (cancelled || !terminal) {
+          return;
+        }
+        if (webSessionBarrierRef.current?.sessionId !== b.sessionId) {
+          return;
+        }
+        await finalizeWebSessionBarrierResume(b);
+      })();
+    };
+    return () => {
+      cancelled = true;
+      es.close();
+    };
+  }, [
+    webSessionBarrier?.sseChannel,
+    webSessionBarrierPollKey,
+    busy,
+    finalizeWebSessionBarrierResume,
+  ]);
 
   const confirmPendingMutations = useCallback(() => {
     void runResumeRef.current();

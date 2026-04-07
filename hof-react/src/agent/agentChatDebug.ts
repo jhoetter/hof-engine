@@ -111,6 +111,12 @@ export function agentChatDebugNdjson(
     payload.run_id = ev.run_id;
   } else if (typ === "segment_start") {
     payload.segment = ev.segment;
+  } else if (typ === "awaiting_web_session") {
+    payload.session_id = ev.session_id;
+    payload.run_id = ev.run_id;
+    payload.sse_channel = ev.sse_channel;
+  } else if (typ === "awaiting_inbox_review") {
+    payload.run_id = ev.run_id;
   } else if (
     typ === "final" ||
     typ === "awaiting_plan_clarification" ||

@@ -22,6 +22,7 @@ export type AgentConversationDraftV1 = {
     sessionId: string;
     toolCallId: string;
     canvasPath: string;
+    sseChannel?: string;
   } | null;
   approvalDecisions: Record<string, boolean | null>;
 };

@@ -17,6 +17,11 @@ _MAX_INDEX_IDS = 100
 # Align with ``hof.browser.runner`` / ``hof.agent.stream`` terminal cloud statuses.
 _CLOUD_STATUS_TERMINAL = frozenset({"idle", "stopped", "timed_out", "error"})
 _web_redis = None
+
+
+def is_terminal_cloud_status(status: str | None) -> bool:
+    """True if ``status`` is a terminal Browser Use cloud lifecycle value."""
+    return str(status or "").strip() in _CLOUD_STATUS_TERMINAL
 _web_memory: dict[str, tuple[float, str]] = {}
 _web_lock = threading.Lock()
 
@@ -161,6 +166,7 @@ def merge_web_session_runtime_fields(
     session_id: str,
     *,
     cloud_status: str | None = None,
+    cloud_step_count: int | None = None,
 ) -> None:
     """Update volatile fields during polling (e.g. latest cloud status).
 
@@ -168,15 +174,35 @@ def merge_web_session_runtime_fields(
     value — the background poll can lag behind ``POST /web-sessions/:id/stop`` or
     the final idle snapshot, which would otherwise leave Redis stuck on
     ``running`` and block ``agent_resume_web_session`` + client poll completion.
+
+    ``cloud_step_count`` (from ``SessionResponse.stepCount``) is stored
+    monotonically: stale polls with a lower step count do not overwrite a newer
+    non-terminal status snapshot.
     """
     prev = load_web_session(session_id) or {}
+    initial_sc = (
+        int(prev["cloud_step_count"])
+        if isinstance(prev.get("cloud_step_count"), int)
+        else None
+    )
+
+    if cloud_step_count is not None:
+        nsc = int(cloud_step_count)
+        if initial_sc is None or nsc >= initial_sc:
+            prev["cloud_step_count"] = nsc
+
     if cloud_status is not None:
         new_st = str(cloud_status).strip()
         old_st = str(prev.get("status") or "").strip()
-        if (
-            old_st in _CLOUD_STATUS_TERMINAL
-            and new_st not in _CLOUD_STATUS_TERMINAL
-        ):
+        skip_stale_non_terminal = (
+            not is_terminal_cloud_status(new_st)
+            and cloud_step_count is not None
+            and initial_sc is not None
+            and int(cloud_step_count) < initial_sc
+        )
+        if is_terminal_cloud_status(old_st) and not is_terminal_cloud_status(new_st):
+            pass
+        elif skip_stale_non_terminal:
             pass
         else:
             prev["status"] = new_st

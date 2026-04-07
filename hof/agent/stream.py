@@ -1124,6 +1124,7 @@ def _yield_awaiting_web_session_barrier(
     session_id: str,
     tool_call_id: str,
     canvas_path: str,
+    sse_channel: str,
     task: str,
     lm_backend: str,
     reasoning: ReasoningConfig,
@@ -1169,6 +1170,7 @@ def _yield_awaiting_web_session_barrier(
         "session_id": session_id,
         "tool_call_id": tool_call_id,
         "canvas_path": canvas_path,
+        "sse_channel": sse_channel,
     }
     _agent_stream_debug_append(
         {
@@ -1366,6 +1368,7 @@ def _stream_hof_browser_tool_async_barrier(
         session_id=sid,
         tool_call_id=tid,
         canvas_path=canvas_path,
+        sse_channel=sse_ch,
         task=task,
         lm_backend=lm_backend,
         reasoning=reasoning,

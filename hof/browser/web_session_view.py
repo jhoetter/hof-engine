@@ -15,10 +15,31 @@ WebSessionPhase = Literal[
     "timed_out",
 ]
 
+PhaseHint = Literal["structured_type", "summary_heuristic"]
+
 _RAW_TERMINAL = frozenset({"idle", "stopped", "timed_out", "error"})
 
-# Heuristic: agent message text suggests the human must act in the browser UI.
-_USER_INPUT_PATTERNS: tuple[re.Pattern[str], ...] = (
+# Recent messages scanned for user-gate signals (Browser Use message stream is append-only).
+_RECENT_MESSAGE_LIMIT = 15
+
+# Substrings matched against normalized ``MessageResponse.type`` (SDK: free-form category).
+# See browser_use_sdk ``MessageResponse.type`` — extend when vendor documents new values.
+_USER_INPUT_MESSAGE_TYPE_MARKERS: tuple[str, ...] = (
+    "human",
+    "user_input",
+    "interactive",
+    "authentication",
+    "login",
+    "challenge",
+    "captcha",
+    "mfa",
+    "2fa",
+    "otp",
+    "verification",
+)
+
+# Tier B: regex on ``summary`` only (not ``data``) to avoid JSON-noise false positives.
+_USER_INPUT_SUMMARY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bcaptcha\b", re.I),
     re.compile(r"\b2[\s-]?fa\b", re.I),
     re.compile(r"\btwo[\s-]factor\b", re.I),
@@ -34,26 +55,53 @@ _USER_INPUT_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
-def _combined_message_text(msgs: list[dict[str, Any]], last_n: int = 12) -> str:
-    parts: list[str] = []
-    for m in msgs[-last_n:] if len(msgs) > last_n else msgs:
-        if not isinstance(m, dict):
-            continue
-        for k in ("summary", "data", "type"):
-            v = m.get(k)
-            if isinstance(v, str) and v.strip():
-                parts.append(v)
-    return "\n".join(parts)
-
-
-def _messages_suggest_user_input(data: dict[str, Any]) -> bool:
+def _recent_wire_messages(data: dict[str, Any]) -> list[dict[str, Any]]:
     msgs = data.get("messages")
-    if not isinstance(msgs, list) or not msgs:
+    if not isinstance(msgs, list):
+        return []
+    out = [m for m in msgs if isinstance(m, dict)]
+    if len(out) <= _RECENT_MESSAGE_LIMIT:
+        return out
+    return out[-_RECENT_MESSAGE_LIMIT :]
+
+
+def _message_type_suggests_user_input(msg: dict[str, Any]) -> bool:
+    typ = msg.get("type")
+    if not isinstance(typ, str) or not typ.strip():
         return False
-    blob = _combined_message_text([m for m in msgs if isinstance(m, dict)])
-    if not blob.strip():
-        return False
-    return any(p.search(blob) for p in _USER_INPUT_PATTERNS)
+    low = typ.lower()
+    return any(marker in low for marker in _USER_INPUT_MESSAGE_TYPE_MARKERS)
+
+
+def _tier_a_structured_type(msgs: list[dict[str, Any]]) -> bool:
+    return any(_message_type_suggests_user_input(m) for m in msgs)
+
+
+def _tier_b_summary_heuristic(msgs: list[dict[str, Any]]) -> bool:
+    for m in msgs:
+        summ = m.get("summary")
+        if not isinstance(summ, str) or not summ.strip():
+            continue
+        if any(p.search(summ) for p in _USER_INPUT_SUMMARY_PATTERNS):
+            return True
+    return False
+
+
+def infer_user_gate(
+    data: dict[str, Any],
+) -> tuple[bool, PhaseHint | None]:
+    """Whether the session likely needs human action in the browser (non-terminal only).
+
+    Order: Tier A (``type`` substrings) then Tier B (``summary`` regex only).
+    """
+    msgs = _recent_wire_messages(data)
+    if not msgs:
+        return (False, None)
+    if _tier_a_structured_type(msgs):
+        return (True, "structured_type")
+    if _tier_b_summary_heuristic(msgs):
+        return (True, "summary_heuristic")
+    return (False, None)
 
 
 def _raw_cloud_status(data: dict[str, Any]) -> str:
@@ -88,8 +136,8 @@ def compute_web_session_phase(data: dict[str, Any]) -> WebSessionPhase:
     if raw == "error" or has_err:
         return "failed"
 
-    # Non-terminal cloud states: created, running, or unknown while task proceeds
-    if raw in ("created", "running", "") and _messages_suggest_user_input(data):
+    wait, _ = infer_user_gate(data)
+    if raw in ("created", "running", "") and wait:
         return "waiting_for_user"
     return "running"
 
@@ -97,7 +145,10 @@ def compute_web_session_phase(data: dict[str, Any]) -> WebSessionPhase:
 def build_web_session_view_extras(data: dict[str, Any]) -> dict[str, Any]:
     """UI-safe fields derived from stored session JSON (no secrets)."""
     phase = compute_web_session_phase(data)
+    _, hint = infer_user_gate(data)
     raw = _raw_cloud_status(data)
+
+    phase_hint: PhaseHint | None = hint if phase == "waiting_for_user" else None
 
     status_label: str
     status_detail: str | None = None
@@ -140,6 +191,9 @@ def build_web_session_view_extras(data: dict[str, Any]) -> dict[str, Any]:
     checkpoint_last = checkpoints[-1] if checkpoints else None
     checkpoint_count = len(checkpoints)
 
+    sc = data.get("cloud_step_count")
+    cloud_step_count = int(sc) if isinstance(sc, int) else None
+
     return {
         "phase": phase,
         "status_label": status_label,
@@ -150,4 +204,6 @@ def build_web_session_view_extras(data: dict[str, Any]) -> dict[str, Any]:
         "checkpoint_last": checkpoint_last,
         "checkpoint_count": checkpoint_count,
         "cloud_status": raw or None,
+        "phase_hint": phase_hint,
+        "cloud_step_count": cloud_step_count,
     }

@@ -81,7 +81,8 @@ async def create_browser_cloud_session(
         from browser_use_sdk.v3 import AsyncBrowserUse
     except ImportError as exc:
         raise RuntimeError(
-            "browser-use-sdk is not installed. Reinstall hof-engine so dependencies resolve: pip install -U hof-engine"
+            "browser-use-sdk is not installed. "
+            "Reinstall hof-engine so dependencies resolve: pip install -U hof-engine"
         ) from exc
 
     sse_channel = uuid.uuid4().hex
@@ -146,12 +147,13 @@ async def poll_browser_cloud_session(
     http_timeout_sec: float,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Poll messages until terminal, then finalize Redis + recording. Separate client from create."""
+    """Poll until terminal, finalize Redis + recording. Uses a separate client from create."""
     try:
         from browser_use_sdk.v3 import AsyncBrowserUse
     except ImportError as exc:
         raise RuntimeError(
-            "browser-use-sdk is not installed. Reinstall hof-engine so dependencies resolve: pip install -U hof-engine"
+            "browser-use-sdk is not installed. "
+            "Reinstall hof-engine so dependencies resolve: pip install -U hof-engine"
         ) from exc
 
     client = AsyncBrowserUse(api_key=api_key, timeout=http_timeout_sec)
@@ -181,7 +183,13 @@ async def poll_browser_cloud_session(
 
             sess = await client.sessions.get(session_id)
             st = sess.status.value if sess.status is not None else ""
-            merge_web_session_runtime_fields(session_id, cloud_status=st)
+            step_n = getattr(sess, "step_count", None)
+            step_int = int(step_n) if step_n is not None else None
+            merge_web_session_runtime_fields(
+                session_id,
+                cloud_status=st,
+                cloud_step_count=step_int,
+            )
             if st in _TERMINAL:
                 while True:
                     resp2 = await client.sessions.messages(
@@ -233,18 +241,21 @@ async def poll_browser_cloud_session(
         }
         if on_progress:
             on_progress(ended)
-        _emit_sse(sse_channel, {**ended, "status": "done"})
 
         merged = load_web_session(session_id) or {}
         fin_st = (
             final_session.status.value if final_session.status is not None else ""
         )
+        step_final = getattr(final_session, "step_count", None)
         merged.update(
             {
                 "status": fin_st,
                 "output": out,
                 "recording_urls": recording_urls,
                 "live_url": live_url,
+                "cloud_step_count": int(step_final)
+                if step_final is not None
+                else merged.get("cloud_step_count"),
             }
         )
         if fin_st == "error":
@@ -256,6 +267,8 @@ async def poll_browser_cloud_session(
             if err_txt:
                 merged["failure_message"] = err_txt[:2000]
         save_web_session(session_id, merged)
+        # Emit after persist so ``GET /api/web-sessions/:id`` + resume see terminal state.
+        _emit_sse(sse_channel, {**ended, "status": "done"})
 
         return {
             "session_id": session_id,
@@ -318,7 +331,7 @@ def spawn_browser_poll_background(
     http_timeout_sec: float,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
-    """Run :func:`poll_browser_cloud_session` in a daemon thread (async barrier + resume pattern)."""
+    """Daemon-thread wrapper for :func:`poll_browser_cloud_session` (async browse)."""
 
     def worker() -> None:
         async def _run() -> None:

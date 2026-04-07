@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type WebSessionCanvasProps = {
   sessionId: string;
@@ -23,6 +23,8 @@ type SessionDetail = {
   status_detail?: string | null;
   checkpoint_last?: string | null;
   checkpoint_count?: number;
+  cloud_step_count?: number | null;
+  output?: string | null;
 };
 
 const TERMINAL_PHASES = new Set([
@@ -32,8 +34,53 @@ const TERMINAL_PHASES = new Set([
   "timed_out",
 ]);
 
+function phaseBadgeClass(phase: string): string {
+  switch (phase) {
+    case "running":
+      return "bg-[var(--color-accent,#2383E2)]/12 text-[var(--color-accent,#2383E2)]";
+    case "waiting_for_user":
+      return "bg-[var(--bit-orange,#F4A51C)]/12 text-[var(--bit-orange,#F4A51C)]";
+    case "succeeded":
+      return "bg-[var(--hof-green,#2F7D59)]/12 text-[var(--hof-green,#2F7D59)]";
+    case "failed":
+    case "timed_out":
+      return "bg-[var(--error,#D84B3E)]/10 text-[var(--error,#D84B3E)]";
+    case "cancelled":
+      return "bg-[var(--color-hover,#F7F7F5)] text-[var(--color-secondary,#787774)]";
+    default:
+      return "bg-[var(--color-hover,#F7F7F5)] text-[var(--color-secondary,#787774)]";
+  }
+}
+
+function phaseDotClass(phase: string): string {
+  switch (phase) {
+    case "running":
+      return "bg-[var(--color-accent,#2383E2)]";
+    case "waiting_for_user":
+      return "bg-[var(--bit-orange,#F4A51C)]";
+    case "succeeded":
+      return "bg-[var(--hof-green,#2F7D59)]";
+    case "failed":
+    case "timed_out":
+      return "bg-[var(--error,#D84B3E)]";
+    default:
+      return "bg-[var(--color-tertiary,#C3C2C1)]";
+  }
+}
+
+function lastStepSummary(messages: WireMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    const text = (m.summary ?? m.data ?? "").trim();
+    if (text) {
+      return text.length > 140 ? text.slice(0, 137) + "…" : text;
+    }
+  }
+  return null;
+}
+
 /**
- * Full-page canvas: live Browser Use Cloud iframe + step timeline.
+ * Full-page canvas: live Browser Use Cloud iframe + compact status bar.
  * Polls session detail + messages; optionally listens to ``/api/sse/:channel``.
  */
 export function WebSessionCanvas({
@@ -46,6 +93,7 @@ export function WebSessionCanvas({
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [stopBusy, setStopBusy] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const base = apiPrefix.replace(/\/$/, "");
   const pollUrl = `${base}/api/web-sessions/${encodeURIComponent(sessionId)}/messages`;
   const sessionUrl = `${base}/api/web-sessions/${encodeURIComponent(sessionId)}`;
@@ -116,7 +164,13 @@ export function WebSessionCanvas({
   }, [sseChannel, pollUrl, base, refreshDetail]);
 
   const phase = detail?.phase ?? "";
-  const showStop = detail === null || !TERMINAL_PHASES.has(phase);
+  const isTerminal = TERMINAL_PHASES.has(phase);
+  const showStop = detail === null || !isTerminal;
+  const stepCount =
+    detail?.cloud_step_count ??
+    detail?.checkpoint_count ??
+    messages.length;
+  const lastStep = lastStepSummary(messages);
 
   async function onStop() {
     setStopError(null);
@@ -139,94 +193,97 @@ export function WebSessionCanvas({
     }
   }
 
-  const badgeClass =
-    phase === "waiting_for_user"
-      ? "bg-[var(--bit-orange)]/20 text-foreground"
-      : phase === "failed" || phase === "timed_out"
-        ? "bg-destructive/10 text-destructive"
-        : "bg-muted text-secondary";
-
   return (
-    <div className="flex h-full min-h-[480px] w-full flex-col gap-3">
-      {detail ? (
-        <div className="flex flex-col gap-2 rounded-lg border border-border bg-card px-3 py-2 text-[13px] md:flex-row md:items-start md:justify-between">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
+    <div className="flex h-full min-h-[480px] w-full flex-col">
+      {/* ── Status bar ── */}
+      <div className="flex items-center gap-2.5 border-b border-[var(--color-border,#E9E9E7)] bg-[var(--color-surface,#FBFBFA)] px-3 py-2">
+        {/* Phase badge */}
+        {detail ? (
+          <span
+            className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] font-medium ${phaseBadgeClass(phase)}`}
+          >
+            {phase === "running" ? (
               <span
-                className={`inline-flex rounded px-2 py-0.5 text-[11px] font-medium ${badgeClass}`}
-              >
-                {detail.status_label ?? phase}
-              </span>
-              {typeof detail.checkpoint_count === "number" &&
-              detail.checkpoint_count > 0 ? (
-                <span className="text-tertiary text-[11px]">
-                  {detail.checkpoint_count} step
-                  {detail.checkpoint_count === 1 ? "" : "s"}
-                  {detail.checkpoint_last ? (
-                    <span className="text-secondary">
-                      {" "}
-                      · {detail.checkpoint_last}
-                    </span>
-                  ) : null}
+                className={`inline-block h-1.5 w-1.5 rounded-full ${phaseDotClass(phase)} animate-pulse`}
+              />
+            ) : (
+              <span
+                className={`inline-block h-1.5 w-1.5 rounded-full ${phaseDotClass(phase)}`}
+              />
+            )}
+            {detail.status_label ?? phase}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 rounded bg-[var(--color-hover,#F7F7F5)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-tertiary,#C3C2C1)]">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-tertiary,#C3C2C1)] animate-pulse" />
+            Loading…
+          </span>
+        )}
+
+        {/* Step counter + last step */}
+        {stepCount > 0 ? (
+          <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--color-secondary,#787774)]">
+            <span className="shrink-0 tabular-nums">
+              {stepCount} step{stepCount === 1 ? "" : "s"}
+            </span>
+            {lastStep ? (
+              <>
+                <span className="text-[var(--color-tertiary,#C3C2C1)]">·</span>
+                <span className="min-w-0 truncate text-[var(--color-secondary,#787774)]">
+                  {lastStep}
                 </span>
-              ) : null}
-            </div>
-            {detail.status_detail ? (
-              <p className="text-secondary mt-1 text-[12px] leading-snug">
-                {detail.status_detail}
-              </p>
+              </>
             ) : null}
-          </div>
-          {showStop ? (
-            <div className="flex shrink-0 flex-col items-end gap-1">
-              <button
-                type="button"
-                className="bg-muted text-foreground hover:bg-hover rounded-md px-3 py-1.5 text-[12px] font-medium disabled:opacity-50"
-                disabled={stopBusy}
-                onClick={() => void onStop()}
-              >
-                {stopBusy ? "Stopping…" : "Stop"}
-              </button>
-              {stopError ? (
-                <span className="text-destructive max-w-[240px] text-[11px]">
-                  {stopError}
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-      <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
-        <div className="min-h-[280px] flex-1 overflow-hidden rounded-lg border border-border bg-background">
-          {liveUrl ? (
-            <iframe
-              title="Browser session"
-              src={liveUrl}
-              className="h-full min-h-[280px] w-full border-0"
-              allow="autoplay"
-            />
-          ) : (
-            <div className="text-secondary flex h-full items-center justify-center text-sm">
-              No live preview URL
-            </div>
-          )}
-        </div>
-        <div className="border-border bg-surface/30 flex max-h-[70vh] w-full flex-col gap-1 overflow-y-auto rounded-lg border p-2 text-[12px] md:w-[360px]">
-          <div className="bg-surface/80 text-tertiary sticky top-0 pb-1 text-[10px] font-medium uppercase tracking-wide">
-            Activity
-          </div>
-          {messages.map((m, i) => (
-            <div
-              key={`${sessionId}-m-${i}`}
-              className="border-border/50 bg-background/50 rounded border px-2 py-1.5"
+          </span>
+        ) : null}
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Stop / error */}
+        {showStop ? (
+          <>
+            <button
+              type="button"
+              className="rounded-md bg-[var(--color-hover,#F7F7F5)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-foreground,#37352F)] transition-colors hover:bg-[var(--color-divider,#E9E9E7)]"
+              disabled={stopBusy}
+              onClick={() => void onStop()}
             >
-              <span className="text-tertiary">{String(m.role ?? "")}</span>{" "}
-              <span className="text-secondary">
-                {String(m.summary ?? m.data ?? m.type ?? "")}
+              {stopBusy ? "Stopping…" : "Stop"}
+            </button>
+            {stopError ? (
+              <span className="max-w-[200px] truncate text-[11px] text-[var(--error,#D84B3E)]">
+                {stopError}
               </span>
-            </div>
-          ))}
-        </div>
+            ) : null}
+          </>
+        ) : null}
+
+        {detail?.status_detail && isTerminal ? (
+          <span className="text-[11px] text-[var(--color-secondary,#787774)]">
+            {detail.status_detail}
+          </span>
+        ) : null}
+      </div>
+
+      {/* ── Main area: iframe ── */}
+      <div className="relative min-h-0 flex-1 bg-[var(--color-background,#FFFFFF)]">
+        {liveUrl ? (
+          <iframe
+            ref={iframeRef}
+            title="Browser session"
+            src={liveUrl}
+            className="absolute inset-0 h-full w-full border-0"
+            allow="autoplay"
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center text-[13px] text-[var(--color-tertiary,#C3C2C1)]">
+            No live preview available
+          </div>
+        )}
+
+        {/* Terminal overlay */}
+        {isTerminal && !liveUrl ? null : null}
       </div>
     </div>
   );

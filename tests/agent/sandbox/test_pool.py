@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -232,6 +233,11 @@ class TestOrphanReaper:
         cfg = _sandbox_config()
         pool = get_container_pool(cfg)
 
+        # Orphan reaping + pre-warming run in a background thread; wait for it.
+        for t in threading.enumerate():
+            if t.name == "hof-sandbox-init":
+                t.join(timeout=5)
+
         label_filter_calls = [c for c in client.containers.list.call_args_list if "label" in str(c)]
         assert len(label_filter_calls) >= 1
 
@@ -252,6 +258,12 @@ class TestOrphanReaper:
 
         cfg = _sandbox_config()
         pool1 = get_container_pool(cfg)
+
+        # Wait for background init thread to finish before resetting mock.
+        for t in threading.enumerate():
+            if t.name == "hof-sandbox-init":
+                t.join(timeout=5)
+
         client.containers.list.reset_mock()
 
         pool2 = get_container_pool(cfg)
@@ -279,6 +291,11 @@ class TestAtexitHandler:
         pool = get_container_pool(cfg)
 
         mock_atexit.register.assert_called_once()
+
+        # Wait for background init before shutdown to avoid thread races.
+        for t in threading.enumerate():
+            if t.name == "hof-sandbox-init":
+                t.join(timeout=5)
 
         pool.shutdown()
         _reset_module_state()

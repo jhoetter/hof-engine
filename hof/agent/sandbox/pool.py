@@ -4,11 +4,15 @@ Lifecycle guarantees
 --------------------
 * **Startup orphan reaper** — ``_reap_orphans()`` removes every ``hof-sandbox-*``
   container from previous processes so they never accumulate across restarts.
+  Runs in a **background thread** so it never blocks the first request.
 * **atexit handler** — ``shutdown()`` is registered via :func:`atexit.register`
   so idle *and* in-use containers are cleaned up on graceful exit.
 * **Background reaper** — a daemon thread periodically evicts idle containers
   that exceed ``pool_max_idle_sec`` even when no ``acquire``/``release`` traffic
   flows through the pool.
+* **Background pre-warming** — right after pool creation, ``ensure_pool()``
+  runs in a background thread so warm containers are ready before the first
+  request, without blocking ``get_container_pool()``.
 * **Docker labels** — every container is tagged with ``hof.sandbox=true`` and a
   per-pool ``hof.sandbox.pool_id`` so the reaper can filter efficiently.
 """
@@ -16,6 +20,7 @@ Lifecycle guarantees
 from __future__ import annotations
 
 import atexit
+import concurrent.futures
 import logging
 import threading
 import time
@@ -86,19 +91,40 @@ class ContainerPool:
     # -- public API -----------------------------------------------------------
 
     def ensure_pool(self) -> None:
-        """Create idle containers up to ``pool_size`` (best-effort)."""
+        """Create idle containers up to ``pool_size`` (best-effort, parallel)."""
         with self._lock:
             if self._shutdown:
                 return
             self._reap_idle_unlocked()
             need = self._pool_size - len(self._idle)
-            for _ in range(max(0, need)):
+        if need <= 0:
+            return
+        if need == 1:
+            try:
+                pc = self._create_container_unlocked()
+                with self._lock:
+                    if not self._shutdown:
+                        self._idle.append(pc)
+                    else:
+                        self._destroy_container_quiet(pc)
+            except Exception:
+                logger.exception("sandbox pool: failed to create container")
+            return
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=need,
+            thread_name_prefix="hof-sandbox-warm",
+        ) as ex:
+            futs = [ex.submit(self._create_container_unlocked) for _ in range(need)]
+            for fut in concurrent.futures.as_completed(futs):
                 try:
-                    pc = self._create_container_unlocked()
-                    self._idle.append(pc)
+                    pc = fut.result()
+                    with self._lock:
+                        if not self._shutdown:
+                            self._idle.append(pc)
+                        else:
+                            self._destroy_container_quiet(pc)
                 except Exception:
                     logger.exception("sandbox pool: failed to create container")
-                    break
 
     def acquire(self) -> _PooledContainer:
         """Return a container handle; may create one synchronously if pool empty."""
@@ -353,6 +379,16 @@ def _atexit_shutdown() -> None:
             pass
 
 
+def _background_orphan_reap_and_warm(image: str, pool: ContainerPool) -> None:
+    """Run orphan cleanup then pre-warm the pool, all off the request path."""
+    _reap_orphans(image)
+    _reap_orphans_by_name()
+    try:
+        pool.ensure_pool()
+    except Exception:
+        logger.debug("sandbox pool: background pre-warm failed", exc_info=True)
+
+
 def get_container_pool(config: Any) -> ContainerPool:
     """Return a process-wide pool for the given resolved :class:`SandboxConfig`."""
     global _global_pool, _global_pool_key, _atexit_registered
@@ -371,13 +407,8 @@ def get_container_pool(config: Any) -> ContainerPool:
         old_pool = _global_pool
 
         first_pool = old_pool is None and not _atexit_registered
-        if first_pool:
-            _reap_orphans(config.image)
-            _reap_orphans_by_name()
-            atexit.register(_atexit_shutdown)
-            _atexit_registered = True
 
-        _global_pool = ContainerPool(
+        pool = ContainerPool(
             image=config.image,
             pool_size=config.pool_size,
             network_mode=config.network_mode,
@@ -386,11 +417,31 @@ def get_container_pool(config: Any) -> ContainerPool:
             cpu_quota=config.cpu_quota,
             pool_max_idle_sec=config.pool_max_idle_sec,
         )
+        _global_pool = pool
         _global_pool_key = key
-        _global_pool.start_reaper()
+        pool.start_reaper()
+
+        if first_pool:
+            atexit.register(_atexit_shutdown)
+            _atexit_registered = True
+            t = threading.Thread(
+                target=_background_orphan_reap_and_warm,
+                args=(config.image, pool),
+                daemon=True,
+                name="hof-sandbox-init",
+            )
+            t.start()
+        else:
+            t = threading.Thread(
+                target=pool.ensure_pool,
+                daemon=True,
+                name="hof-sandbox-warm",
+            )
+            t.start()
+
         if old_pool is not None:
             old_pool.shutdown()
-        return _global_pool
+        return pool
 
 
 def _reset_module_state() -> None:

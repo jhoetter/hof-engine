@@ -349,6 +349,8 @@ export type HofAgentChatProps = {
   initialAgentMode?: AgentMode;
   /** Merged into ``agent_resume_plan_clarification`` POST body. Defaults to ``prepareAgentResumeRequest``. */
   prepareAgentResumePlanClarificationRequest?: () => Promise<Record<string, unknown>>;
+  /** Fired for each ``mutation_applied`` stream event with the tool name and parsed arguments. */
+  onMutationApplied?: (name: string, args: Record<string, unknown>) => void;
 };
 
 export type AgentMode = "instant" | "plan";
@@ -496,6 +498,7 @@ export function HofAgentChatProvider({
   onAssistantMarkdownLinkClick,
   initialAgentMode = "instant",
   prepareAgentResumePlanClarificationRequest,
+  onMutationApplied,
   children,
 }: HofAgentChatProviderProps) {
   const [thread, setThread] = useState<ThreadItem[]>([]);
@@ -1711,6 +1714,23 @@ export function HofAgentChatProvider({
             setPlanBuiltinToolActive(null);
           }
           if (rtyp === "resume_start") {
+            if (onMutationApplied) {
+              for (const snap of outcomeSnapshot) {
+                if (snap.approved) {
+                  const det = pendingDetailsRef.current.get(snap.pendingId);
+                  const fnName = det?.name ?? "";
+                  if (fnName) {
+                    const rawArgs = det?.arguments_json ?? "{}";
+                    try {
+                      const parsed = JSON.parse(rawArgs);
+                      onMutationApplied(fnName, typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {});
+                    } catch {
+                      onMutationApplied(fnName, {});
+                    }
+                  }
+                }
+              }
+            }
             resumeMergeContinuationRef.current =
               (ev as { continuation?: unknown }).continuation === true;
             assistantStreamPhaseRef.current = null;

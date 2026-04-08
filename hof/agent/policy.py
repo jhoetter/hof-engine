@@ -85,6 +85,7 @@ class MutationPreviewResult:
     data: dict[str, Any] | None = None
     post_apply_review: PostApplyReviewHint | None = None
     status_hint: str | None = None
+    cli_line: str | None = None
 
 
 # validated mutation arguments -> preview envelope or legacy flat dict (wrapped by stream)
@@ -165,6 +166,8 @@ def mutation_preview_to_wire(
             d["post_apply_review"] = pr
         if result.status_hint:
             d["status_hint"] = result.status_hint
+        if result.cli_line:
+            d["cli_line"] = result.cli_line
         return d
     # Legacy: flat dict from older apps — expose as opaque data with a generated summary line
     raw = dict(result)

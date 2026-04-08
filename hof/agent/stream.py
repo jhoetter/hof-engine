@@ -559,6 +559,8 @@ def _try_coerce_terminal_exec_mutation_events(
     cap = _cli_line_cap_for_tool(fname, max_cli_line_chars)
     cli_line = format_cli_line(fname, args_wire, max_cli_line_chars=cap)
     preview = inner.get("preview")
+    if isinstance(preview, dict) and preview.get("cli_line"):
+        cli_line = str(preview["cli_line"])
     mp_ev: dict[str, Any] = {
         "type": "mutation_pending",
         "run_id": run_id,
@@ -3230,13 +3232,16 @@ def _run_agent_llm_tool_loop(
                         if preview is not None:
                             ph_obj["preview"] = preview
                         placeholder = json.dumps(ph_obj)
+                        effective_cli = cli
+                        if isinstance(preview, dict) and preview.get("cli_line"):
+                            effective_cli = str(preview["cli_line"])
                         mp_ev: dict[str, Any] = {
                             "type": "mutation_pending",
                             "run_id": run_id,
                             "pending_id": pid,
                             "name": name,
                             "arguments": args_wire[:12000],
-                            "cli_line": cli,
+                            "cli_line": effective_cli,
                             "tool_call_id": tid,
                         }
                         if preview is not None:

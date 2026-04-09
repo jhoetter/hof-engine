@@ -71,7 +71,8 @@
     "skillParamPair": "{{name}}{{suffix}}",
     "skillParamRequiredSuffix": " (erforderlich)",
     "skillParamOptionalSuffix": " (optional)",
-    "skillCloseSkillDetailsAria": "Fähigkeitsdetails schließen"
+    "skillCloseSkillDetailsAria": "Fähigkeitsdetails schließen",
+    "requestFailed": "Anfrage fehlgeschlagen"
   },
   "conversation": {
     "newConversation": "Neues Gespräch",
@@ -138,7 +139,9 @@
     "stepCountPlural": "{{count}} Schritte",
     "stop": "Anhalten",
     "stopping": "Wird angehalten…",
-    "stopFailed": "Anhalten fehlgeschlagen ({{status}})"
+    "stopFailed": "Anhalten fehlgeschlagen ({{status}})",
+    "iframeTitle": "Browser-Sitzung",
+    "noLivePreview": "Keine Live-Vorschau verfügbar"
   },
   "markdown": {
     "copyCode": "Code kopieren",

@@ -279,14 +279,14 @@ export function WebSessionCanvas({
         {liveUrl ? (
           <iframe
             ref={iframeRef}
-            title="Browser session"
+            title={t("webSession.iframeTitle")}
             src={liveUrl}
             className="absolute inset-0 h-full w-full border-0"
             allow="autoplay"
           />
         ) : (
           <div className="flex h-full items-center justify-center text-[13px] text-[var(--color-tertiary,#C3C2C1)]">
-            No live preview available
+            {t("webSession.noLivePreview")}
           </div>
         )}
 

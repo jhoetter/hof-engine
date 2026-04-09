@@ -1,20 +1,26 @@
 "use client";
 
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../reactI18nextStableOpts";
+
 /**
  * Placeholder while `hof_builtin_present_plan_clarification` runs (barrier not yet applied).
  * Matches the shell of {@link HofAgentPlanClarificationCard} review/active layout.
  */
 export function HofAgentPlanClarificationCardSkeleton() {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   return (
     <div
       className="scroll-my-4 rounded-lg border border-border bg-surface p-3 shadow-sm [overflow-anchor:none] contain-layout"
       data-hof-plan-clarification-card=""
       data-hof-plan-clarification-mode="pending"
       aria-busy="true"
-      aria-label="Preparing questions"
+      aria-label={t("planDiscover.generatingQuestions")}
     >
       <div className="mb-3 flex items-center justify-between gap-2">
-        <p className="text-[13px] font-semibold text-foreground">Questions</p>
+        <p className="text-[13px] font-semibold text-foreground">
+          {t("clarification.questions")}
+        </p>
         <span className="h-3 w-14 animate-pulse rounded bg-hover" aria-hidden />
       </div>
       <div className="space-y-3">

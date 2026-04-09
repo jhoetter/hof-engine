@@ -547,7 +547,9 @@ export function HofAgentComposer({
         setSkillsData(d);
       })
       .catch((e: unknown) => {
-        setSkillsErr(e instanceof Error ? e.message : "Request failed");
+        setSkillsErr(
+          e instanceof Error ? e.message : t("composer.requestFailed"),
+        );
       })
       .finally(() => {
         setSkillsLoading(false);

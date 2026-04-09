@@ -71,7 +71,8 @@
     "skillParamPair": "{{name}}{{suffix}}",
     "skillParamRequiredSuffix": " (required)",
     "skillParamOptionalSuffix": " (optional)",
-    "skillCloseSkillDetailsAria": "Close skill details"
+    "skillCloseSkillDetailsAria": "Close skill details",
+    "requestFailed": "Request failed"
   },
   "conversation": {
     "newConversation": "New conversation",
@@ -138,7 +139,9 @@
     "stepCountPlural": "{{count}} steps",
     "stop": "Stop",
     "stopping": "Stopping…",
-    "stopFailed": "Stop failed ({{status}})"
+    "stopFailed": "Stop failed ({{status}})",
+    "iframeTitle": "Browser session",
+    "noLivePreview": "No live preview available"
   },
   "markdown": {
     "copyCode": "Copy code",

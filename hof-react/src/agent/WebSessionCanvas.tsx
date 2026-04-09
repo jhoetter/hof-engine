@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../reactI18nextStableOpts";
 
 export type WebSessionCanvasProps = {
   sessionId: string;
@@ -89,6 +91,7 @@ export function WebSessionCanvas({
   sseChannel,
   apiPrefix = "",
 }: WebSessionCanvasProps) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const [messages, setMessages] = useState<WireMessage[]>([]);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [stopBusy, setStopBusy] = useState(false);
@@ -181,8 +184,11 @@ export function WebSessionCanvas({
         { method: "POST" },
       );
       if (!r.ok) {
-        const t = await r.text();
-        setStopError(t || `Stop failed (${r.status})`);
+        const errText = await r.text();
+        setStopError(
+          errText ||
+            t("webSession.stopFailed", { status: String(r.status) }),
+        );
         return;
       }
       await refreshDetail();
@@ -216,7 +222,7 @@ export function WebSessionCanvas({
         ) : (
           <span className="inline-flex items-center gap-1.5 rounded bg-[var(--color-hover,#F7F7F5)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-tertiary,#C3C2C1)]">
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-tertiary,#C3C2C1)] animate-pulse" />
-            Loading…
+            {t("webSession.loading")}
           </span>
         )}
 
@@ -224,7 +230,9 @@ export function WebSessionCanvas({
         {stepCount > 0 ? (
           <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--color-secondary,#787774)]">
             <span className="shrink-0 tabular-nums">
-              {stepCount} step{stepCount === 1 ? "" : "s"}
+              {stepCount === 1
+                ? t("webSession.stepCount", { count: stepCount })
+                : t("webSession.stepCountPlural", { count: stepCount })}
             </span>
             {lastStep ? (
               <>
@@ -249,7 +257,7 @@ export function WebSessionCanvas({
               disabled={stopBusy}
               onClick={() => void onStop()}
             >
-              {stopBusy ? "Stopping…" : "Stop"}
+              {stopBusy ? t("webSession.stopping") : t("webSession.stop")}
             </button>
             {stopError ? (
               <span className="max-w-[200px] truncate text-[11px] text-[var(--error,#D84B3E)]">
@@ -271,14 +279,14 @@ export function WebSessionCanvas({
         {liveUrl ? (
           <iframe
             ref={iframeRef}
-            title="Browser session"
+            title={t("webSession.iframeTitle")}
             src={liveUrl}
             className="absolute inset-0 h-full w-full border-0"
             allow="autoplay"
           />
         ) : (
           <div className="flex h-full items-center justify-center text-[13px] text-[var(--color-tertiary,#C3C2C1)]">
-            No live preview available
+            {t("webSession.noLivePreview")}
           </div>
         )}
 

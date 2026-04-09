@@ -22,6 +22,9 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../reactI18nextStableOpts";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import {
   fetchAgentTools,
@@ -123,36 +126,35 @@ const SKILLS_DIALOG_SCRIM_CLASS =
 const SKILLS_DIALOG_PANEL_CLASS =
   "relative z-[1] flex h-[min(calc(100vh-1.5rem),52rem)] w-[min(100vw-1.5rem,56rem)] max-w-full flex-col overflow-hidden rounded-lg border border-border bg-background font-sans text-foreground shadow-lg";
 
-const REQUIRES_APPROVAL_LABEL = "Requires approval";
-
 type VoiceBannerVariant = "setup" | "connecting" | "live";
 
 function voiceBannerContent(
   state: AgentVoiceTranscriptionState,
+  t: TFunction<"hofEngine">,
 ): { title: string; body: string; variant: VoiceBannerVariant } | null {
   switch (state) {
     case "preparing_mic":
       return {
-        title: "Allow the microphone",
-        body: "If your browser shows a prompt, choose Allow. Audio is only used to fill this message.",
+        title: t("composer.voiceAllowMicTitle"),
+        body: t("composer.voiceAllowMicBody"),
         variant: "setup",
       };
     case "linking_session":
       return {
-        title: "Almost ready",
-        body: "Connecting to live transcription. This often takes a few seconds.",
+        title: t("composer.voiceAlmostReadyTitle"),
+        body: t("composer.voiceAlmostReadyBody"),
         variant: "connecting",
       };
     case "listening":
       return {
-        title: "Listening",
-        body: "Speak at a normal volume. Text appears after a short pause. Tap the mic again when you're done.",
+        title: t("composer.voiceListeningTitle"),
+        body: t("composer.voiceListeningBody"),
         variant: "live",
       };
     case "finalizing":
       return {
-        title: "Finishing transcription",
-        body: "Your microphone is off. We are sending the last audio so nothing is cut off.",
+        title: t("composer.voiceFinishingTitle"),
+        body: t("composer.voiceFinishingBody"),
         variant: "connecting",
       };
     default:
@@ -188,7 +190,10 @@ function SkillSection({ label, source }: { label: string; source: string }) {
   );
 }
 
-function toolParameterSummary(parameters: unknown): string {
+function toolParameterSummary(
+  parameters: unknown,
+  t: TFunction<"hofEngine">,
+): string {
   if (!parameters || typeof parameters !== "object") {
     return "";
   }
@@ -198,7 +203,7 @@ function toolParameterSummary(parameters: unknown): string {
   };
   const keys = Object.keys(p.properties ?? {});
   if (keys.length === 0) {
-    return "No parameters.";
+    return t("composer.skillParamNone");
   }
   const reqRaw = p.required;
   const required = new Set(
@@ -207,20 +212,30 @@ function toolParameterSummary(parameters: unknown): string {
       : [],
   );
   return keys
-    .map((k) => `${k}${required.has(k) ? " (required)" : " (optional)"}`)
+    .map((k) =>
+      t("composer.skillParamPair", {
+        name: k,
+        suffix: required.has(k)
+          ? t("composer.skillParamRequiredSuffix")
+          : t("composer.skillParamOptionalSuffix"),
+      }),
+    )
     .join(", ");
 }
 
-function skillSearchHaystack(t: AgentToolInfo): string {
+function skillSearchHaystack(
+  tool: AgentToolInfo,
+  tr: TFunction<"hofEngine">,
+): string {
   const parts = [
-    t.name,
-    humanizeToolName(t.name),
-    t.tool_summary,
-    t.description,
-    t.when_to_use,
-    t.when_not_to_use,
-    ...t.related_tools,
-    toolParameterSummary(t.parameters),
+    tool.name,
+    humanizeToolName(tool.name),
+    tool.tool_summary,
+    tool.description,
+    tool.when_to_use,
+    tool.when_not_to_use,
+    ...tool.related_tools,
+    toolParameterSummary(tool.parameters, tr),
   ];
   return parts.join("\n").toLowerCase();
 }
@@ -228,24 +243,25 @@ function skillSearchHaystack(t: AgentToolInfo): string {
 function filterToolsBySearchQuery(
   tools: AgentToolInfo[],
   query: string,
+  tr: TFunction<"hofEngine">,
 ): AgentToolInfo[] {
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) {
     return tools;
   }
-  return tools.filter((t) => {
-    const hay = skillSearchHaystack(t);
+  return tools.filter((tool) => {
+    const hay = skillSearchHaystack(tool, tr);
     return words.every((w) => hay.includes(w));
   });
 }
 
 /** One-line preview for the condensed list (no markdown rendering). */
-function skillListPreviewLine(t: AgentToolInfo): string {
-  const summary = t.tool_summary.trim();
+function skillListPreviewLine(tool: AgentToolInfo): string {
+  const summary = tool.tool_summary.trim();
   if (summary) {
     return summary.length <= 140 ? summary : `${summary.slice(0, 137)}…`;
   }
-  const d = prepareSkillMarkdownField(t.description);
+  const d = prepareSkillMarkdownField(tool.description);
   const firstLine = d.split("\n").find((l) => l.trim()) ?? "";
   const plain = firstLine
     .replace(/\*\*([^*]+)\*\*/g, "$1")
@@ -258,27 +274,28 @@ function skillListPreviewLine(t: AgentToolInfo): string {
 }
 
 function SkillDetailPanel({
-  tool: t,
+  tool,
   onBack,
 }: {
   tool: AgentToolInfo;
   onBack: () => void;
 }) {
-  const descPrepared = prepareSkillMarkdownField(t.description);
-  const whenPrepared = prepareSkillMarkdownField(t.when_to_use);
-  const whenNotPrepared = prepareSkillMarkdownField(t.when_not_to_use);
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
+  const descPrepared = prepareSkillMarkdownField(tool.description);
+  const whenPrepared = prepareSkillMarkdownField(tool.when_to_use);
+  const whenNotPrepared = prepareSkillMarkdownField(tool.when_not_to_use);
   const whenSource = isGuidanceRedundantInDescription(
     descPrepared,
     whenPrepared,
   )
     ? ""
-    : t.when_to_use;
+    : tool.when_to_use;
   const whenNotSource = isGuidanceRedundantInDescription(
     descPrepared,
     whenNotPrepared,
   )
     ? ""
-    : t.when_not_to_use;
+    : tool.when_not_to_use;
 
   const descForDisplay = stripGuidanceParagraphsForStructuredSections(
     descPrepared,
@@ -294,34 +311,34 @@ function SkillDetailPanel({
         <button
           type="button"
           className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-secondary hover:bg-hover hover:text-foreground"
-          aria-label="Close details"
+          aria-label={t("composer.closeDetailsAria")}
           onClick={onBack}
         >
           <X className="size-5" strokeWidth={2} aria-hidden />
         </button>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-foreground">
-            {humanizeToolName(t.name)}
+            {humanizeToolName(tool.name)}
           </div>
         </div>
-        {t.mutation ? (
+        {tool.mutation ? (
           <span className="max-w-[9rem] shrink-0 rounded bg-hover px-1.5 py-0.5 text-center text-[10px] font-medium leading-tight text-secondary sm:max-w-none">
-            {REQUIRES_APPROVAL_LABEL}
+            {t("composer.skillsRequiresApproval")}
           </span>
         ) : null}
       </div>
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-        <SkillSection label="Summary" source={t.tool_summary} />
-        <SkillSection label="Description" source={descForDisplay} />
-        <SkillSection label="When to use" source={whenSource} />
-        <SkillSection label="When not to use" source={whenNotSource} />
-        {t.related_tools.length > 0 ? (
+        <SkillSection label={t("composer.skillSummaryHeading")} source={tool.tool_summary} />
+        <SkillSection label={t("composer.skillDescriptionHeading")} source={descForDisplay} />
+        <SkillSection label={t("composer.skillWhenToUseHeading")} source={whenSource} />
+        <SkillSection label={t("composer.skillWhenNotToUseHeading")} source={whenNotSource} />
+        {tool.related_tools.length > 0 ? (
           <div>
             <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-tertiary">
-              Typical next steps
+              {t("composer.skillTypicalNextSteps")}
             </h4>
             <div className="flex flex-wrap gap-1.5">
-              {t.related_tools.map((r) => (
+              {tool.related_tools.map((r) => (
                 <span
                   key={r}
                   className="rounded-md border border-border bg-background px-2 py-0.5 font-mono text-[11px] text-foreground"
@@ -334,10 +351,10 @@ function SkillDetailPanel({
         ) : null}
         <div>
           <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-tertiary">
-            Parameters
+            {t("composer.skillParametersHeading")}
           </h4>
           <p className="text-[12px] leading-relaxed text-secondary">
-            {toolParameterSummary(t.parameters)}
+            {toolParameterSummary(tool.parameters, t)}
           </p>
         </div>
       </div>
@@ -354,6 +371,7 @@ export function HofAgentComposer({
   voiceTranscription: voiceTranscriptionProp,
   extraAttachMenuItems,
 }: HofAgentComposerProps) {
+  const { t, i18n } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const {
     input,
     setInput,
@@ -398,9 +416,9 @@ export function HofAgentComposer({
       Math.ceil((providerWaitNotice.deadlineMs - Date.now()) / 1000),
     );
     return rem > 0
-      ? `Temporary issue reaching the AI service — retrying automatically in ${rem}s. Nothing for you to do.`
-      : "Temporary issue reaching the AI service — retrying now. Nothing for you to do.";
-  }, [providerWaitNotice, providerWaitComposerTick]); // tick drives countdown refresh
+      ? t("composer.providerWaitRetryIn", { seconds: rem })
+      : t("composer.providerWaitRetryNow");
+  }, [providerWaitNotice, providerWaitComposerTick, t, i18n.language]); // tick drives countdown refresh
 
   const voiceCfg = voiceTranscriptionProp ?? {};
   const voiceFeatureEnabled = voiceCfg.enabled !== false;
@@ -439,7 +457,7 @@ export function HofAgentComposer({
     voiceState === "linking_session" ||
     voiceState === "finalizing";
   const voiceBanner = voiceFeatureEnabled
-    ? voiceBannerContent(voiceState)
+    ? voiceBannerContent(voiceState, t)
     : null;
   const showVoiceButton = voiceFeatureEnabled && voiceState !== "unsupported";
 
@@ -529,7 +547,9 @@ export function HofAgentComposer({
         setSkillsData(d);
       })
       .catch((e: unknown) => {
-        setSkillsErr(e instanceof Error ? e.message : "Request failed");
+        setSkillsErr(
+          e instanceof Error ? e.message : t("composer.requestFailed"),
+        );
       })
       .finally(() => {
         setSkillsLoading(false);
@@ -563,8 +583,8 @@ export function HofAgentComposer({
     if (!skillsData?.tools?.length) {
       return [];
     }
-    return filterToolsBySearchQuery(skillsData.tools, skillsSearchQuery);
-  }, [skillsData, skillsSearchQuery]);
+    return filterToolsBySearchQuery(skillsData.tools, skillsSearchQuery, t);
+  }, [skillsData, skillsSearchQuery, t, i18n.language]);
 
   useEffect(() => {
     if (!skillsSelectedTool) {
@@ -681,12 +701,12 @@ export function HofAgentComposer({
         }}
         placeholder={
           voiceState === "finalizing"
-            ? "Wrapping up the last words…"
+            ? t("composer.placeholderWrappingUp")
             : voiceIsLive
-              ? "Transcript appears here while you speak…"
+              ? t("composer.placeholderTranscript")
               : voiceConnecting
-                ? "Preparing voice input…"
-                : "How can I help you?"
+                ? t("composer.placeholderPreparingVoice")
+                : t("composer.placeholderDefault")
         }
         disabled={inputLocked}
         className="min-h-9 min-w-0 w-full resize-none overflow-y-auto rounded-md border-0 bg-transparent px-1 py-0.5 text-sm leading-snug text-foreground shadow-none placeholder:text-secondary outline-none ring-0 focus:outline-none focus:ring-0 disabled:opacity-60 read-only:opacity-100"
@@ -703,13 +723,13 @@ export function HofAgentComposer({
             type="button"
             disabled={busy}
             className="rounded-md border border-border bg-surface px-2 py-0.5 text-[11px] font-medium text-secondary transition-colors hover:bg-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-            aria-label="Switch to Plan mode"
+            aria-label={t("composer.tryPlanModeAria")}
             onClick={() => {
               setAgentMode("plan");
               setModeMenuOpen(false);
             }}
           >
-            Try Plan mode
+            {t("composer.tryPlanMode")}
           </button>
         </div>
       ) : null}
@@ -720,7 +740,7 @@ export function HofAgentComposer({
               type="button"
               disabled={inputLocked}
               className={squareIconBtnClass}
-              aria-label="Add to message"
+              aria-label={t("composer.addToMessage")}
               aria-expanded={attachMenuOpen}
               aria-haspopup="menu"
               onClick={() => {
@@ -738,7 +758,7 @@ export function HofAgentComposer({
             <div
               className="absolute bottom-full left-0 z-50 mb-1 min-w-[13rem] rounded-lg border border-border bg-background py-1 font-sans shadow-lg"
               role="menu"
-              aria-label="Composer actions"
+              aria-label={t("composer.composerActionsAria")}
             >
               <button
                 type="button"
@@ -752,7 +772,7 @@ export function HofAgentComposer({
                   strokeWidth={2}
                   aria-hidden
                 />
-                <span>Attach document</span>
+                <span>{t("composer.attachDocument")}</span>
               </button>
               <button
                 type="button"
@@ -766,7 +786,7 @@ export function HofAgentComposer({
                   strokeWidth={2}
                   aria-hidden
                 />
-                <span>Show skills</span>
+                <span>{t("composer.showSkills")}</span>
               </button>
               {extraAttachMenuItems
                 ? extraAttachMenuItems({
@@ -782,7 +802,7 @@ export function HofAgentComposer({
             <button
               type="button"
               disabled={busy}
-              aria-label="Agent mode"
+              aria-label={t("composer.modeMenuAria")}
               aria-haspopup="menu"
               aria-expanded={modeMenuOpen}
               className={`${agentModeTriggerClass} ${modeMenuOpen ? "bg-hover text-foreground" : ""}`}
@@ -797,14 +817,16 @@ export function HofAgentComposer({
                 <List className="size-3 shrink-0" strokeWidth={2} aria-hidden />
               )}
               <span className="min-w-0 flex-1 text-left">
-                {agentMode === "instant" ? "Instant" : "Plan"}
+                {agentMode === "instant"
+                  ? t("composer.instant")
+                  : t("composer.plan")}
               </span>
             </button>
             {modeMenuOpen ? (
               <div
                 className="absolute bottom-full left-0 z-50 mb-1 min-w-[13rem] rounded-lg border border-border bg-background py-1 font-sans shadow-lg"
                 role="menu"
-                aria-label="Agent mode"
+                aria-label={t("composer.modeMenuAria")}
               >
                 <button
                   type="button"
@@ -821,7 +843,7 @@ export function HofAgentComposer({
                     strokeWidth={2}
                     aria-hidden
                   />
-                  <span>Instant</span>
+                  <span>{t("composer.instant")}</span>
                 </button>
                 <button
                   type="button"
@@ -838,7 +860,7 @@ export function HofAgentComposer({
                     strokeWidth={2}
                     aria-hidden
                   />
-                  <span>Plan</span>
+                  <span>{t("composer.plan")}</span>
                 </button>
               </div>
             ) : null}
@@ -856,10 +878,10 @@ export function HofAgentComposer({
               } ${voiceConnecting ? "text-[var(--color-accent)]" : ""}`}
               aria-label={
                 voiceState === "finalizing"
-                  ? "Finishing transcription"
+                  ? t("composer.voiceFinishingAria")
                   : voiceSessionActive
-                    ? "Stop voice input"
-                    : "Start voice input"
+                    ? t("composer.voiceStopAria")
+                    : t("composer.voiceStartAria")
               }
               aria-pressed={voiceSessionActive && voiceState !== "finalizing"}
               onClick={onVoiceToggle}
@@ -883,7 +905,7 @@ export function HofAgentComposer({
               onClick={dismissApprovalBarrier}
               className={sendBtnClass}
             >
-              Cancel approvals
+              {t("composer.cancelApprovals")}
             </button>
           ) : inboxReviewBarrier ? (
             <button
@@ -891,7 +913,7 @@ export function HofAgentComposer({
               onClick={dismissInboxReviewBarrier}
               className={sendBtnClass}
             >
-              Skip inbox wait
+              {t("composer.skipInboxWait")}
             </button>
           ) : webSessionBarrier ? (
             <button
@@ -899,11 +921,11 @@ export function HofAgentComposer({
               onClick={dismissWebSessionBarrier}
               className={sendBtnClass}
             >
-              Skip browser wait
+              {t("composer.skipBrowserWait")}
             </button>
           ) : busy ? (
             <button type="button" onClick={stop} className={sendBtnClass}>
-              Stop
+              {t("composer.stop")}
             </button>
           ) : (
             <button
@@ -912,7 +934,7 @@ export function HofAgentComposer({
               disabled={sendDisabled}
               className={sendBtnClass}
             >
-              {uploadBusy ? "Uploading…" : "Send"}
+              {uploadBusy ? t("composer.uploading") : t("composer.send")}
             </button>
           )}
         </div>
@@ -946,7 +968,9 @@ export function HofAgentComposer({
                     q.filter((x) => x.object_key !== a.object_key),
                   )
                 }
-                aria-label={`Remove ${a.filename}`}
+                aria-label={t("composer.removeAttachment", {
+                  filename: a.filename,
+                })}
               >
                 <X className="size-3.5" />
               </button>
@@ -1012,7 +1036,7 @@ export function HofAgentComposer({
             <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3">
               <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <span className="text-base font-medium text-foreground">
-                  Agent skills
+                  {t("composer.skillsTitle")}
                 </span>
                 {!skillsLoading &&
                 !skillsErr &&
@@ -1020,8 +1044,13 @@ export function HofAgentComposer({
                 skillsData.tools.length > 0 ? (
                   <span className="tabular-nums text-sm font-normal text-secondary">
                     {skillsSearchQuery.trim()
-                      ? `${filteredSkills.length} of ${skillsData.tools.length}`
-                      : skillsData.tools.length}
+                      ? t("composer.skillsMatchCount", {
+                        filtered: filteredSkills.length,
+                        total: skillsData.tools.length,
+                      })
+                      : t("composer.skillsCountStandalone", {
+                        count: skillsData.tools.length,
+                      })}
                   </span>
                 ) : null}
               </div>
@@ -1030,7 +1059,7 @@ export function HofAgentComposer({
                 className="rounded-md px-2 py-1 text-xs text-secondary hover:bg-hover hover:text-foreground"
                 onClick={closeSkillsDialog}
               >
-                Close
+                {t("composer.skillsClose")}
               </button>
             </div>
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-sm">
@@ -1040,7 +1069,7 @@ export function HofAgentComposer({
                     className="size-4 shrink-0 animate-spin"
                     aria-hidden
                   />
-                  <span>Loading…</span>
+                  <span>{t("composer.skillsLoading")}</span>
                 </div>
               ) : null}
               {!skillsLoading && skillsErr ? (
@@ -1053,7 +1082,7 @@ export function HofAgentComposer({
               skillsData &&
               !skillsData.configured ? (
                 <p className="shrink-0 px-4 py-3 text-secondary">
-                  Agent is not configured on this server.
+                  {t("composer.skillsNotConfigured")}
                 </p>
               ) : null}
               {!skillsLoading &&
@@ -1062,7 +1091,7 @@ export function HofAgentComposer({
               skillsData.configured &&
               skillsData.tools.length === 0 ? (
                 <p className="shrink-0 px-4 py-3 text-secondary">
-                  No tools in the agent allowlist.
+                  {t("composer.skillsNoTools")}
                 </p>
               ) : null}
               {!skillsLoading &&
@@ -1081,8 +1110,8 @@ export function HofAgentComposer({
                         type="search"
                         value={skillsSearchQuery}
                         onChange={(e) => setSkillsSearchQuery(e.target.value)}
-                        placeholder="Search skills…"
-                        aria-label="Search skills"
+                        placeholder={t("composer.skillsSearchPlaceholder")}
+                        aria-label={t("composer.skillsSearchAria")}
                         className="w-full rounded-md border border-border bg-surface py-1.5 pl-8 pr-2 text-sm text-foreground placeholder:text-tertiary outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/35"
                       />
                     </div>
@@ -1090,23 +1119,24 @@ export function HofAgentComposer({
                   <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                     {filteredSkills.length === 0 ? (
                       <p className="p-4 text-[13px] text-secondary">
-                        No skills match your search.
+                        {t("composer.skillsNoMatch")}
                       </p>
                     ) : (
                       <ul
                         className="min-h-0 flex-1 list-none space-y-0.5 overflow-y-auto overflow-x-hidden overscroll-contain p-2 [scrollbar-gutter:stable]"
                         role="listbox"
                       >
-                        {filteredSkills.map((t) => {
-                          const preview = skillListPreviewLine(t);
-                          const selected = skillsSelectedTool?.name === t.name;
+                        {filteredSkills.map((toolItem) => {
+                          const preview = skillListPreviewLine(toolItem);
+                          const selected =
+                            skillsSelectedTool?.name === toolItem.name;
                           return (
-                            <li key={t.name}>
+                            <li key={toolItem.name}>
                               <button
                                 type="button"
                                 role="option"
                                 aria-selected={selected}
-                                onClick={() => setSkillsSelectedTool(t)}
+                                onClick={() => setSkillsSelectedTool(toolItem)}
                                 className={`flex w-full flex-col gap-1 rounded-md border px-2.5 py-2 text-left transition-colors ${
                                   selected
                                     ? "border-[var(--color-accent)]/40 bg-[var(--color-accent)]/8"
@@ -1115,11 +1145,11 @@ export function HofAgentComposer({
                               >
                                 <div className="flex min-w-0 items-start justify-between gap-2">
                                   <span className="min-w-0 flex-1 text-sm font-medium leading-snug text-foreground">
-                                    {humanizeToolName(t.name)}
+                                    {humanizeToolName(toolItem.name)}
                                   </span>
-                                  {t.mutation ? (
+                                  {toolItem.mutation ? (
                                     <span className="shrink-0 rounded bg-hover px-1.5 py-0.5 text-[10px] font-medium leading-tight text-secondary">
-                                      {REQUIRES_APPROVAL_LABEL}
+                                      {t("composer.skillsRequiresApproval")}
                                     </span>
                                   ) : null}
                                 </div>
@@ -1138,7 +1168,7 @@ export function HofAgentComposer({
                       <>
                         <button
                           type="button"
-                          aria-label="Close skill details"
+                          aria-label={t("composer.skillCloseSkillDetailsAria")}
                           className="absolute inset-0 z-[1] bg-foreground/10 transition-opacity"
                           onClick={() => {
                             setSkillsSelectedTool(null);

@@ -7,6 +7,8 @@ import {
   type KeyboardEvent,
   type ReactElement,
 } from "react";
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../reactI18nextStableOpts";
 import type { PlanClarificationQuestion } from "./conversationTypes";
 
 function optionIdLooksOther(optionId: string): boolean {
@@ -58,6 +60,7 @@ function HofAgentPlanClarificationCardReview({
     selectedLabels: string[];
   }[];
 }): ReactElement | null {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   if (submittedSummary.length === 0) {
     return null;
   }
@@ -68,8 +71,12 @@ function HofAgentPlanClarificationCardReview({
       data-hof-plan-clarification-mode="review"
     >
       <div className="mb-3 flex items-center justify-between gap-2">
-        <p className="text-[13px] font-semibold text-foreground">Questions</p>
-        <span className="text-[11px] text-tertiary">Submitted</span>
+        <p className="text-[13px] font-semibold text-foreground">
+          {t("clarification.questions")}
+        </p>
+        <span className="text-[11px] text-tertiary">
+          {t("clarification.submitted")}
+        </span>
       </div>
       <ul className="space-y-3">
         {submittedSummary.map((row, i) => (
@@ -98,6 +105,7 @@ function HofAgentPlanClarificationCardActive({
   onSubmit: (answers: PlanClarificationAnswerWire[]) => void;
   onSkip?: () => void;
 }): ReactElement | null {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const initial = useMemo(() => {
     const m = new Map<string, Set<string>>();
     for (const q of questions) {
@@ -226,7 +234,9 @@ function HofAgentPlanClarificationCardActive({
       : !allAnswered);
 
   const continueLabel =
-    safePage >= questions.length - 1 ? "Finish" : "Continue";
+    safePage >= questions.length - 1
+      ? t("clarification.finish")
+      : t("clarification.continue");
 
   const onFieldsetKeyDown = (e: KeyboardEvent<HTMLFieldSetElement>) => {
     if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey) {
@@ -261,13 +271,20 @@ function HofAgentPlanClarificationCardActive({
       data-hof-plan-clarification-mode="active"
     >
       <div className="mb-3 flex items-center justify-between gap-2">
-        <p className="text-[13px] font-semibold text-foreground">Questions</p>
+        <p className="text-[13px] font-semibold text-foreground">
+          {t("clarification.questions")}
+        </p>
         {showPager ? (
           <span className="text-[11px] text-tertiary">
-            {safePage + 1} of {totalPages}
+            {t("clarification.pageOf", {
+              current: safePage + 1,
+              total: totalPages,
+            })}
           </span>
         ) : (
-          <span className="text-[11px] text-tertiary">1 of 1</span>
+          <span className="text-[11px] text-tertiary">
+            {t("clarification.pageOf", { current: 1, total: 1 })}
+          </span>
         )}
       </div>
       <fieldset
@@ -321,7 +338,7 @@ function HofAgentPlanClarificationCardActive({
               htmlFor={`clarify-${q.id}-other-text`}
               className="mb-1 block text-[11px] font-medium text-secondary"
             >
-              Please specify
+              {t("clarification.pleaseSpecify")}
             </label>
             <input
               id={`clarify-${q.id}-other-text`}
@@ -331,7 +348,7 @@ function HofAgentPlanClarificationCardActive({
               onChange={(e) =>
                 setOtherTextForQuestion(q.id, e.target.value)
               }
-              placeholder="Your answer…"
+              placeholder={t("clarification.otherPlaceholder")}
               className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-[13px] text-foreground outline-none ring-0 focus:ring-2 focus:ring-[var(--color-accent)]/40 disabled:opacity-60"
             />
           </div>
@@ -345,7 +362,7 @@ function HofAgentPlanClarificationCardActive({
             onClick={() => setPage((p) => Math.max(0, p - 1))}
             className="rounded-md border border-border px-3 py-1.5 text-[12px] text-secondary disabled:opacity-40"
           >
-            Back
+            {t("clarification.back")}
           </button>
         ) : onSkip ? (
           <span />
@@ -360,7 +377,7 @@ function HofAgentPlanClarificationCardActive({
               disabled={busy}
               className="rounded-md px-2 py-1.5 text-[13px] text-secondary hover:text-foreground disabled:opacity-40"
             >
-              Skip
+              {t("clarification.skip")}
             </button>
           ) : null}
           <button

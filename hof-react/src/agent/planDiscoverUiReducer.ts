@@ -4,6 +4,7 @@
  * display strings + UI flags → placement (one surface at a time).
  */
 
+import type { TFunction } from "i18next";
 import {
   isLiveStreamLabel,
   isPlanCardLabel,
@@ -52,6 +53,7 @@ export function computePlanDiscoverUiState(p: {
    * clarify`` — questionnaire-slot status row + skeleton instead of live-stream status row.
    */
   pendingQuestionnaireGeneration?: boolean;
+  t: TFunction<"hofEngine">;
 }): PlanDiscoverUiState {
   if (p.agentMode !== "plan") {
     if (!p.busy) {
@@ -76,8 +78,9 @@ export function computePlanDiscoverUiState(p: {
   }
 
   const dl = p.displayLabel;
+  const { t } = p;
 
-  if (dl && isQuestionnaireLabel(dl)) {
+  if (dl && isQuestionnaireLabel(dl, t)) {
     if (p.hasQuestionnaireCard) {
       return {
         placement: "above_questionnaire",
@@ -92,7 +95,7 @@ export function computePlanDiscoverUiState(p: {
     };
   }
 
-  if (dl && isPlanCardLabel(dl)) {
+  if (dl && isPlanCardLabel(dl, t)) {
     if (p.showPlanCard) {
       return {
         placement: "above_plan",
@@ -107,7 +110,7 @@ export function computePlanDiscoverUiState(p: {
     };
   }
 
-  if (dl && isLiveStreamLabel(dl)) {
+  if (dl && isLiveStreamLabel(dl, t)) {
     return {
       placement: "above_live_stream",
       label: dl,

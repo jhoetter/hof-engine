@@ -11,6 +11,8 @@ import {
   type UIEvent,
 } from "react";
 import { Loader2, MoreHorizontal, Pin } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../reactI18nextStableOpts";
 
 import type { HofAgentConversationOption } from "./HofAgentConversationSelect";
 import { useMenuDismiss } from "./useMenuDismiss";
@@ -54,7 +56,7 @@ export function HofAgentConversationPanel({
   onNew,
   hideNewButton = false,
   className = "",
-  newConversationLabel = "New conversation",
+  newConversationLabel: newConversationLabelProp,
   onTogglePin,
   onRenameConversation,
   onDeleteConversation,
@@ -64,6 +66,9 @@ export function HofAgentConversationPanel({
   listLoading = false,
   listLoadingMore = false,
 }: HofAgentConversationPanelProps) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
+  const newConversationLabel =
+    newConversationLabelProp ?? t("conversation.newConversation");
   const [openMenuForId, setOpenMenuForId] = useState<string | null>(null);
   const menuContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -96,18 +101,18 @@ export function HofAgentConversationPanel({
         className={`min-h-0 flex-1 list-none space-y-0.5 overflow-y-auto overscroll-contain p-2${
           hideNewButton ? " pt-2.5" : ""
         }`}
-        aria-label="Conversations"
+        aria-label={t("conversation.listAria")}
         onScroll={onListScroll}
       >
         {listLoading && sections.every((s) => s.items.length === 0) ? (
           <li className="px-2 py-4 text-center text-sm text-secondary">
-            Loading…
+            {t("conversation.loading")}
           </li>
         ) : null}
         {!listLoading &&
         sections.every((s) => s.items.length === 0) ? (
           <li className="px-2.5 py-3 text-sm text-secondary">
-            No conversations yet.
+            {t("conversation.empty")}
           </li>
         ) : null}
         {sections.map((section) => (
@@ -180,10 +185,11 @@ function ConversationRow({
   pinBusy: boolean;
   closeMenu: () => void;
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const baseId = useId();
   const menuId = `${baseId}-menu`;
   const isActive = c.id === activeId;
-  const label = (c.title?.trim() || "Untitled").slice(0, 200);
+  const label = (c.title?.trim() || t("conversation.untitled")).slice(0, 200);
   const pinned = Boolean(c.pinned);
   const showMenu =
     onTogglePin != null ||
@@ -223,7 +229,9 @@ function ConversationRow({
             <button
               type="button"
               className="flex items-center justify-center rounded-md border-0 bg-transparent p-1.5 text-secondary transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-              aria-label={`More actions for ${label.slice(0, 60)}`}
+              aria-label={t("conversation.moreActionsFor", {
+                title: label.slice(0, 60),
+              })}
               aria-expanded={menuOpen}
               aria-haspopup="menu"
               aria-controls={menuOpen ? menuId : undefined}
@@ -245,7 +253,7 @@ function ConversationRow({
                 id={menuId}
                 className="absolute right-0 top-full z-50 mt-0.5 min-w-[10.5rem] rounded-lg border border-border bg-background py-1 font-sans shadow-lg"
                 role="menu"
-                aria-label="Conversation actions"
+                aria-label={t("conversation.rowMenuAria")}
               >
                 {onTogglePin ? (
                   <button
@@ -258,7 +266,7 @@ function ConversationRow({
                       closeMenu();
                     }}
                   >
-                    {pinned ? "Unpin" : "Pin"}
+                    {pinned ? t("conversation.unpin") : t("conversation.pin")}
                   </button>
                 ) : null}
                 {onRenameConversation ? (
@@ -271,7 +279,7 @@ function ConversationRow({
                       closeMenu();
                     }}
                   >
-                    Rename
+                    {t("conversation.rename")}
                   </button>
                 ) : null}
                 {onDeleteConversation ? (
@@ -285,7 +293,7 @@ function ConversationRow({
                       closeMenu();
                     }}
                   >
-                    Delete
+                    {t("conversation.delete")}
                   </button>
                 ) : null}
               </div>

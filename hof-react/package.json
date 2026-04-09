@@ -11,22 +11,27 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
-    }
+    },
+    "./locales/en/hofEngine.json": "./locales/en/hofEngine.json",
+    "./locales/de/hofEngine.json": "./locales/de/hofEngine.json"
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "locales"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts --clean --external react --external react-dom --external lucide-react",
-    "dev": "tsup src/index.ts --format esm,cjs --dts --watch --external react --external react-dom --external lucide-react",
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean --external react --external react-dom --external lucide-react --external i18next --external react-i18next",
+    "dev": "tsup src/index.ts --format esm,cjs --dts --watch --external react --external react-dom --external lucide-react --external i18next --external react-i18next",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
+    "i18next": ">=23.0.0",
     "lucide-react": ">=0.400.0",
     "react": ">=18.0.0",
-    "react-dom": ">=18.0.0"
+    "react-dom": ">=18.0.0",
+    "react-i18next": ">=13.0.0"
   },
   "dependencies": {
     "ansi_up": "^6.0.6",
@@ -42,8 +47,10 @@
   "devDependencies": {
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "i18next": "^26.0.4",
     "lucide-react": "^0.468.0",
     "react-dom": "^19.0.0",
+    "react-i18next": "^17.0.2",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
     "vitest": "^3.2.4"

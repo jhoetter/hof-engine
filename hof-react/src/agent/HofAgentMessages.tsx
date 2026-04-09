@@ -19,6 +19,8 @@ import {
 } from "./hofAgentChatModel";
 import type { ReactNode } from "react";
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../reactI18nextStableOpts";
 import { useHofAgentChat } from "./hofAgentChatContext";
 import type { ThreadItem } from "./hofAgentChatModel";
 import { HofAgentPlanClarificationCard } from "./HofAgentPlanClarificationCard";
@@ -95,6 +97,7 @@ export function HofAgentMessages({
   assistantMarkdownTableRenderer,
   afterToolTableRenderer,
 }: HofAgentMessagesProps) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const {
     welcomeName,
     thread,
@@ -181,6 +184,7 @@ export function HofAgentMessages({
     showPlanCard: showPlanCard || pendingPlanGeneration,
     liveBlocksLength: liveBlocks.length,
     pendingQuestionnaireGeneration,
+    t,
   });
 
   const questionnaireElapsed = useThinkingEpisodeElapsed(
@@ -188,17 +192,20 @@ export function HofAgentMessages({
       planDiscoverUi.placement === "above_questionnaire" &&
       planDiscoverUi.timerKind === "clarification_generation",
     clarificationGenerationStartedAtMs,
+    t,
   );
   const planCardElapsed = useThinkingEpisodeElapsed(
     busy &&
       planDiscoverUi.placement === "above_plan" &&
       planDiscoverUi.timerKind === "plan_preparation",
     planPreparationStartedAtMs,
+    t,
   );
   const liveStreamElapsed = useThinkingEpisodeElapsed(
     planDiscoverUi.placement === "above_live_stream" &&
       planDiscoverUi.timerKind === "thinking_episode",
     thinkingEpisodeStartedAtMs,
+    t,
   );
 
   /**
@@ -211,6 +218,7 @@ export function HofAgentMessages({
     clarificationVisibleAtMs >= clarificationGenerationStartedAtMs
       ? formatDurationMsForUi(
           clarificationVisibleAtMs - clarificationGenerationStartedAtMs,
+          t,
         )
       : null;
 
@@ -242,6 +250,7 @@ export function HofAgentMessages({
     );
   }, [
     planDiscoverUi,
+    t,
     questionnaireElapsed.liveFormatted,
     questionnaireElapsed.settledFormatted,
     questionnaireDurationFromWallClock,
@@ -515,7 +524,7 @@ export function HofAgentMessages({
             >
               <div className="flex w-full flex-col items-center gap-4 font-sans">
                 <p className="text-center text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
-                  Welcome, {welcomeName}
+                  {t("messages.welcome", { name: welcomeName })}
                 </p>
                 {emptyStateFooter ? (
                   <div className="w-full shrink-0">{emptyStateFooter}</div>

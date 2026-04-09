@@ -1,26 +1,16 @@
 /**
  * Agent chat tracing (labels, lanes, NDJSON types).
  *
- * **Vite dev:** logging is **on by default** (spreadsheet-app resolves `@hof-engine/react` to src).
- * Disable: `localStorage.setItem("hof:agentChatDebug", "0"); location.reload()`
- *
- * **Production / non-Vite:** enable explicitly:
+ * **Opt-in only** — does not write to `console` (keeps demos and dev shells quiet).
+ * Enable extra work (e.g. `ui_snapshot` effect in {@link ./hofAgentChatContext.tsx}):
  *   `localStorage.setItem("hof:agentChatDebug", "1"); location.reload()`
  *
+ * Disable explicitly: `localStorage.setItem("hof:agentChatDebug", "0")`
  * Or URL: `?hofAgentChatDebug=1` (also sets sessionStorage for this tab).
  */
 
 const STORAGE_KEY = "hof:agentChatDebug";
 const URL_PARAM = "hofAgentChatDebug";
-
-function viteDev(): boolean {
-  try {
-    const env = (import.meta as unknown as { env?: { DEV?: boolean } }).env;
-    return env?.DEV === true;
-  } catch {
-    return false;
-  }
-}
 
 function readEnabled(): boolean {
   if (typeof window === "undefined") {
@@ -35,10 +25,6 @@ function readEnabled(): boolean {
       return true;
     }
     if (window.localStorage?.getItem(STORAGE_KEY) === "1") {
-      return true;
-    }
-    // Vite dev: on by default so traces appear without localStorage (spreadsheet-app aliases src).
-    if (viteDev()) {
       return true;
     }
     if (typeof window.location?.search === "string") {
@@ -71,16 +57,17 @@ export function isAgentChatDebugEnabled(): boolean {
   return cached;
 }
 
-/** One-line console trace (no PII: no message bodies, tool args trimmed). */
+/**
+ * Reserved for future hooks (e.g. custom telemetry). Intentionally does not use `console`
+ * so assistant pages stay quiet when debug mode is on.
+ */
 export function agentChatDebugLog(
-  scope: string,
-  payload: Record<string, unknown>,
+  _scope: string,
+  _payload: Record<string, unknown>,
 ): void {
   if (!isAgentChatDebugEnabled()) {
     return;
   }
-  // eslint-disable-next-line no-console
-  console.info(`[HofAgentChat:${scope}]`, payload);
 }
 
 /** NDJSON row from ``agent_chat`` — deltas only log char counts. */

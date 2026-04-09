@@ -1,5 +1,21 @@
-import { describe, expect, it } from "vitest";
+import i18n from "i18next";
+import { beforeAll, describe, expect, it } from "vitest";
+import en from "../../locales/en/hofEngine.json";
 import { computePlanDiscoverUiState } from "./planDiscoverUiReducer";
+
+let t: ReturnType<typeof i18n.getFixedT>;
+
+beforeAll(async () => {
+  await i18n.init({
+    lng: "en",
+    fallbackLng: "en",
+    ns: ["hofEngine"],
+    defaultNS: "hofEngine",
+    resources: { en: { hofEngine: en } },
+    interpolation: { escapeValue: false },
+  });
+  t = i18n.getFixedT("en", "hofEngine");
+});
 
 describe("computePlanDiscoverUiState", () => {
   it("instant: none when idle", () => {
@@ -11,6 +27,7 @@ describe("computePlanDiscoverUiState", () => {
         hasQuestionnaireCard: false,
         showPlanCard: false,
         liveBlocksLength: 0,
+        t,
       }),
     ).toEqual({ placement: "none", label: null, timerKind: null });
   });
@@ -24,6 +41,7 @@ describe("computePlanDiscoverUiState", () => {
         hasQuestionnaireCard: false,
         showPlanCard: false,
         liveBlocksLength: 0,
+        t,
       }),
     ).toEqual({
       placement: "above_live_stream",
@@ -41,6 +59,7 @@ describe("computePlanDiscoverUiState", () => {
         hasQuestionnaireCard: false,
         showPlanCard: false,
         liveBlocksLength: 1,
+        t,
       }),
     ).toEqual({ placement: "none", label: null, timerKind: null });
   });
@@ -54,6 +73,7 @@ describe("computePlanDiscoverUiState", () => {
         hasQuestionnaireCard: true,
         showPlanCard: false,
         liveBlocksLength: 0,
+        t,
       }),
     ).toEqual({
       placement: "above_questionnaire",
@@ -72,6 +92,7 @@ describe("computePlanDiscoverUiState", () => {
         showPlanCard: false,
         liveBlocksLength: 0,
         pendingQuestionnaireGeneration: false,
+        t,
       }),
     ).toEqual({
       placement: "above_live_stream",
@@ -90,6 +111,7 @@ describe("computePlanDiscoverUiState", () => {
         showPlanCard: false,
         liveBlocksLength: 3,
         pendingQuestionnaireGeneration: true,
+        t,
       }),
     ).toEqual({
       placement: "above_questionnaire",
@@ -107,6 +129,7 @@ describe("computePlanDiscoverUiState", () => {
         hasQuestionnaireCard: false,
         showPlanCard: true,
         liveBlocksLength: 0,
+        t,
       }),
     ).toEqual({
       placement: "above_plan",
@@ -124,6 +147,7 @@ describe("computePlanDiscoverUiState", () => {
         hasQuestionnaireCard: false,
         showPlanCard: false,
         liveBlocksLength: 0,
+        t,
       }),
     ).toEqual({
       placement: "above_live_stream",
@@ -141,6 +165,7 @@ describe("computePlanDiscoverUiState", () => {
         hasQuestionnaireCard: false,
         showPlanCard: true,
         liveBlocksLength: 3,
+        t,
       }),
     ).toEqual({ placement: "none", label: null, timerKind: null });
   });
@@ -154,6 +179,7 @@ describe("computePlanDiscoverUiState", () => {
         hasQuestionnaireCard: false,
         showPlanCard: true,
         liveBlocksLength: 0,
+        t,
       }),
     ).toEqual({
       placement: "above_live_stream",

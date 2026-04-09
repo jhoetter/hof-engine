@@ -1,23 +1,27 @@
 "use client";
 
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../reactI18nextStableOpts";
+
 /**
  * Placeholder while `hof_builtin_present_plan` runs (plan text not yet streaming).
  * Matches the shell of {@link HofAgentPlanCard} so the card doesn't pop in from nothing.
  */
 export function HofAgentPlanCardSkeleton() {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   return (
     <div
       className="rounded-lg border border-border bg-surface p-3 shadow-sm"
       data-hof-plan-card=""
       data-hof-plan-card-mode="pending"
       aria-busy="true"
-      aria-label="Preparing plan"
+      aria-label={t("planDiscover.preparingPlan")}
     >
       <div className="mb-3 flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex flex-wrap items-center gap-2">
             <span className="rounded bg-[var(--color-accent)]/10 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-accent)]">
-              Plan
+              {t("planCard.badge")}
             </span>
             <span className="h-3 w-16 animate-pulse rounded bg-hover" aria-hidden />
           </div>

@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronDown, ChevronUp, Circle } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../reactI18nextStableOpts";
 import {
   parseStructuredPlan,
   visiblePlanMarkdownPreview,
@@ -24,6 +26,7 @@ export function HofAgentPlanCard({
   planTodoDoneIndices,
   onExecutePlan,
 }: HofAgentPlanCardProps) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const [viewRawOpen, setViewRawOpen] = useState(false);
   const planForStructure = useMemo(() => {
     if (planPhase === "generating") {
@@ -52,7 +55,7 @@ export function HofAgentPlanCard({
     if (completed) {
       return parsed.todos.length;
     }
-    return parsed.todos.filter((t) => planTodoDoneIndices.includes(t.index))
+    return parsed.todos.filter((todo) => planTodoDoneIndices.includes(todo.index))
       .length;
   }, [parsed.todos, planTodoDoneIndices, completed]);
 
@@ -62,21 +65,31 @@ export function HofAgentPlanCard({
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex flex-wrap items-center gap-2">
             <span className="rounded bg-[var(--color-accent)]/10 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-accent)]">
-              Plan
+              {t("planCard.badge")}
             </span>
             {generating ? (
-              <span className="text-[11px] text-tertiary">Drafting plan</span>
+              <span className="text-[11px] text-tertiary">
+                {t("planCard.drafting")}
+              </span>
             ) : completed ? (
-              <span className="text-[11px] text-tertiary">Completed</span>
+              <span className="text-[11px] text-tertiary">
+                {t("planCard.completed")}
+              </span>
             ) : executing ? (
               <span className="text-[11px] text-tertiary">
-                Executing — {doneCount} of {parsed.todos.length}{" "}
-                {parsed.todos.length === 1 ? "step" : "steps"} done
+                {t("planCard.executingProgress", {
+                  done: doneCount,
+                  total: parsed.todos.length,
+                  stepsLabel:
+                    parsed.todos.length === 1
+                      ? t("planCard.stepSingular")
+                      : t("planCard.stepPlural"),
+                })}
               </span>
             ) : null}
           </div>
           <h3 className="text-[15px] font-semibold leading-snug text-foreground">
-            {parsed.title || "Plan"}
+            {parsed.title || t("planCard.fallbackTitle")}
           </h3>
         </div>
       </div>
@@ -94,20 +107,28 @@ export function HofAgentPlanCard({
       >
         <p className="mb-2 text-[11px] font-medium text-secondary">
           {generating
-            ? "Building checklist…"
+            ? t("planCard.buildingChecklist")
             : completed
-              ? `Progress (${doneCount}/${parsed.todos.length})`
+              ? t("planCard.progress", {
+                  done: doneCount,
+                  total: parsed.todos.length,
+                })
               : executing
-                ? `Progress (${doneCount}/${parsed.todos.length})`
-                : `${parsed.todos.length} To-do${parsed.todos.length === 1 ? "" : "s"}`}
+                ? t("planCard.progress", {
+                    done: doneCount,
+                    total: parsed.todos.length,
+                  })
+                : parsed.todos.length === 1
+                  ? t("planCard.todosOne")
+                  : t("planCard.todos", { count: parsed.todos.length })}
         </p>
         {parsed.todos.length > 0 ? (
           <ul className="space-y-2">
-            {parsed.todos.map((t) => {
+            {parsed.todos.map((todo) => {
               const done =
-                completed || planTodoDoneIndices.includes(t.index);
+                completed || planTodoDoneIndices.includes(todo.index);
               return (
-                <li key={t.index} className="flex items-start gap-2 text-[13px]">
+                <li key={todo.index} className="flex items-start gap-2 text-[13px]">
                   {done ? (
                     <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-[var(--color-accent)]" />
                   ) : (
@@ -120,16 +141,14 @@ export function HofAgentPlanCard({
                         : "text-foreground"
                     }
                   >
-                    {t.label}
+                    {todo.label}
                   </span>
                 </li>
               );
             })}
           </ul>
         ) : (
-          <p className="text-[12px] text-tertiary">
-            No checklist items in this plan. Use View plan to edit markdown.
-          </p>
+          <p className="text-[12px] text-tertiary">{t("planCard.noChecklist")}</p>
         )}
       </div>
       {!executing && !generating ? (
@@ -142,12 +161,12 @@ export function HofAgentPlanCard({
             {viewRawOpen ? (
               <>
                 <ChevronUp className="size-3.5" aria-hidden />
-                Hide plan
+                {t("planCard.hidePlan")}
               </>
             ) : (
               <>
                 <ChevronDown className="size-3.5" aria-hidden />
-                View plan
+                {t("planCard.viewPlan")}
               </>
             )}
           </button>
@@ -170,7 +189,7 @@ export function HofAgentPlanCard({
             disabled={busy}
             className="rounded-md bg-foreground px-4 py-2 text-[13px] font-medium text-background transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Execute plan
+            {t("planCard.executePlan")}
           </button>
         </div>
       ) : null}

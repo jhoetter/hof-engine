@@ -2,16 +2,20 @@
 
 import { Check, Copy } from "lucide-react";
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../../reactI18nextStableOpts";
 
 export function CopyCodeButton({
   text,
-  label = "Copy code",
+  label: labelProp,
   className = "",
 }: {
   text: string;
   label?: string;
   className?: string;
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
+  const label = labelProp ?? t("markdown.copyCode");
   const [state, setState] = useState<"idle" | "copied" | "error">("idle");
 
   const onClick = useCallback(async () => {
@@ -27,9 +31,9 @@ export function CopyCodeButton({
 
   const title =
     state === "copied"
-      ? "Copied"
+      ? t("markdown.copied")
       : state === "error"
-        ? "Copy failed"
+        ? t("markdown.copyFailed")
         : label;
 
   return (

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 
 interface UseHofFunctionResult<TResult = unknown> {
   call: (params: Record<string, unknown>) => Promise<TResult>;
@@ -47,5 +47,8 @@ export function useHofFunction<TResult = unknown>(
     [functionName]
   );
 
-  return { call, loading, error, result };
+  return useMemo(
+    (): UseHofFunctionResult<TResult> => ({ call, loading, error, result }),
+    [call, loading, error, result],
+  );
 }

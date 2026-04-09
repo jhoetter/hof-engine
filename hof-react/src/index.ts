@@ -35,6 +35,11 @@ export { HofAgentPendingApprovalBar } from "./agent/HofAgentPendingApprovalBar";
 export { HofAgentProviderWaitBanner } from "./agent/HofAgentProviderWaitBanner";
 export { defaultPollInboxReviewWatch } from "./agent/hofAgentChatContext";
 export {
+  defaultPollWebSession,
+  WEB_SESSION_TERMINAL_STATUSES,
+} from "./agent/hofAgentChatModel";
+export type { WebSessionBarrier } from "./agent/hofAgentChatModel";
+export {
   HofAgentComposer,
   type HofAgentComposerProps,
   type HofAgentComposerVoiceTranscription,
@@ -113,4 +118,12 @@ export {
   type HofStreamEvent,
 } from "./hooks/streamHofFunction";
 export { useHofFlow } from "./hooks/useHofFlow";
+export {
+  WebSessionCanvas,
+  type WebSessionCanvasProps,
+} from "./agent/WebSessionCanvas";
+export {
+  isAssistantWebSessionEmbedLink,
+  toWebSessionEmbedSrc,
+} from "./agent/webSessionEmbed";
 export { useHofNode } from "./hooks/useHofNode";

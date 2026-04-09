@@ -123,6 +123,15 @@ export function formatFunctionResultPlainText(value: unknown): string {
     return formatFunctionResultPlainText(inner);
   }
 
+  // _cli_display convention: functions may include a human-friendly view
+  // (flat dict → KV, list[dict] → table, or string).
+  if (typeof value === "object" && !Array.isArray(value) && value !== null) {
+    const o = value as Record<string, unknown>;
+    if ("_cli_display" in o && o._cli_display != null) {
+      return formatFunctionResultPlainText(o._cli_display);
+    }
+  }
+
   if (typeof value === "object" && !Array.isArray(value) && value !== null) {
     const o = value as Record<string, unknown>;
     if ("rows" in o) {

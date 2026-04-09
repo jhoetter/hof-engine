@@ -9,7 +9,9 @@ from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
 from hof.agent.tooling import (
     AGENT_TOOL_DESCRIPTION_MAX_CHARS,
     AGENT_TOOL_DISPLAY_TITLE_KEY,
+    ToolExecResult,
     compose_agent_tool_description,
+    execute_tool,
     format_cli_line,
     format_tool_result_for_model,
     openai_tool_specs,
@@ -241,3 +243,58 @@ def test_format_cli_line_terminal_exec_hof_fn_json_to_flags() -> None:
     assert "Coffee" in line
     assert "--amount" in line
     assert "'{\\" not in line
+
+
+class TestExecuteToolTruncation:
+    """Status/data must be computed before truncation so large outputs keep correct ok/status."""
+
+    def test_truncated_terminal_exec_keeps_ok_status(self) -> None:
+        big_output = "x" * 50_000
+
+        @function
+        def _trunc_test_fn() -> dict:
+            return {"exit_code": 0, "output": big_output}
+
+        configure_agent(
+            AgentPolicy(
+                allowlist_read=frozenset({"_trunc_test_fn"}),
+                allowlist_mutation=frozenset(),
+                system_prompt_intro="x",
+            ),
+        )
+        result = execute_tool(
+            "_trunc_test_fn",
+            "{}",
+            frozenset({"_trunc_test_fn"}),
+            max_tool_output_chars=1000,
+        )
+        assert isinstance(result, ToolExecResult)
+        assert result.ok is True
+        assert result.status_code == 200
+        assert result.parsed_data is not None
+        assert result.parsed_data["exit_code"] == 0
+        assert "…(truncated)" in result.raw_json
+
+    def test_truncated_output_parsed_data_is_from_full_json(self) -> None:
+        @function
+        def _trunc_rows_fn() -> dict:
+            return {"rows": [{"v": "a" * 5000}], "total": 1}
+
+        configure_agent(
+            AgentPolicy(
+                allowlist_read=frozenset({"_trunc_rows_fn"}),
+                allowlist_mutation=frozenset(),
+                system_prompt_intro="x",
+            ),
+        )
+        result = execute_tool(
+            "_trunc_rows_fn",
+            "{}",
+            frozenset({"_trunc_rows_fn"}),
+            max_tool_output_chars=500,
+        )
+        assert result.ok is True
+        assert result.status_code == 200
+        assert isinstance(result.parsed_data, dict)
+        assert result.parsed_data["total"] == 1
+        assert "…(truncated)" in result.raw_json

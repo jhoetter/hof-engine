@@ -288,6 +288,11 @@ export function FunctionResultDisplay({
 
   if (typeof value === "object" && !Array.isArray(value) && value !== null) {
     const o = value as Record<string, unknown>;
+    if ("_cli_display" in o && o._cli_display != null) {
+      return shell(
+        <FunctionResultDisplay value={o._cli_display} variant={variant} />,
+      );
+    }
     if ("rows" in o) {
       const rowsRaw = o.rows;
       if (Array.isArray(rowsRaw)) {

@@ -363,8 +363,10 @@ export function HofAgentComposer({
     uploadBusy,
     approvalBarrier,
     inboxReviewBarrier,
+    webSessionBarrier,
     dismissApprovalBarrier,
     dismissInboxReviewBarrier,
+    dismissWebSessionBarrier,
     attachmentQueue,
     setAttachmentQueue,
     uploadErr,
@@ -597,6 +599,7 @@ export function HofAgentComposer({
     inputLocked ||
     Boolean(approvalBarrier) ||
     Boolean(inboxReviewBarrier) ||
+    Boolean(webSessionBarrier) ||
     (!input.trim() && attachmentQueue.length === 0);
 
   const draftText = voiceSessionActive ? input + voiceInterim : input;
@@ -889,6 +892,14 @@ export function HofAgentComposer({
               className={sendBtnClass}
             >
               Skip inbox wait
+            </button>
+          ) : webSessionBarrier ? (
+            <button
+              type="button"
+              onClick={dismissWebSessionBarrier}
+              className={sendBtnClass}
+            >
+              Skip browser wait
             </button>
           ) : busy ? (
             <button type="button" onClick={stop} className={sendBtnClass}>

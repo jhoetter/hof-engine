@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from hof.agent.sandbox.config import SandboxConfig
 from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
+from hof.browser.config import BrowserConfig
+from hof.browser.constants import HOF_BUILTIN_BROWSE_WEB
 
 # (raw attachments from client) -> (normalized list, error message or None)
 NormalizeAttachmentsFn = Callable[[Any], tuple[list[dict[str, str]], str | None]]
 # normalized attachment list -> system prompt fragment
 AttachmentsSystemNoteFn = Callable[[list[dict[str, str]]], str]
 # Copy user chat uploads into the sandbox container ``/workspace`` (first terminal session).
-# Args: ``TerminalSession``, normalized attachments (``object_key``, optional ``filename`` / ``content_type``).
+# Args: ``TerminalSession``, normalized attachments (``object_key``, optional ``filename`` /
+# ``content_type``).
 SandboxStageChatAttachmentsFn = Callable[[Any, list[dict[str, str]]], None]
 
 
@@ -82,6 +85,7 @@ class MutationPreviewResult:
     data: dict[str, Any] | None = None
     post_apply_review: PostApplyReviewHint | None = None
     status_hint: str | None = None
+    cli_line: str | None = None
 
 
 # validated mutation arguments -> preview envelope or legacy flat dict (wrapped by stream)
@@ -130,6 +134,9 @@ InboxScanAfterInboxResumeFn = Callable[
     tuple[list[InboxWatchDescriptor], frozenset[str]],
 ]
 
+# App constants / secrets -> dict for Browser Use Cloud ``sensitiveData`` (async for DB/API).
+BrowserSensitiveDataFn = Callable[[], Awaitable[dict[str, str]]]
+
 
 def post_apply_review_hint_to_wire(hint: PostApplyReviewHint) -> dict[str, Any]:
     """Serialize ``PostApplyReviewHint`` for NDJSON ``mutation_applied`` events."""
@@ -159,6 +166,8 @@ def mutation_preview_to_wire(
             d["post_apply_review"] = pr
         if result.status_hint:
             d["status_hint"] = result.status_hint
+        if result.cli_line:
+            d["cli_line"] = result.cli_line
         return d
     # Legacy: flat dict from older apps — expose as opaque data with a generated summary line
     raw = dict(result)
@@ -262,6 +271,13 @@ DEFAULT_INBOX_REVIEW_SUMMARY_USER_MESSAGE = (
 # - none: emit barrier immediately (legacy).
 InboxReviewSummaryMode = Literal["llm_stream", "static", "none"]
 
+DEFAULT_WEB_SESSION_BARRIER_SUMMARY_USER_MESSAGE = (
+    "There is an active browser session. Explain briefly what is running, include the **in-app** "
+    "Web sessions link in Markdown (path like `/web-sessions?id=…` only — do not paste external "
+    "or third-party live-view URLs), and say the assistant continues automatically when the session "
+    "finishes. You may call **read-only** tools if you need more detail; do not call mutation tools."
+)
+
 
 @dataclass(frozen=True)
 class AgentPolicy:
@@ -278,6 +294,11 @@ class AgentPolicy:
     inbox_review_summary_mode: InboxReviewSummaryMode = "llm_stream"
     # Redis/memory TTL for runs on awaiting_inbox_review (longer than mutation pending).
     inbox_review_state_ttl_sec: int = 172_800
+    # Before ``awaiting_web_session`` (async browse): same modes as inbox review — optional streamed turn.
+    web_session_barrier_summary_user_message: str = (
+        DEFAULT_WEB_SESSION_BARRIER_SUMMARY_USER_MESSAGE
+    )
+    web_session_barrier_summary_mode: InboxReviewSummaryMode = "llm_stream"
     # Short hint for streamed tool_call events (UI); keep concise.
     tool_internal_rationale: dict[str, str] = field(default_factory=dict)
     # Merged into OpenAI tool descriptions and hof fn describe.
@@ -299,16 +320,31 @@ class AgentPolicy:
     # Optional: Docker terminal pool; when ``terminal_only_dispatch``, domain tools are not exposed
     # to the model — only ``hof_builtin_terminal_exec`` and ``builtins_when_terminal_only``.
     sandbox: SandboxConfig | None = None
-    # Optional: when sandbox is enabled, stage chat S3 attachments into ``/workspace`` before the first
-    # ``hof_builtin_terminal_exec`` in a run (so shell tools can read uploaded files).
+    # Optional: when sandbox is enabled, stage chat S3 attachments into ``/workspace`` before the
+    # first ``hof_builtin_terminal_exec`` in a run (so shell tools can read uploaded files).
     sandbox_stage_chat_attachments: SandboxStageChatAttachmentsFn | None = None
+    # Optional: Browser Use Cloud — adds ``hof_builtin_browse_web`` to the model allowlist.
+    browser: BrowserConfig | None = None
+    # Resolve app constant values for ``sensitiveData`` (e.g. from ``list_constants``).
+    browser_sensitive_data_fn: BrowserSensitiveDataFn | None = None
+    # When True (default), browse returns after ``sessions.create``; poll runs in a background
+    # thread; client resumes with ``iter_agent_resume_web_session_stream``. Set ``False`` or
+    # ``HOF_BROWSER_ASYNC=0`` for synchronous full poll (debug).
+    browser_async: bool = True
 
     def effective_allowlist(self) -> frozenset[str]:
         sc = self.sandbox.with_env_overrides() if self.sandbox is not None else None
         if sc is not None and sc.enabled and sc.terminal_only_dispatch:
             term = frozenset({HOF_BUILTIN_TERMINAL_EXEC})
-            return frozenset(sc.builtins_when_terminal_only) | term
+            out = frozenset(sc.builtins_when_terminal_only) | term
+            # Browser runs in Browser Use Cloud (not the sandbox shell); still expose it here
+            # so terminal-only apps can browse without disabling HOF_SANDBOX_TERMINAL_ONLY.
+            if self.browser is not None:
+                out = out | frozenset({HOF_BUILTIN_BROWSE_WEB})
+            return out
         base = frozenset(self.allowlist_read | self.allowlist_mutation | BUILTIN_AGENT_TOOL_NAMES)
+        if self.browser is not None:
+            base = base | frozenset({HOF_BUILTIN_BROWSE_WEB})
         if sc is not None and sc.enabled and not sc.terminal_only_dispatch:
             return base | frozenset({HOF_BUILTIN_TERMINAL_EXEC})
         return base
@@ -321,6 +357,8 @@ class AgentPolicy:
         The terminal transport tool is never listed.
         """
         base = frozenset(self.allowlist_read | self.allowlist_mutation | BUILTIN_AGENT_TOOL_NAMES)
+        if self.browser is not None:
+            base = base | frozenset({HOF_BUILTIN_BROWSE_WEB})
         sc = self.sandbox.with_env_overrides() if self.sandbox is not None else None
         if sc is not None and sc.enabled and sc.terminal_only_dispatch:
             base = base | frozenset(sc.builtins_when_terminal_only)

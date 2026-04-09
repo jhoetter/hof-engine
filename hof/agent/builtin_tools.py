@@ -260,3 +260,10 @@ def hof_builtin_terminal_exec(command: str) -> dict[str, Any]:
         extra_env=_sandbox_per_exec_agent_headers_env(),
     )
     return {"exit_code": result.exit_code, "output": result.output}
+
+
+# Browser Use Cloud tool (optional ``browser-use-sdk`` extra).
+try:
+    import hof.browser.tools  # noqa: F401
+except ImportError:
+    pass

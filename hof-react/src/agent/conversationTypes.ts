@@ -16,6 +16,14 @@ export type AgentConversationDraftV1 = {
     runId: string;
     watches: unknown[];
   } | null;
+  /** Engine ``awaiting_web_session`` (optional persisted gate). */
+  webSessionBarrier?: {
+    runId: string;
+    sessionId: string;
+    toolCallId: string;
+    canvasPath: string;
+    sseChannel?: string;
+  } | null;
   approvalDecisions: Record<string, boolean | null>;
 };
 

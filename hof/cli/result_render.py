@@ -152,6 +152,22 @@ def render_function_result(
     mcell = _MAX_CELL if max_cell is None else max(16, max_cell)
     mrows = _MAX_ROWS if max_rows is None else max(1, max_rows)
 
+    # --- _cli_display convention ---
+    # Functions may include a ``_cli_display`` key with a human-friendly view
+    # (flat dict → KV, list[dict] → table, or string). The full payload stays
+    # available under ``--format json`` for machine consumers.
+    if isinstance(value, dict) and "_cli_display" in value:
+        render_function_result(
+            value["_cli_display"],
+            fmt="auto",
+            console=con,
+            max_columns=mc,
+            max_cell=mcell,
+            max_rows=mrows,
+            wrap_cells=wrap_cells,
+        )
+        return
+
     # --- auto ---
     if isinstance(value, dict) and "rows" in value:
         rows_raw = value.get("rows")

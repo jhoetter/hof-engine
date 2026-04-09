@@ -48,6 +48,8 @@ dependencies = [
     "python-multipart>=0.0.9",
     "docker>=7.0.0",
     "simpleeval>=1.0.7",
+    # Browser Use Cloud (`hof_builtin_browse_web`, /api/web-sessions).
+    "browser-use-sdk>=3.0.0",
 ]
 
 [project.optional-dependencies]

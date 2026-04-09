@@ -1983,6 +1983,7 @@ export function HofAgentChatProvider({
     approvalDecisions,
     flushLiveToThread,
     finalizeLiveBlocksAfterUserStop,
+    onMutationApplied,
     prepareAgentResumeRequest,
     updateThinkingEpisodeStart,
   ]);

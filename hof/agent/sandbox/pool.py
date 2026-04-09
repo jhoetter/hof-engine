@@ -296,7 +296,7 @@ _global_pool_key: tuple[Any, ...] | None = None
 _atexit_registered = False
 
 
-def _reap_orphans(image: str) -> None:
+def _reap_orphans() -> None:
     """Remove **all** ``hof-sandbox-*`` containers from previous processes.
 
     Called once when the first pool is created in this process. Uses Docker
@@ -381,7 +381,7 @@ def _atexit_shutdown() -> None:
 
 def _background_orphan_reap_and_warm(image: str, pool: ContainerPool) -> None:
     """Run orphan cleanup then pre-warm the pool, all off the request path."""
-    _reap_orphans(image)
+    _reap_orphans()
     _reap_orphans_by_name()
     try:
         pool.ensure_pool()

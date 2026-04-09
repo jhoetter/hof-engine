@@ -1,6 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../reactI18nextStableOpts";
 import { formatFunctionResultPlainText } from "./functionResultPlainText";
 import {
   RESULT_MAX_CELL,
@@ -49,16 +51,18 @@ function RowsTableView({
   rows: Record<string, unknown>[];
   total: unknown;
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const allKeys = resultColumnKeyOrder(rows);
   const cols = allKeys.slice(0, RESULT_MAX_COLUMNS);
   const shown = rows.slice(0, RESULT_MAX_ROWS_SHOWN);
   if (cols.length === 0) {
     return (
       <div className="font-mono text-[11px] leading-snug text-secondary">
-        <span className="italic">(empty rows)</span>
+        <span className="italic">{t("functionResult.emptyRows")}</span>
         {total !== undefined && total !== null ? (
           <p className="mt-1">
-            <span className="text-tertiary">total</span> = {String(total)}
+            <span className="text-tertiary">{t("functionResult.total")}</span> ={" "}
+            {String(total)}
           </p>
         ) : null}
       </div>
@@ -68,9 +72,10 @@ function RowsTableView({
     <div className="min-w-0 max-w-full space-y-1.5 overflow-x-auto font-mono text-[11px] leading-snug">
       {allKeys.length > cols.length ? (
         <p className="text-tertiary">
-          Showing {cols.length} of {allKeys.length} columns (use{" "}
-          <span className="text-secondary">hof fn … --format json</span> for full
-          data).
+          {t("functionResult.columnsTruncated", {
+            shown: cols.length,
+            total: allKeys.length,
+          })}
         </p>
       ) : null}
       <table className={`${RESULT_TABLE_CLASS} w-max max-w-none`}>
@@ -97,12 +102,17 @@ function RowsTableView({
       </table>
       {rows.length > RESULT_MAX_ROWS_SHOWN ? (
         <p className="text-tertiary">
-          … {rows.length - RESULT_MAX_ROWS_SHOWN} more rows not shown
+          {t("functionResult.moreRowsHidden", {
+            count: rows.length - RESULT_MAX_ROWS_SHOWN,
+          })}
         </p>
       ) : null}
       {total !== undefined && total !== null ? (
         <p className="text-tertiary">
-          <span className="font-medium text-secondary">total</span> = {String(total)}
+          <span className="font-medium text-secondary">
+            {t("functionResult.total")}
+          </span>{" "}
+          = {String(total)}
         </p>
       ) : null}
     </div>
@@ -140,14 +150,20 @@ function TerminalExecResultView({
   exitCode: number;
   output: string;
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const structured = tryUnwrapApiFunctionStdout(output);
   if (structured !== null) {
     const body = formatFunctionResultPlainText(structured);
     return (
-      <div className="min-w-0 max-w-full" aria-label="Terminal output">
+      <div
+        className="min-w-0 max-w-full"
+        aria-label={t("chatBlocks.terminalOutputAria")}
+      >
         <pre className={`min-w-0 max-w-full ${TERMINAL_STDOUT_BODY_CLASS}`}>
           {body.length === 0 ? (
-            <span className="italic text-tertiary">(no output)</span>
+            <span className="italic text-tertiary">
+              {t("functionResult.noOutput")}
+            </span>
           ) : (
             body
           )}
@@ -157,16 +173,24 @@ function TerminalExecResultView({
   }
   if (output.length === 0) {
     return (
-      <div className="min-w-0 max-w-full" aria-label="Terminal output">
+      <div
+        className="min-w-0 max-w-full"
+        aria-label={t("chatBlocks.terminalOutputAria")}
+      >
         <pre className={`min-w-0 max-w-full ${TERMINAL_STDOUT_BODY_CLASS}`}>
-          <span className="italic text-tertiary">(no output)</span>
+          <span className="italic text-tertiary">
+            {t("functionResult.noOutput")}
+          </span>
         </pre>
       </div>
     );
   }
   const html = terminalOutputAnsiToHtml(output);
   return (
-    <div className="min-w-0 max-w-full" aria-label="Terminal output">
+    <div
+      className="min-w-0 max-w-full"
+      aria-label={t("chatBlocks.terminalOutputAria")}
+    >
       <div
         className={`hof-terminal-ansi min-w-0 max-w-full ${TERMINAL_STDOUT_BODY_CLASS}`}
         /* eslint-disable-next-line react/no-danger -- ansi_up escapes HTML; colors are SGR only */
@@ -177,11 +201,12 @@ function TerminalExecResultView({
 }
 
 function KvTableView({ data }: { data: Record<string, unknown> }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const keys = Object.keys(data).sort((a, b) => String(a).localeCompare(String(b)));
   if (keys.length === 0) {
     return (
       <p className="font-mono text-[11px] italic leading-snug text-tertiary">
-        (empty)
+        {t("functionResult.empty")}
       </p>
     );
   }
@@ -190,8 +215,12 @@ function KvTableView({ data }: { data: Record<string, unknown> }) {
       <table className={RESULT_TABLE_CLASS}>
         <thead>
           <tr className="border-b border-border/60 bg-surface/50">
-            <th className={`${RESULT_TABLE_HEAD_CELL} w-[32%]`}>key</th>
-            <th className={RESULT_TABLE_HEAD_CELL}>value</th>
+            <th className={`${RESULT_TABLE_HEAD_CELL} w-[32%]`}>
+              {t("functionResult.keyColumn")}
+            </th>
+            <th className={RESULT_TABLE_HEAD_CELL}>
+              {t("functionResult.valueColumn")}
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -240,6 +269,7 @@ export function FunctionResultDisplay({
   /** `terminalPlain`: monospace text (and ANSI when wrapped in terminal exec), no HTML tables — chat tool cards. */
   variant?: FunctionResultDisplayVariant;
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const shell = (node: ReactNode) => (
     <div className="min-w-0 max-w-full">{node}</div>
   );
@@ -279,7 +309,7 @@ export function FunctionResultDisplay({
     return shell(
       <pre
         className={`min-w-0 max-w-full ${TERMINAL_STDOUT_BODY_CLASS}`}
-        aria-label="Tool output"
+        aria-label={t("chatBlocks.toolOutputAria")}
       >
         {text}
       </pre>,

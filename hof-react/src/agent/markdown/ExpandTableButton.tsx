@@ -1,16 +1,20 @@
 "use client";
 
 import { Maximize2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../../reactI18nextStableOpts";
 
 export function ExpandTableButton({
   onClick,
-  label = "Expand table",
+  label: labelProp,
   className = "",
 }: {
   onClick: () => void;
   label?: string;
   className?: string;
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
+  const label = labelProp ?? t("markdown.expandTable");
   return (
     <button
       type="button"

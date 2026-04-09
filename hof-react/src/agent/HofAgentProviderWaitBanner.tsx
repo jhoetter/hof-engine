@@ -1,22 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../reactI18nextStableOpts";
 import { useHofAgentChat } from "./hofAgentChatContext";
-
-function waitBannerLine(remainingSec: number, reason: string): string {
-  const rate = reason === "rate_limit";
-  const head = rate ? "Usage limit" : "Service busy";
-  if (remainingSec > 0) {
-    return `${head} — I'll retry automatically in ${remainingSec}s…`;
-  }
-  return `${head} — retrying now…`;
-}
 
 /**
  * Shown when the stream emits ``provider_wait`` (e.g. rate limit backoff before retry).
  * Counts down seconds using a client-side deadline so the UI updates while the server sleeps.
  */
 export function HofAgentProviderWaitBanner() {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const { providerWaitNotice } = useHofAgentChat();
   const [, setTick] = useState(0);
 
@@ -25,20 +19,32 @@ export function HofAgentProviderWaitBanner() {
       return;
     }
     const id = window.setInterval(() => {
-      setTick((t) => t + 1);
+      setTick((k) => k + 1);
     }, 250);
     return () => window.clearInterval(id);
   }, [providerWaitNotice]);
 
+  const line = useMemo(() => {
+    if (!providerWaitNotice) {
+      return "";
+    }
+    const rawRemaining = Math.ceil(
+      (providerWaitNotice.deadlineMs - Date.now()) / 1000,
+    );
+    const remainingSec = Math.max(0, rawRemaining);
+    const rate = providerWaitNotice.reason === "rate_limit";
+    const head = rate
+      ? t("providerWait.usageLimit")
+      : t("providerWait.serviceBusy");
+    if (remainingSec > 0) {
+      return t("providerWait.retryIn", { head, seconds: remainingSec });
+    }
+    return t("providerWait.retryNow", { head });
+  }, [providerWaitNotice, t]);
+
   if (!providerWaitNotice) {
     return null;
   }
-
-  const rawRemaining = Math.ceil(
-    (providerWaitNotice.deadlineMs - Date.now()) / 1000,
-  );
-  const remainingSec = Math.max(0, rawRemaining);
-  const line = waitBannerLine(remainingSec, providerWaitNotice.reason);
 
   return (
     <div

@@ -1,6 +1,8 @@
 "use client";
 
 import { Loader2, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../reactI18nextStableOpts";
 
 export type HofAgentConversationOption = {
   id: string;
@@ -40,6 +42,7 @@ export function HofAgentConversationSelect({
   variant = "default",
   className = "",
 }: HofAgentConversationSelectProps) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const isCompact = variant === "compact";
   const row = "flex flex-wrap items-center gap-2 border-b border-border px-1 py-2";
   const selectClass = isCompact
@@ -57,17 +60,17 @@ export function HofAgentConversationSelect({
     <div className={`${row} ${className}`.trim()}>
       {!isCompact ? (
         <label className="flex min-w-0 flex-1 items-center gap-2 text-sm text-secondary">
-          <span className="shrink-0">Conversation</span>
+          <span className="shrink-0">{t("conversationSelect.label")}</span>
           <select
             className={selectClass}
             value={activeId ?? ""}
             onChange={(e) => onSelect(e.target.value)}
-            aria-label="Select conversation"
+            aria-label={t("conversationSelect.selectAria")}
           >
-            <option value="">New…</option>
+            <option value="">{t("conversationSelect.newOption")}</option>
             {conversations.map((c) => (
               <option key={c.id} value={c.id}>
-                {(c.title?.trim() || "Untitled").slice(0, 56)}
+                {(c.title?.trim() || t("conversation.untitled")).slice(0, 56)}
               </option>
             ))}
           </select>
@@ -77,18 +80,18 @@ export function HofAgentConversationSelect({
           className={selectClass}
           value={activeId ?? ""}
           onChange={(e) => onSelect(e.target.value)}
-          aria-label="Select conversation"
+          aria-label={t("conversationSelect.selectAria")}
         >
-          <option value="">New…</option>
+          <option value="">{t("conversationSelect.newOption")}</option>
           {conversations.map((c) => (
             <option key={c.id} value={c.id}>
-              {(c.title?.trim() || "Untitled").slice(0, 56)}
+              {(c.title?.trim() || t("conversation.untitled")).slice(0, 56)}
             </option>
           ))}
         </select>
       )}
       <button type="button" className={newBtnClass} onClick={onNew}>
-        New
+        {t("conversationSelect.newButton")}
       </button>
       {onDelete ? (
         <button
@@ -96,8 +99,8 @@ export function HofAgentConversationSelect({
           className={deleteBtnClass}
           disabled={deleteDisabled}
           onClick={onDelete}
-          aria-label="Delete conversation"
-          title="Delete conversation"
+          aria-label={t("conversationSelect.deleteAria")}
+          title={t("conversationSelect.deleteTitle")}
         >
           {deleteBusy ? (
             <Loader2
@@ -109,7 +112,7 @@ export function HofAgentConversationSelect({
           ) : (
             <>
               <Trash2 className="size-4 shrink-0" aria-hidden />
-              Delete
+              {t("conversationSelect.delete")}
             </>
           )}
         </button>

@@ -21,6 +21,8 @@ import {
   type SetStateAction,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
+import { HOF_REACT_I18N_OPTS } from "../reactI18nextStableOpts";
 
 /**
  * Reasoning popovers must portal here (not directly under `document.body`) so their z-index
@@ -218,16 +220,17 @@ export function PostApplyReviewHint({
 }: {
   postApplyReview: MutationAppliedBlock["post_apply_review"];
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const { label, url, path } = postApplyReview;
   const { href, openInNewTab } = postApplyReviewHref({ url, path });
   return (
     <div
       className="border-t border-border/60 px-3 py-2.5"
       role="status"
-      aria-label="Post-apply review hint"
+      aria-label={t("chatBlocks.postApplyReviewHintAria")}
     >
       <p className="text-[10px] font-medium uppercase tracking-wide text-tertiary">
-        Review inbox
+        {t("chatBlocks.reviewInbox")}
       </p>
       <p className="mt-1 text-[11px] leading-snug text-secondary">
         {href ? (
@@ -249,6 +252,7 @@ export function PostApplyReviewHint({
 
 
 function TerminalToolCallInlineStandalone({ b }: { b: ToolCallBlock }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const title = toolCallRowTitle(b);
   const terminalLine = toolCallCliLine(b).trim();
   return (
@@ -260,12 +264,12 @@ function TerminalToolCallInlineStandalone({ b }: { b: ToolCallBlock }) {
         {terminalLine ? (
           <div
             className="mt-2 overflow-hidden rounded-md border border-border/60 bg-surface/30"
-            aria-label="Terminal command"
+            aria-label={t("chatBlocks.terminalCommandAria")}
           >
             <pre
               className={`${TERMINAL_INLINE_MAX_H} overflow-auto whitespace-pre-wrap break-all ${TERMINAL_SESSION_INSET}`}
             >
-              <span className="text-tertiary select-none" aria-hidden>
+            <span className="text-tertiary select-none" aria-hidden>
                 {"$ "}
               </span>
               <TerminalInvocationHighlight
@@ -288,13 +292,14 @@ function TerminalToolResultInlineStandalone({
     data: { exit_code: number; output: string };
   };
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const d = b.data;
   return (
     <div className={AGENT_CHAT_COLUMN_CLASS}>
       <div className="rounded-lg border border-border bg-surface/40 px-3 py-2 text-[12px] leading-snug">
         <div
           className="overflow-hidden rounded-md border border-border/60 bg-surface/30"
-          aria-label="Terminal output"
+          aria-label={t("chatBlocks.terminalOutputAria")}
         >
           <FunctionResultDisplay value={d} variant="terminalPlain" />
         </div>
@@ -305,10 +310,14 @@ function TerminalToolResultInlineStandalone({
 
 /** Terminal-style command row (`$` + line); outer shell reads as input without a visible section title. */
 function ToolTerminalCommandRow({ cliLine }: { cliLine: string }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const displayLine = cliLine.trim();
 
   return (
-    <div className="overflow-hidden bg-surface/30" aria-label="Tool command">
+    <div
+      className="overflow-hidden bg-surface/30"
+      aria-label={t("chatBlocks.toolCommandAria")}
+    >
       <div
         className={`flex w-full min-h-0 ${TERMINAL_INLINE_MAX_H} items-start overflow-hidden bg-[color:color-mix(in_srgb,var(--color-foreground)_2.5%,transparent)]`}
       >
@@ -456,6 +465,7 @@ function ToolMutationCorner({
   busy: boolean;
   mutationOutcome?: boolean;
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   if (mutationOutcome === true || mutationOutcome === false) {
     return null;
   }
@@ -480,8 +490,8 @@ function ToolMutationCorner({
             <button
               type="button"
               disabled={busy}
-              title="Approve"
-              aria-label={`Approve ${it.name}`}
+              title={t("chatBlocks.approve")}
+              aria-label={t("chatBlocks.approveNamed", { name: it.name })}
               className={`${INLINE_APPROVAL_CHOICE_BTN_CLASS} ${
                 d === true
                   ? "bg-[var(--color-success-bg)] text-foreground"
@@ -495,13 +505,13 @@ function ToolMutationCorner({
               }
             >
               <CheckCircle2 className="size-4" strokeWidth={2} aria-hidden />
-              Approve
+              {t("chatBlocks.approve")}
             </button>
             <button
               type="button"
               disabled={busy}
-              title="Reject"
-              aria-label={`Reject ${it.name}`}
+              title={t("chatBlocks.reject")}
+              aria-label={t("chatBlocks.rejectNamed", { name: it.name })}
               className={`${INLINE_APPROVAL_CHOICE_BTN_CLASS} ${
                 d === false
                   ? "bg-[var(--color-destructive-bg)] text-foreground"
@@ -515,7 +525,7 @@ function ToolMutationCorner({
               }
             >
               <XCircle className="size-4" strokeWidth={2} aria-hidden />
-              Reject
+              {t("chatBlocks.reject")}
             </button>
           </div>
         );
@@ -558,6 +568,7 @@ export function ToolGroupCard({
   toolResultActions?: ToolResultActionsRenderer;
   toolResultRenderer?: ToolResultRendererFn;
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const title = toolCallRowTitle(call);
   const line = toolCallCliLine(call);
   const hideGenericResult = Boolean(
@@ -614,7 +625,7 @@ export function ToolGroupCard({
             <>
               <div
                 className={`min-w-0 max-w-full overflow-x-auto ${TERMINAL_STDOUT_SURFACE_CLASS}`}
-                aria-label="Tool output"
+                aria-label={t("chatBlocks.toolOutputAria")}
               >
                 {(() => {
                   const parsedArgs = parseToolCallArguments(call);
@@ -1095,8 +1106,10 @@ export type AgentEarlyThinkingIndicatorProps = {
 export function AgentEarlyThinkingIndicator({
   liveFormatted: liveFormattedFromParent,
   settledFormatted: settledFormattedFromParent,
-  label = "Thinking",
+  label: labelProp,
 }: AgentEarlyThinkingIndicatorProps = {}) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
+  const label = labelProp ?? t("thinking.thinking");
   useEffect(() => {
     ensureReasoningShimmerKeyframes();
   }, []);
@@ -1170,6 +1183,7 @@ function ReasoningStreamPeek({
    */
   assistantStreamOpen?: boolean;
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const [open, setOpen] = useState(false);
   const columnRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -1346,37 +1360,43 @@ function ReasoningStreamPeek({
     : "text-[11px] font-medium text-tertiary";
 
   /** Plan mode: always “Thinking” in the reasoning lane; status lives on {@link HofAgentMessages}. */
-  const streamingThinkingWord = peekPlanDiscoverLabel ?? "Thinking";
+  const streamingThinkingWord =
+    peekPlanDiscoverLabel ?? t("thinking.thinking");
 
   const stampedTrimmed = reasoningLabelProp?.trim();
   const stampForPlanDiscoverChecks = stampedTrimmed ?? "";
   const stampedIsPlanDiscover =
     stampForPlanDiscoverChecks.length > 0 &&
-    (isQuestionnaireLabel(stampForPlanDiscoverChecks) ||
-      isPlanCardLabel(stampForPlanDiscoverChecks) ||
-      isLiveStreamLabel(stampForPlanDiscoverChecks));
+    (isQuestionnaireLabel(stampForPlanDiscoverChecks, t) ||
+      isPlanCardLabel(stampForPlanDiscoverChecks, t) ||
+      isLiveStreamLabel(stampForPlanDiscoverChecks, t));
 
   const settledButtonLabel =
     agentMode === "plan"
       ? stampedTrimmed && !stampedIsPlanDiscover
-        ? settleLiveLabel(stampedTrimmed)
-        : "Thought"
+        ? settleLiveLabel(stampedTrimmed, t)
+        : t("thinking.thought")
       : stampedTrimmed
-        ? settleLiveLabel(stampedTrimmed)
+        ? settleLiveLabel(stampedTrimmed, t)
         : assistantStreamOpen && peekPlanDiscoverLabel
-          ? settleLiveLabel(peekPlanDiscoverLabel)
-          : "Thought";
+          ? settleLiveLabel(peekPlanDiscoverLabel, t)
+          : t("thinking.thought");
 
   const bodyClass =
     "font-sans text-[12px] leading-relaxed break-words whitespace-pre-wrap text-secondary";
 
   const popoverReasoningAria = streaming
     ? liveFormatted != null
-      ? `${streamingThinkingWord} in progress, ${liveFormatted}`
-      : `${streamingThinkingWord} in progress`
+      ? t("thinking.inProgressWithDuration", {
+          label: streamingThinkingWord,
+          duration: liveFormatted,
+        })
+      : t("thinking.inProgress", { label: streamingThinkingWord })
     : effectiveSettled != null
-      ? `Completed reasoning after ${effectiveSettled}`
-      : "Completed reasoning";
+      ? t("thinking.completedReasoningAfter", {
+          duration: effectiveSettled,
+        })
+      : t("thinking.completedReasoning");
 
   const popoverContent =
     open && popoverBox ? (
@@ -1591,6 +1611,7 @@ function AssistantSegmentedBody({
   afterToolResult?: boolean;
   reasoningLabel?: string;
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const contentClass = contentBubbleClass ?? replyBubbleClass;
   const showCaret = caretVisible ?? wireStreaming;
   const merged = mergeAdjacentContentSegments(
@@ -1750,7 +1771,7 @@ function AssistantSegmentedBody({
           key={`seg-c-${i}`}
           className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center py-0.5`}
           aria-busy="true"
-          aria-label={emptyLabel || "Assistant is drafting"}
+          aria-label={emptyLabel || t("chatBlocks.assistantDraftingAria")}
         >
           <span className="inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
         </div>,
@@ -1778,17 +1799,20 @@ function PlanStepProgressRow({
 }: {
   block: Extract<LiveBlock, { kind: "plan_step_progress" }>;
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const { planText } = useHofAgentChat();
   const entries = useMemo(() => {
     const parsed = parseStructuredPlan(planText);
     return block.done_indices.map((idx) => {
-      const t = parsed.todos.find((x) => x.index === idx);
+      const todo = parsed.todos.find((x) => x.index === idx);
       return {
         idx,
-        label: t?.label.trim() ?? `Step ${idx + 1}`,
+        label:
+          todo?.label.trim() ??
+          t("chatBlocks.planStepFallback", { n: idx + 1 }),
       };
     });
-  }, [planText, block.done_indices]);
+  }, [planText, block.done_indices, t]);
   if (entries.length === 0) {
     return null;
   }
@@ -1834,6 +1858,7 @@ export function LiveBlockView({
   toolResultActions?: ToolResultActionsRenderer;
   toolResultRenderer?: ToolResultRendererFn;
 }) {
+  const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const { agentMode, planBuiltinLane, planClarificationBarrier } =
     useHofAgentChat();
   if (b.kind === "thinking_skeleton") {
@@ -1911,7 +1936,7 @@ export function LiveBlockView({
               <div
                 className={`${AGENT_CHAT_COLUMN_CLASS} flex items-center py-0.5`}
                 aria-busy="true"
-                aria-label="Assistant is drafting"
+                aria-label={t("chatBlocks.assistantDraftingAria")}
               >
                 <span className="inline-block h-4 w-0.5 animate-pulse bg-[var(--color-accent)] align-middle" />
               </div>
@@ -1936,7 +1961,7 @@ export function LiveBlockView({
               contentBubbleClass={replyBubbleClass}
               afterToolResult={afterToolResult}
               assistantUiLane={lane}
-              emptyLabel="Drafting the answer…"
+              emptyLabel={t("chatBlocks.draftingAnswer")}
               reasoningLabel={b.reasoningLabel}
             />
           );
@@ -1946,7 +1971,7 @@ export function LiveBlockView({
             streamText={streamText}
             streamTextRole={b.streamTextRole}
             replyBubbleClass={replyBubbleClass}
-            emptyLabel="Drafting the answer…"
+            emptyLabel={t("chatBlocks.draftingAnswer")}
             wireStreaming={streamActive}
             caretVisible={streamCaretActive}
             reasoningLabel={b.reasoningLabel}
@@ -2017,7 +2042,7 @@ export function LiveBlockView({
             contentBubbleClass={replyBubbleClass}
             afterToolResult={afterToolResult}
             assistantUiLane={lane}
-            emptyLabel="Tools may run before any reply text appears."
+            emptyLabel={t("chatBlocks.toolsBeforeReply")}
             reasoningLabel={b.reasoningLabel}
           />
         );
@@ -2027,7 +2052,7 @@ export function LiveBlockView({
           streamText={b.text}
           streamTextRole={b.streamTextRole}
           replyBubbleClass={replyBubbleClass}
-          emptyLabel="Tools may run before any reply text appears."
+          emptyLabel={t("chatBlocks.toolsBeforeReply")}
           wireStreaming={streamActive}
           caretVisible={streamActive}
           reasoningLabel={b.reasoningLabel}
@@ -2133,7 +2158,7 @@ export function LiveBlockView({
             contentBubbleClass={replyBubbleClass}
             afterToolResult={afterToolResult}
             assistantUiLane={lane}
-            emptyLabel="Waiting for the model…"
+            emptyLabel={t("chatBlocks.waitingForModel")}
             reasoningLabel={b.reasoningLabel}
           />
         );
@@ -2143,7 +2168,7 @@ export function LiveBlockView({
           streamText={b.text}
           streamTextRole={b.streamTextRole}
           replyBubbleClass={replyBubbleClass}
-          emptyLabel="Waiting for the model…"
+          emptyLabel={t("chatBlocks.waitingForModel")}
           wireStreaming={streamActive}
           caretVisible={streamCaretActive}
           reasoningLabel={b.reasoningLabel}
@@ -2239,7 +2264,7 @@ export function LiveBlockView({
           <span className="font-medium text-foreground">{title}</span>
           <div
             className="mt-2 min-w-0 max-w-full overflow-x-auto"
-            aria-label="Tool output"
+            aria-label={t("chatBlocks.toolOutputAria")}
           >
             {customOutput != null ? (
               customOutput
@@ -2277,12 +2302,12 @@ export function LiveBlockView({
         className={`${AGENT_CHAT_COLUMN_CLASS} rounded-xl border border-[color:color-mix(in_srgb,var(--color-accent)_35%,var(--color-border))] bg-[color:color-mix(in_srgb,var(--color-accent)_6%,transparent)] px-3 py-2.5 text-[12px] leading-snug`}
       >
         <div className="font-medium text-foreground">
-          Awaiting your approval · {title}
+          {t("chatBlocks.mutationAwaiting", { title })}
         </div>
         {cmd ? (
           <div
             className="mt-2 overflow-hidden rounded-md border border-border/60 bg-surface/30"
-            aria-label="Tool command"
+            aria-label={t("chatBlocks.toolCommandLineAria")}
           >
             <pre
               className={`max-h-32 overflow-auto whitespace-pre-wrap break-all ${TERMINAL_SESSION_INSET} text-foreground`}
@@ -2316,16 +2341,16 @@ export function LiveBlockView({
   if (b.kind === "error") {
     const rate = b.errorCategory === "rate_limit";
     const title = rate
-      ? "Usage limit"
+      ? t("chatBlocks.errorUsageLimit")
       : b.errorCategory === "server" || b.errorCategory === "overloaded"
-        ? "Service temporarily unavailable"
+        ? t("chatBlocks.errorServer")
         : b.errorCategory === "timeout"
-          ? "Request timed out"
+          ? t("chatBlocks.errorTimeout")
           : b.errorCategory === "auth"
-            ? "Authentication issue"
+            ? t("chatBlocks.errorAuth")
             : b.errorCategory === "bad_request"
-              ? "Request not accepted"
-              : "Something went wrong";
+              ? t("chatBlocks.errorBadRequest")
+              : t("chatBlocks.errorGeneric");
     return (
       <div className={`${AGENT_CHAT_COLUMN_CLASS}`}>
         <div

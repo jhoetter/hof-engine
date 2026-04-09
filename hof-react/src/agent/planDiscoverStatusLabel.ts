@@ -10,6 +10,8 @@
  * branching in `useMemo` elsewhere.
  */
 
+import type { TFunction } from "i18next";
+
 export type PlanDiscoverBuiltinLane = "clarification" | "plan" | null;
 
 export type PlanDiscoverLiveLabelInput = {
@@ -26,43 +28,52 @@ export type PlanDiscoverLiveLabelInput = {
   planBuiltinLane: PlanDiscoverBuiltinLane;
 };
 
-/** Maps live plan-discover row labels to past-tense settled strings (aligned with thinking UI). */
-const LIVE_TO_SETTLED: Record<string, string> = {
-  Exploring: "Explored",
-  "Generating questions": "Generated questions",
-  "Preparing plan": "Prepared plan",
-};
-
-const QUESTIONNAIRE_STATUS_LABELS = new Set<string>([
-  "Generating questions",
-  "Generated questions",
-]);
-
-const PLAN_CARD_STATUS_LABELS = new Set<string>([
-  "Preparing plan",
-  "Prepared plan",
-]);
-
-const LIVE_STREAM_STATUS_LABELS = new Set<string>(["Exploring", "Explored"]);
+/** Maps live plan-discover row labels to settled keys (resolved via `t` at runtime). */
+function liveToSettledKey(streamingLabel: string, t: TFunction<"hofEngine">): string | null {
+  if (streamingLabel === t("planDiscover.exploring")) {
+    return t("planDiscover.explored");
+  }
+  if (streamingLabel === t("planDiscover.generatingQuestions")) {
+    return t("planDiscover.generatedQuestions");
+  }
+  if (streamingLabel === t("planDiscover.preparingPlan")) {
+    return t("planDiscover.preparedPlan");
+  }
+  return null;
+}
 
 /** Shown next to the Questions card (active or review), not above the live assistant stream. */
-export function isQuestionnaireLabel(label: string | null): boolean {
-  return label != null && QUESTIONNAIRE_STATUS_LABELS.has(label);
+export function isQuestionnaireLabel(
+  label: string | null,
+  t: TFunction<"hofEngine">,
+): boolean {
+  return (
+    label != null &&
+    (label === t("planDiscover.generatingQuestions") ||
+      label === t("planDiscover.generatedQuestions"))
+  );
 }
 
 /** Shown next to the Plan card, not above the live assistant stream. */
-export function isPlanCardLabel(label: string | null): boolean {
-  return label != null && PLAN_CARD_STATUS_LABELS.has(label);
+export function isPlanCardLabel(label: string | null, t: TFunction<"hofEngine">): boolean {
+  return (
+    label != null &&
+    (label === t("planDiscover.preparingPlan") ||
+      label === t("planDiscover.preparedPlan"))
+  );
 }
 
 /** Shown above the live block list (explore / discovery prose). */
-export function isLiveStreamLabel(label: string | null): boolean {
-  return label != null && LIVE_STREAM_STATUS_LABELS.has(label);
+export function isLiveStreamLabel(label: string | null, t: TFunction<"hofEngine">): boolean {
+  return (
+    label != null &&
+    (label === t("planDiscover.exploring") || label === t("planDiscover.explored"))
+  );
 }
 
 /** Past-tense label for the status row after a plan-discover phase settles. */
-export function settleLiveLabel(streamingLabel: string): string {
-  return LIVE_TO_SETTLED[streamingLabel] ?? streamingLabel;
+export function settleLiveLabel(streamingLabel: string, t: TFunction<"hofEngine">): string {
+  return liveToSettledKey(streamingLabel, t) ?? streamingLabel;
 }
 
 /**
@@ -72,6 +83,7 @@ export function settleLiveLabel(streamingLabel: string): string {
  */
 export function computeLiveLabel(
   input: PlanDiscoverLiveLabelInput,
+  t: TFunction<"hofEngine">,
 ): string | null {
   if (input.agentMode !== "plan") {
     return null;
@@ -79,10 +91,10 @@ export function computeLiveLabel(
   const { planPhase, discoverStreamPhase } = input;
 
   if (planPhase === "clarifying") {
-    return settleLiveLabel("Generating questions");
+    return settleLiveLabel(t("planDiscover.generatingQuestions"), t);
   }
   if (planPhase === "generating") {
-    return "Preparing plan";
+    return t("planDiscover.preparingPlan");
   }
   if (
     planPhase === "ready" ||
@@ -93,19 +105,19 @@ export function computeLiveLabel(
   }
 
   if (input.planBuiltinLane === "clarification") {
-    return "Generating questions";
+    return t("planDiscover.generatingQuestions");
   }
   if (input.planBuiltinLane === "plan") {
-    return "Preparing plan";
+    return t("planDiscover.preparingPlan");
   }
 
   switch (discoverStreamPhase) {
     case "explore":
-      return "Exploring";
+      return t("planDiscover.exploring");
     case "clarify":
-      return "Generating questions";
+      return t("planDiscover.generatingQuestions");
     case "propose":
-      return "Preparing plan";
+      return t("planDiscover.preparingPlan");
     default:
       break;
   }
@@ -120,14 +132,15 @@ export function computeLiveLabel(
  */
 export function discoverPhaseToLabel(
   dp: "explore" | "clarify" | "propose" | null,
+  t: TFunction<"hofEngine">,
 ): string | null {
   switch (dp) {
     case "explore":
-      return "Exploring";
+      return t("planDiscover.exploring");
     case "clarify":
-      return "Generating questions";
+      return t("planDiscover.generatingQuestions");
     case "propose":
-      return "Preparing plan";
+      return t("planDiscover.preparingPlan");
     default:
       return null;
   }

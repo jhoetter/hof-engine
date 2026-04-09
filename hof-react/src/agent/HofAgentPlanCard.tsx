@@ -55,7 +55,7 @@ export function HofAgentPlanCard({
     if (completed) {
       return parsed.todos.length;
     }
-    return parsed.todos.filter((t) => planTodoDoneIndices.includes(t.index))
+    return parsed.todos.filter((todo) => planTodoDoneIndices.includes(todo.index))
       .length;
   }, [parsed.todos, planTodoDoneIndices, completed]);
 
@@ -124,11 +124,11 @@ export function HofAgentPlanCard({
         </p>
         {parsed.todos.length > 0 ? (
           <ul className="space-y-2">
-            {parsed.todos.map((t) => {
+            {parsed.todos.map((todo) => {
               const done =
-                completed || planTodoDoneIndices.includes(t.index);
+                completed || planTodoDoneIndices.includes(todo.index);
               return (
-                <li key={t.index} className="flex items-start gap-2 text-[13px]">
+                <li key={todo.index} className="flex items-start gap-2 text-[13px]">
                   {done ? (
                     <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-[var(--color-accent)]" />
                   ) : (
@@ -141,7 +141,7 @@ export function HofAgentPlanCard({
                         : "text-foreground"
                     }
                   >
-                    {t.label}
+                    {todo.label}
                   </span>
                 </li>
               );

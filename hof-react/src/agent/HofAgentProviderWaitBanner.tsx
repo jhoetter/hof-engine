@@ -12,7 +12,7 @@ import { useHofAgentChat } from "./hofAgentChatContext";
 export function HofAgentProviderWaitBanner() {
   const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const { providerWaitNotice } = useHofAgentChat();
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     if (!providerWaitNotice) {
@@ -40,7 +40,7 @@ export function HofAgentProviderWaitBanner() {
       return t("providerWait.retryIn", { head, seconds: remainingSec });
     }
     return t("providerWait.retryNow", { head });
-  }, [providerWaitNotice, t]);
+  }, [providerWaitNotice, t, tick]);
 
   if (!providerWaitNotice) {
     return null;

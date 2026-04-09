@@ -53,6 +53,14 @@ from hof.agent.stream import (
     iter_agent_resume_stream,
     iter_agent_resume_web_session_stream,
 )
+from hof.agent.extensions import (
+    AgentExtension,
+    MergedExtensions,
+    discover_domain_extensions,
+    get_all_extensions,
+    merge_extensions,
+    register_agent_extension,
+)
 from hof.agent.tooling import format_cli_line
 
 __all__ = [
@@ -102,4 +110,10 @@ __all__ = [
     "normalize_conversation_state_for_storage",
     "try_get_agent_policy",
     "validate_conversation_state",
+    "AgentExtension",
+    "MergedExtensions",
+    "discover_domain_extensions",
+    "get_all_extensions",
+    "merge_extensions",
+    "register_agent_extension",
 ]

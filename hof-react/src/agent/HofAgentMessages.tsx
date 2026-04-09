@@ -192,17 +192,20 @@ export function HofAgentMessages({
       planDiscoverUi.placement === "above_questionnaire" &&
       planDiscoverUi.timerKind === "clarification_generation",
     clarificationGenerationStartedAtMs,
+    t,
   );
   const planCardElapsed = useThinkingEpisodeElapsed(
     busy &&
       planDiscoverUi.placement === "above_plan" &&
       planDiscoverUi.timerKind === "plan_preparation",
     planPreparationStartedAtMs,
+    t,
   );
   const liveStreamElapsed = useThinkingEpisodeElapsed(
     planDiscoverUi.placement === "above_live_stream" &&
       planDiscoverUi.timerKind === "thinking_episode",
     thinkingEpisodeStartedAtMs,
+    t,
   );
 
   /**
@@ -215,6 +218,7 @@ export function HofAgentMessages({
     clarificationVisibleAtMs >= clarificationGenerationStartedAtMs
       ? formatDurationMsForUi(
           clarificationVisibleAtMs - clarificationGenerationStartedAtMs,
+          t,
         )
       : null;
 

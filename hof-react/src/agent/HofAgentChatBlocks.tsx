@@ -1120,6 +1120,7 @@ export function AgentEarlyThinkingIndicator({
   const internalElapsed = useThinkingEpisodeElapsed(
     useInternalElapsed,
     thinkingEpisodeStartedAtMs,
+    t,
   );
   const liveFormatted = useInternalElapsed
     ? internalElapsed.liveFormatted
@@ -1204,9 +1205,10 @@ function ReasoningStreamPeek({
   const { liveFormatted, settledFormatted } = useThinkingEpisodeElapsed(
     streaming,
     thinkingEpisodeStartedAtMs,
+    t,
   );
   const persistedFormatted =
-    reasoningElapsedMs != null ? formatDurationMs(reasoningElapsedMs) : null;
+    reasoningElapsedMs != null ? formatDurationMs(reasoningElapsedMs, t) : null;
   const effectiveSettled = persistedFormatted ?? settledFormatted;
 
   useEffect(() => {
@@ -1423,7 +1425,9 @@ function ReasoningStreamPeek({
             <AssistantMarkdown source={consolidatedContentForPopover.trim()} />
           ) : effectiveSettled != null ? (
             <p className="text-[12px] text-secondary">
-              The model used a separate reasoning phase ({effectiveSettled}).
+              {t("thinking.separateReasoningPhase", {
+                duration: effectiveSettled,
+              })}
             </p>
           ) : null
         ) : streaming ? (
@@ -1498,7 +1502,9 @@ function ReasoningStreamPeek({
                 </span>
                 {effectiveSettled != null ? (
                   <span className="text-[11px] font-medium text-tertiary">
-                    for {effectiveSettled}
+                    {t("thinking.durationConnector", {
+                      duration: effectiveSettled,
+                    })}
                   </span>
                 ) : null}
               </>

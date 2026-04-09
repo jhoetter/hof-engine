@@ -13,7 +13,15 @@
     "completedReasoning": "Überlegung abgeschlossen",
     "inProgressWithDuration": "{{label}} läuft, {{duration}}",
     "inProgress": "{{label}} läuft",
-    "completedReasoningAfter": "Überlegung abgeschlossen nach {{duration}}"
+    "completedReasoningAfter": "Überlegung abgeschlossen nach {{duration}}",
+    "durationConnector": "für {{duration}}",
+    "durationSecond_one": "1 Sekunde",
+    "durationSecond_other": "{{count}} Sekunden",
+    "durationMinute_one": "1 Minute",
+    "durationMinute_other": "{{count}} Minuten",
+    "durationHour_one": "1 Stunde",
+    "durationHour_other": "{{count}} Stunden",
+    "separateReasoningPhase": "Das Modell nutzte eine separate Überlegungsphase ({{duration}})."
   },
   "composer": {
     "placeholderWrappingUp": "Letzte Worte werden fertiggestellt…",

@@ -13,7 +13,15 @@
     "completedReasoning": "Completed reasoning",
     "inProgressWithDuration": "{{label}} in progress, {{duration}}",
     "inProgress": "{{label}} in progress",
-    "completedReasoningAfter": "Completed reasoning after {{duration}}"
+    "completedReasoningAfter": "Completed reasoning after {{duration}}",
+    "durationConnector": "for {{duration}}",
+    "durationSecond_one": "1 second",
+    "durationSecond_other": "{{count}} seconds",
+    "durationMinute_one": "1 minute",
+    "durationMinute_other": "{{count}} minutes",
+    "durationHour_one": "1 hour",
+    "durationHour_other": "{{count}} hours",
+    "separateReasoningPhase": "The model used a separate reasoning phase ({{duration}})."
   },
   "composer": {
     "placeholderWrappingUp": "Wrapping up the last words…",

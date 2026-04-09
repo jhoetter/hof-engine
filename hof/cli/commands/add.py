@@ -451,11 +451,14 @@ def add(
         False, "--list", "-l", help="List available modules and templates."
     ),
     template: str = typer.Option(
-        None, "--template", "-t", help="Scaffold a project from a template."
+        None, "--template", "-t", help="Scaffold a project from a template (default: data-app)."
+    ),
+    starter: str = typer.Option(
+        None, "--starter", "-s", help="Install a starter kit (e.g. ledger, blank)."
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files."),
 ) -> None:
-    """Add modules or templates from hof-components into the current project."""
+    """Add modules, templates, or starters from hof-components into the current project."""
     if ctx.invoked_subcommand is not None:
         return
 
@@ -478,10 +481,16 @@ def add(
 
     if template:
         _install_template(template, registry, project_root, force)
+        if starter:
+            _install_starter(starter, registry, project_root, force)
+        return
+
+    if starter:
+        _install_starter(starter, registry, project_root, force)
         return
 
     if not module_name:
-        console.print("[red]Provide a module name, --list, or --template <name>.[/]")
+        console.print("[red]Provide a module name, --list, --template <name>, or --starter <name>.[/]")
         raise typer.Exit(1)
 
     _install_module(module_name, registry, project_root, force)
@@ -634,3 +643,48 @@ def _install_template(template_name: str, registry: dict, project_root: Path, fo
         console.print(f"\n[bold cyan]Note:[/] {notes}")
 
     console.print(f"\n[green bold]✓ Template '{template_name}' installed.[/]")
+
+
+def _install_starter(
+    starter_name: str, registry: dict, project_root: Path, force: bool
+) -> None:
+    """Copy starter kit domain files into the project."""
+    starters = registry.get("starters", {})
+    if starter_name not in starters:
+        console.print(
+            f"[red]Starter '{starter_name}' not found. Available: {', '.join(starters.keys())}[/]"
+        )
+        raise typer.Exit(1)
+
+    starter_entry = starters[starter_name]
+    starter_dir = CACHE_DIR / starter_entry["path"]
+    if not starter_dir.is_dir():
+        console.print(f"[red]Starter directory not found: {starter_dir}[/]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]Installing starter:[/] {starter_name}")
+
+    skip_names = {"starter.json", "template.json", "README.md", ".DS_Store", ".gitignore"}
+    skip_dirs = {"__pycache__", "node_modules", ".ruff_cache"}
+
+    copied: list[str] = []
+    for src_file in sorted(starter_dir.rglob("*")):
+        if not src_file.is_file():
+            continue
+        rel = src_file.relative_to(starter_dir)
+        if rel.name in skip_names:
+            continue
+        if any(part in skip_dirs for part in rel.parts):
+            continue
+        dst = project_root / rel
+        if dst.exists() and not force:
+            console.print(f"  [yellow]~ {rel} (exists, skipped)[/]")
+            continue
+        _copy_file_dereferencing(src_file, dst)
+        console.print(f"  [green]+ {rel}[/]")
+        copied.append(str(rel))
+
+    if not copied:
+        console.print("[yellow]No files installed from starter.[/]")
+
+    console.print(f"\n[green bold]✓ Starter '{starter_name}' installed.[/]")

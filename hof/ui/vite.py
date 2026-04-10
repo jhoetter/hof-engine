@@ -275,8 +275,9 @@ class ViteManager:
             '    enforce: "pre",\n'
             "    resolveId(source, importer) {\n"
             "      if (!importer || !re.test(source)) return null;\n"
-            '      const cleaned = source.replace(re, "");\n'
-            "      return path.resolve(__dirname, cleaned);\n"
+            '      const cleaned = "./" + source.replace(re, "");\n'
+            '      const fakeImporter = path.resolve(__dirname, "__resolve_anchor__.ts");\n'
+            "      return this.resolve(cleaned, fakeImporter, { skipSelf: true });\n"
             "    },\n"
             "  };\n"
             "}\n\n"
@@ -772,8 +773,9 @@ class ViteManager:
             '    enforce: "pre",\n'
             "    resolveId(source, importer) {\n"
             "      if (!importer || !re.test(source)) return null;\n"
-            '      const cleaned = source.replace(re, "");\n'
-            "      return path.resolve(__dirname, cleaned);\n"
+            '      const cleaned = "./" + source.replace(re, "");\n'
+            '      const fakeImporter = path.resolve(__dirname, "__resolve_anchor__.ts");\n'
+            "      return this.resolve(cleaned, fakeImporter, { skipSelf: true });\n"
             "    },\n"
             "  };\n"
             "}\n\n"

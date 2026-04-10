@@ -62,7 +62,10 @@ def terminal_exec_command_targets_mutation(
     command: str,
     mutation_allowlist: frozenset[str],
 ) -> bool:
-    """True if the shell snippet would invoke a **mutation** function (not reads / describe / list)."""
+    """True if the shell snippet would invoke a **mutation** function.
+
+    Excludes reads / describe / list.
+    """
     t = (command or "").strip()
     if not t:
         return False

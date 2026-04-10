@@ -24,6 +24,7 @@ def _function_param_field_name(param_name: str) -> str:
         return f"{param_name}_param"
     return param_name
 
+
 # Map SQLAlchemy column types to Python types for Pydantic field generation
 _SA_TYPE_MAP: list[tuple[type, type]] = [
     (sa.Integer, int),

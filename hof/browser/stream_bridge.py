@@ -32,6 +32,7 @@ def start_browser_tool_progress(
 
     def worker() -> None:
         try:
+
             def on_progress(ev: dict[str, Any]) -> None:
                 q.put(ev)
 

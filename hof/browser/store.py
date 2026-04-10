@@ -22,6 +22,8 @@ _web_redis = None
 def is_terminal_cloud_status(status: str | None) -> bool:
     """True if ``status`` is a terminal Browser Use cloud lifecycle value."""
     return str(status or "").strip() in _CLOUD_STATUS_TERMINAL
+
+
 _web_memory: dict[str, tuple[float, str]] = {}
 _web_lock = threading.Lock()
 
@@ -181,9 +183,7 @@ def merge_web_session_runtime_fields(
     """
     prev = load_web_session(session_id) or {}
     initial_sc = (
-        int(prev["cloud_step_count"])
-        if isinstance(prev.get("cloud_step_count"), int)
-        else None
+        int(prev["cloud_step_count"]) if isinstance(prev.get("cloud_step_count"), int) else None
     )
 
     if cloud_step_count is not None:

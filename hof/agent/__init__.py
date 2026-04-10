@@ -10,6 +10,14 @@ from hof.agent.conversation_state import (
     normalize_conversation_state_for_storage,
     validate_conversation_state,
 )
+from hof.agent.extensions import (
+    AgentExtension,
+    MergedExtensions,
+    discover_domain_extensions,
+    get_all_extensions,
+    merge_extensions,
+    register_agent_extension,
+)
 from hof.agent.plan_types import (
     PlanClarificationAnswer,
     PlanClarificationBarrierV1,
@@ -52,14 +60,6 @@ from hof.agent.stream import (
     iter_agent_resume_plan_clarification_stream,
     iter_agent_resume_stream,
     iter_agent_resume_web_session_stream,
-)
-from hof.agent.extensions import (
-    AgentExtension,
-    MergedExtensions,
-    discover_domain_extensions,
-    get_all_extensions,
-    merge_extensions,
-    register_agent_extension,
 )
 from hof.agent.tooling import format_cli_line
 

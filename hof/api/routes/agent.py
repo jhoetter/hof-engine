@@ -6,9 +6,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from hof.api.auth import verify_auth
 from hof.agent.policy import try_get_agent_policy
 from hof.agent.tooling import openai_tool_specs, structured_agent_tool_for_ui
+from hof.api.auth import verify_auth
 from hof.core.registry import registry
 
 router = APIRouter()
@@ -16,7 +16,10 @@ router = APIRouter()
 
 @router.get("/tools")
 async def list_agent_tools(user: str = Depends(verify_auth)) -> dict[str, Any]:
-    """List tools for the agent skills UI (logical read/mutation + builtins; not model-only transport)."""
+    """List tools for the agent skills UI.
+
+    Includes logical read/mutation + builtins; not model-only transport.
+    """
     policy = try_get_agent_policy()
     if policy is None:
         return {"configured": False, "tools": []}

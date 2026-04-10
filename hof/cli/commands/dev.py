@@ -27,7 +27,9 @@ SERVICE_WAIT_INTERVAL = 0.5
 
 
 def _uvicorn_reload_exclude_args(project_root: Path, ui_dir: str) -> list[str]:
-    """Paths for ``uvicorn --reload-exclude`` so churn under venv/node_modules does not restart the API.
+    """Paths for ``uvicorn --reload-exclude``.
+
+    Prevents churn under venv/node_modules from restarting the API.
 
     The default reload filter watches ``*.py``; without excluding these trees, edits to
     ``site-packages`` or ``node_modules`` (some packages ship ``.py`` files) spam reloads.
@@ -107,9 +109,7 @@ def _docker_compose_prefix() -> list[str]:
     return ["docker-compose"]
 
 
-def _docker_compose_cmd(
-    project_root: Path, compose_file: Path, *args: str
-) -> list[str]:
+def _docker_compose_cmd(project_root: Path, compose_file: Path, *args: str) -> list[str]:
     return [*_docker_compose_prefix(), "-f", str(compose_file), *args]
 
 
@@ -320,9 +320,7 @@ def dev(
         ]
         if reload:
             uvicorn_cmd.append("--reload")
-            uvicorn_cmd.extend(
-                _uvicorn_reload_exclude_args(project_root, config.ui_dir)
-            )
+            uvicorn_cmd.extend(_uvicorn_reload_exclude_args(project_root, config.ui_dir))
 
         processes.append(subprocess.Popen(uvicorn_cmd, cwd=str(project_root), env=env))
 

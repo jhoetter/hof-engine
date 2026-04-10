@@ -192,9 +192,7 @@ async def poll_browser_cloud_session(
             )
             if st in _TERMINAL:
                 while True:
-                    resp2 = await client.sessions.messages(
-                        session_id, after=cursor, limit=100
-                    )
+                    resp2 = await client.sessions.messages(session_id, after=cursor, limit=100)
                     if not resp2.messages:
                         break
                     for msg in resp2.messages:
@@ -222,9 +220,7 @@ async def poll_browser_cloud_session(
         recording_urls: list[str] = []
         if enable_recording:
             try:
-                recording_urls = list(
-                    await client.sessions.wait_for_recording(session_id)
-                )
+                recording_urls = list(await client.sessions.wait_for_recording(session_id))
             except Exception:
                 logger.debug("wait_for_recording failed", exc_info=True)
 
@@ -235,17 +231,13 @@ async def poll_browser_cloud_session(
             "session_id": session_id,
             "output": output_str,
             "recording_urls": recording_urls,
-            "status": final_session.status.value
-            if final_session.status is not None
-            else "",
+            "status": final_session.status.value if final_session.status is not None else "",
         }
         if on_progress:
             on_progress(ended)
 
         merged = load_web_session(session_id) or {}
-        fin_st = (
-            final_session.status.value if final_session.status is not None else ""
-        )
+        fin_st = final_session.status.value if final_session.status is not None else ""
         step_final = getattr(final_session, "step_count", None)
         merged.update(
             {
@@ -261,9 +253,7 @@ async def poll_browser_cloud_session(
         if fin_st == "error":
             merged["failure_code"] = merged.get("failure_code") or "cloud_error"
             out_err = final_session.output
-            err_txt = (
-                out_err if isinstance(out_err, str) else str(out_err or "")
-            ).strip()
+            err_txt = (out_err if isinstance(out_err, str) else str(out_err or "")).strip()
             if err_txt:
                 merged["failure_message"] = err_txt[:2000]
         save_web_session(session_id, merged)
@@ -275,9 +265,7 @@ async def poll_browser_cloud_session(
             "live_url": live_url,
             "output": out,
             "recording_urls": recording_urls,
-            "status": final_session.status.value
-            if final_session.status is not None
-            else "",
+            "status": final_session.status.value if final_session.status is not None else "",
             "sse_channel": sse_channel,
         }
     finally:
@@ -348,9 +336,7 @@ def spawn_browser_poll_background(
                     on_progress=on_progress,
                 )
             except Exception as exc:
-                logger.exception(
-                    "background browser poll failed session_id=%s", session_id
-                )
+                logger.exception("background browser poll failed session_id=%s", session_id)
                 _persist_poll_failure(session_id, sse_channel, str(exc))
 
         try:

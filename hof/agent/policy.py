@@ -272,10 +272,12 @@ DEFAULT_INBOX_REVIEW_SUMMARY_USER_MESSAGE = (
 InboxReviewSummaryMode = Literal["llm_stream", "static", "none"]
 
 DEFAULT_WEB_SESSION_BARRIER_SUMMARY_USER_MESSAGE = (
-    "There is an active browser session. Explain briefly what is running, include the **in-app** "
-    "Web sessions link in Markdown (path like `/web-sessions?id=…` only — do not paste external "
-    "or third-party live-view URLs), and say the assistant continues automatically when the session "
-    "finishes. You may call **read-only** tools if you need more detail; do not call mutation tools."
+    "There is an active browser session. Explain briefly what is running, "
+    "include the **in-app** Web sessions link in Markdown "
+    "(path like `/web-sessions?id=…` only — do not paste external or third-party "
+    "live-view URLs), and say the assistant continues automatically when the "
+    "session finishes. You may call **read-only** tools if you need more detail; "
+    "do not call mutation tools."
 )
 
 
@@ -294,10 +296,9 @@ class AgentPolicy:
     inbox_review_summary_mode: InboxReviewSummaryMode = "llm_stream"
     # Redis/memory TTL for runs on awaiting_inbox_review (longer than mutation pending).
     inbox_review_state_ttl_sec: int = 172_800
-    # Before ``awaiting_web_session`` (async browse): same modes as inbox review — optional streamed turn.
-    web_session_barrier_summary_user_message: str = (
-        DEFAULT_WEB_SESSION_BARRIER_SUMMARY_USER_MESSAGE
-    )
+    # Before ``awaiting_web_session`` (async browse): same modes as
+    # inbox review — optional streamed turn.
+    web_session_barrier_summary_user_message: str = DEFAULT_WEB_SESSION_BARRIER_SUMMARY_USER_MESSAGE
     web_session_barrier_summary_mode: InboxReviewSummaryMode = "llm_stream"
     # Short hint for streamed tool_call events (UI); keep concise.
     tool_internal_rationale: dict[str, str] = field(default_factory=dict)

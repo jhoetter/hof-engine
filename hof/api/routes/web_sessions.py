@@ -23,8 +23,7 @@ from hof.browser.web_session_view import build_web_session_view_extras
 logger = logging.getLogger(__name__)
 
 _BROWSER_SDK_MISSING = (
-    "browser-use-sdk is not installed; "
-    "reinstall hof-engine (pip install -U hof-engine)"
+    "browser-use-sdk is not installed; reinstall hof-engine (pip install -U hof-engine)"
 )
 
 router = APIRouter()
@@ -64,9 +63,7 @@ async def list_web_sessions() -> dict[str, Any]:
             WebSessionListItem(
                 session_id=str(data.get("session_id") or sid),
                 task=data.get("task") if isinstance(data.get("task"), str) else None,
-                live_url=data.get("live_url")
-                if isinstance(data.get("live_url"), str)
-                else None,
+                live_url=data.get("live_url") if isinstance(data.get("live_url"), str) else None,
                 status=data.get("status") if isinstance(data.get("status"), str) else None,
                 sse_channel=data.get("sse_channel")
                 if isinstance(data.get("sse_channel"), str)

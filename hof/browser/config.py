@@ -10,7 +10,9 @@ _ENV_PLACEHOLDER = re.compile(r"\$\{(\w+)\}")
 
 
 def resolve_browser_api_key_value(value: str) -> str:
-    """Resolve ``${VAR}`` in API key strings using :func:`os.environ.get` (same idea as ``hof.config.Config``).
+    """Resolve ``${VAR}`` in API key strings.
+
+    Uses :func:`os.environ.get` (same idea as ``hof.config.Config``).
 
     If the value has no placeholders, it is returned stripped as-is. Missing env vars become empty
     segments (caller should treat empty result as misconfiguration).

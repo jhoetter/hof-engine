@@ -64,7 +64,7 @@ def _recent_wire_messages(data: dict[str, Any]) -> list[dict[str, Any]]:
     out = [m for m in msgs if isinstance(m, dict)]
     if len(out) <= _RECENT_MESSAGE_LIMIT:
         return out
-    return out[-_RECENT_MESSAGE_LIMIT :]
+    return out[-_RECENT_MESSAGE_LIMIT:]
 
 
 def _message_type_suggests_user_input(msg: dict[str, Any]) -> bool:

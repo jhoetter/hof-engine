@@ -15,6 +15,14 @@ _DESIGN_SYSTEM_IDS = ("default", "playful", "conservative")
 
 _HOF_ENGINE_DEV_ALIASES: list[tuple[str, str]] = [
     ("@hof-engine/web-session-canvas", "@hof-engine/react"),
+    (
+        "@hof-engine/react/locales/en/hofEngine.json",
+        "@hof-engine/react/locales/en/hofEngine.json",
+    ),
+    (
+        "@hof-engine/react/locales/de/hofEngine.json",
+        "@hof-engine/react/locales/de/hofEngine.json",
+    ),
 ]
 
 _HOF_REACT_REQUIRED_DEPS: list[str] = [

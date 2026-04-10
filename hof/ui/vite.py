@@ -13,6 +13,10 @@ USER_VITE_PORT = 5175
 _FAVICON_CANDIDATES = ("favicon.svg", "favicon.ico", "favicon.png", "favicon.webp")
 _DESIGN_SYSTEM_IDS = ("default", "playful", "conservative")
 
+_HOF_ENGINE_DEV_ALIASES: list[tuple[str, str]] = [
+    ("@hof-engine/web-session-canvas", "@hof-engine/react"),
+]
+
 
 class ViteManager:
     """Manages the Vite dev server for user-defined React components and pages."""
@@ -206,15 +210,35 @@ class ViteManager:
                 '      "@hofos/computation-formula": '
                 'path.resolve(__dirname, "../computation-ts/src/index.ts"),'
             )
+        for dev_alias, target_pkg in _HOF_ENGINE_DEV_ALIASES:
+            alias_lines.append(
+                f'      "{dev_alias}": path.resolve(__dirname, "node_modules/{target_pkg}"),'
+            )
         alias_block = "\n".join(alias_lines)
+
+        cross_module_plugin = (
+            "function crossModuleResolve() {\n"
+            "  const re = /(?:\\.\\.\\/)+modules\\/[^/]+\\/ui\\//;\n"
+            "  return {\n"
+            '    name: "cross-module-resolve",\n'
+            '    enforce: "pre",\n'
+            "    resolveId(source, importer) {\n"
+            "      if (!importer || !re.test(source)) return null;\n"
+            '      return this.resolve(source.replace(re, "./"), '
+            "importer, { skipSelf: true });\n"
+            "    },\n"
+            "  };\n"
+            "}\n\n"
+        )
 
         build_config.write_text(
             'import path from "path";\n'
             'import { defineConfig } from "vite";\n'
             'import react from "@vitejs/plugin-react";\n'
             'import tailwindcss from "@tailwindcss/vite";\n'
-            "export default defineConfig({\n"
-            "  plugins: [react(), tailwindcss()],\n"
+            + cross_module_plugin
+            + "export default defineConfig({\n"
+            "  plugins: [crossModuleResolve(), react(), tailwindcss()],\n"
             "  resolve: {\n"
             "    alias: {\n"
             f"{alias_block}\n"
@@ -652,17 +676,40 @@ class ViteManager:
                 '      "@hofos/computation-formula": '
                 'path.resolve(__dirname, "../computation-ts/src/index.ts"),\n'
             )
+        dev_alias_block = ""
+        for dev_alias, target_pkg in _HOF_ENGINE_DEV_ALIASES:
+            dev_alias_block += (
+                f'      "{dev_alias}": path.resolve(__dirname, "node_modules/{target_pkg}"),\n'
+            )
+        cross_module_fn = (
+            "function crossModuleResolve() {\n"
+            "  const re = /(?:\\.\\.\\/)+modules\\/[^/]+\\/ui\\//;\n"
+            "  return {\n"
+            '    name: "cross-module-resolve",\n'
+            '    enforce: "pre",\n'
+            "    resolveId(source, importer) {\n"
+            "      if (!importer || !re.test(source)) return null;\n"
+            '      return this.resolve(source.replace(re, "./"), '
+            "importer, { skipSelf: true });\n"
+            "    },\n"
+            "  };\n"
+            "}\n\n"
+        )
         path.write_text(
             'import path from "path";\n'
             'import { defineConfig } from "vite";\n'
             'import react from "@vitejs/plugin-react";\n'
             'import tailwindcss from "@tailwindcss/vite";\n'
-            "\n"
-            "export default defineConfig({\n"
-            "  plugins: [react(), tailwindcss()],\n"
+            + cross_module_fn
+            + "export default defineConfig({\n"
+            "  plugins: [crossModuleResolve(), react(), tailwindcss()],\n"
             "  resolve: {\n"
             "    alias: {\n"
-            '      "@": path.resolve(__dirname, "."),\n' + ds_alias + comp_alias + "    },\n"
+            '      "@": path.resolve(__dirname, "."),\n'
+            + ds_alias
+            + comp_alias
+            + dev_alias_block
+            + "    },\n"
             "  },\n"
             "  server: {\n"
             "    proxy: {\n"

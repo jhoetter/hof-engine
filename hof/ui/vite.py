@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -111,11 +112,19 @@ class ViteManager:
             return
 
         package_json = self.ui_dir / "package.json"
+        regenerated_pkg = False
         if not package_json.exists() or self._has_broken_file_refs(package_json):
             self._create_package_json(package_json)
+            regenerated_pkg = True
+            lock = self.ui_dir / "package-lock.json"
+            if lock.exists():
+                lock.unlink()
+            nm = self.ui_dir / "node_modules"
+            if nm.is_dir():
+                shutil.rmtree(nm, ignore_errors=True)
 
         node_modules = self.ui_dir / "node_modules"
-        if not node_modules.is_dir():
+        if not node_modules.is_dir() or regenerated_pkg:
             self._install_dependencies()
 
         vite_config = self.ui_dir / "vite.config.ts"
@@ -543,6 +552,8 @@ class ViteManager:
             if spec.startswith(".") or spec.startswith("/"):
                 continue
             if spec == "tailwindcss":
+                continue
+            if spec.startswith("@hof-design-system"):
                 continue
             if spec.startswith("@"):
                 parts = spec.split("/")

@@ -216,6 +216,34 @@ class ViteManager:
             )
         alias_block = "\n".join(alias_lines)
 
+        docs_plugin = (
+            'import fs from "node:fs";\n'
+            "function spreadsheetDocsPlugin() {\n"
+            '  const enDir = path.resolve(__dirname, "../docs");\n'
+            '  const deDir = path.resolve(__dirname, "../docs/de");\n'
+            "  const readMd = (d) => {\n"
+            "    const o = {};\n"
+            "    if (!fs.existsSync(d)) return o;\n"
+            "    for (const n of fs.readdirSync(d))\n"
+            '      if (n.endsWith(".md")) o[n] = fs.readFileSync(d+"/"+n,"utf8");\n'
+            "    return o;\n"
+            "  };\n"
+            "  return {\n"
+            '    name: "spreadsheet-docs",\n'
+            "    resolveId(id) {\n"
+            '      if (id==="virtual:spreadsheet-docs-en") return "\\0"+id;\n'
+            '      if (id==="virtual:spreadsheet-docs-de") return "\\0"+id;\n'
+            "    },\n"
+            "    load(id) {\n"
+            '      if (id==="\\0virtual:spreadsheet-docs-en")\n'
+            "        return `export default ${JSON.stringify(readMd(enDir))}`;\n"
+            '      if (id==="\\0virtual:spreadsheet-docs-de")\n'
+            "        return `export default ${JSON.stringify(readMd(deDir))}`;\n"
+            "    },\n"
+            "  };\n"
+            "}\n\n"
+        )
+
         cross_module_plugin = (
             "function crossModuleResolve() {\n"
             "  const re = /(?:\\.\\.\\/)+modules\\/[^/]+\\/ui\\//;\n"
@@ -236,9 +264,10 @@ class ViteManager:
             'import { defineConfig } from "vite";\n'
             'import react from "@vitejs/plugin-react";\n'
             'import tailwindcss from "@tailwindcss/vite";\n'
+            + docs_plugin
             + cross_module_plugin
             + "export default defineConfig({\n"
-            "  plugins: [crossModuleResolve(), react(), tailwindcss()],\n"
+            "  plugins: [spreadsheetDocsPlugin(), crossModuleResolve(), react(), tailwindcss()],\n"
             "  resolve: {\n"
             "    alias: {\n"
             f"{alias_block}\n"
@@ -681,6 +710,33 @@ class ViteManager:
             dev_alias_block += (
                 f'      "{dev_alias}": path.resolve(__dirname, "node_modules/{target_pkg}"),\n'
             )
+        docs_fn = (
+            'import fs from "node:fs";\n'
+            "function spreadsheetDocsPlugin() {\n"
+            '  const enDir = path.resolve(__dirname, "../docs");\n'
+            '  const deDir = path.resolve(__dirname, "../docs/de");\n'
+            "  const readMd = (d) => {\n"
+            "    const o = {};\n"
+            "    if (!fs.existsSync(d)) return o;\n"
+            "    for (const n of fs.readdirSync(d))\n"
+            '      if (n.endsWith(".md")) o[n] = fs.readFileSync(d+"/"+n,"utf8");\n'
+            "    return o;\n"
+            "  };\n"
+            "  return {\n"
+            '    name: "spreadsheet-docs",\n'
+            "    resolveId(id) {\n"
+            '      if (id==="virtual:spreadsheet-docs-en") return "\\0"+id;\n'
+            '      if (id==="virtual:spreadsheet-docs-de") return "\\0"+id;\n'
+            "    },\n"
+            "    load(id) {\n"
+            '      if (id==="\\0virtual:spreadsheet-docs-en")\n'
+            "        return `export default ${JSON.stringify(readMd(enDir))}`;\n"
+            '      if (id==="\\0virtual:spreadsheet-docs-de")\n'
+            "        return `export default ${JSON.stringify(readMd(deDir))}`;\n"
+            "    },\n"
+            "  };\n"
+            "}\n\n"
+        )
         cross_module_fn = (
             "function crossModuleResolve() {\n"
             "  const re = /(?:\\.\\.\\/)+modules\\/[^/]+\\/ui\\//;\n"
@@ -700,9 +756,10 @@ class ViteManager:
             'import { defineConfig } from "vite";\n'
             'import react from "@vitejs/plugin-react";\n'
             'import tailwindcss from "@tailwindcss/vite";\n'
+            + docs_fn
             + cross_module_fn
             + "export default defineConfig({\n"
-            "  plugins: [crossModuleResolve(), react(), tailwindcss()],\n"
+            "  plugins: [spreadsheetDocsPlugin(), crossModuleResolve(), react(), tailwindcss()],\n"
             "  resolve: {\n"
             "    alias: {\n"
             '      "@": path.resolve(__dirname, "."),\n'

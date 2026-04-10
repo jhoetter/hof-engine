@@ -10,6 +10,7 @@ USER_VITE_PORT = 5175
 
 
 _FAVICON_CANDIDATES = ("favicon.svg", "favicon.ico", "favicon.png", "favicon.webp")
+_DESIGN_SYSTEM_IDS = ("default", "playful", "conservative")
 
 
 class ViteManager:
@@ -43,6 +44,22 @@ class ViteManager:
             if (icon_dir / name).exists():
                 return f"/design-system/assets/icon/{name}"
         return None
+
+    def _resolve_design_system_css(self) -> str | None:
+        """Return the absolute path to the active design-system CSS bundle, or None."""
+        import os
+
+        ds_dir = self.ui_dir / "design-systems"
+        if not ds_dir.is_dir():
+            return None
+        raw = (
+            (os.environ.get("VITE_DESIGN_SYSTEM") or os.environ.get("DESIGN_SYSTEM") or "default")
+            .strip()
+            .lower()
+        )
+        ds_id = raw if raw in _DESIGN_SYSTEM_IDS else "default"
+        candidate = ds_dir / f"{ds_id}.css"
+        return str(candidate) if candidate.exists() else None
 
     def has_pages(self) -> bool:
         """Return True if the project has at least one page in ui/pages/."""
@@ -136,6 +153,16 @@ class ViteManager:
 
         input_obj = {Path(p).stem: p for p in inputs}
         build_config = self.ui_dir / "_vite.build.config.ts"
+        ds_css = self._resolve_design_system_css()
+        alias_lines = ['      "@": path.resolve(__dirname, "."),']
+        if ds_css:
+            ds_name = Path(ds_css).stem
+            alias_lines.append(
+                '      "@hof-design-system.css": '
+                f'path.resolve(__dirname, "design-systems/{ds_name}.css"),'
+            )
+        alias_block = "\n".join(alias_lines)
+
         build_config.write_text(
             'import path from "path";\n'
             'import { defineConfig } from "vite";\n'
@@ -145,7 +172,7 @@ class ViteManager:
             "  plugins: [react(), tailwindcss()],\n"
             "  resolve: {\n"
             "    alias: {\n"
-            '      "@": path.resolve(__dirname, "."),\n'
+            f"{alias_block}\n"
             "    },\n"
             "  },\n"
             "  build: {\n"
@@ -532,31 +559,36 @@ class ViteManager:
         path.write_text(json.dumps(package, indent=2))
 
     def _create_vite_config(self, path: Path) -> None:
-        path.write_text("""\
-import path from "path";
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
-
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "."),
-    },
-  },
-  server: {
-    proxy: {
-      "/api": "http://localhost:8001",
-    },
-    fs: {
-      // Allow serving files from the project root (one level above ui/)
-      // so that /design-system/assets/icon/ is accessible for favicons etc.
-      allow: [".."],
-    },
-  },
-});
-""")
+        ds_css = self._resolve_design_system_css()
+        ds_alias = ""
+        if ds_css:
+            ds_name = Path(ds_css).stem
+            ds_alias = (
+                '      "@hof-design-system.css": '
+                f'path.resolve(__dirname, "design-systems/{ds_name}.css"),\n'
+            )
+        path.write_text(
+            'import path from "path";\n'
+            'import { defineConfig } from "vite";\n'
+            'import react from "@vitejs/plugin-react";\n'
+            'import tailwindcss from "@tailwindcss/vite";\n'
+            "\n"
+            "export default defineConfig({\n"
+            "  plugins: [react(), tailwindcss()],\n"
+            "  resolve: {\n"
+            "    alias: {\n"
+            '      "@": path.resolve(__dirname, "."),\n' + ds_alias + "    },\n"
+            "  },\n"
+            "  server: {\n"
+            "    proxy: {\n"
+            '      "/api": "http://localhost:8001",\n'
+            "    },\n"
+            "    fs: {\n"
+            '      allow: [".."],\n'
+            "    },\n"
+            "  },\n"
+            "});\n"
+        )
 
     def _create_tsconfig(self, path: Path) -> None:
         tsconfig = {

@@ -295,8 +295,22 @@ def get_project_files(name: str, *, slug: str | None = None) -> dict[str, str]:
 @app.command("project")
 def new_project(
     name: str = typer.Argument(help="Project name."),
+    starter: str = typer.Option(
+        "blank",
+        "--starter",
+        "-s",
+        help='Starter kit (e.g. ledger, blank). Use "none" to skip.',
+    ),
+    minimal: bool = typer.Option(
+        False, "--minimal", help="Bare skeleton without platform template."
+    ),
 ) -> None:
-    """Create a new hof project."""
+    """Create a new hof project.
+
+    By default, applies the data-app platform template automatically.
+    Use --minimal for a bare skeleton without the platform.
+    Use --starter to include a domain starter kit (e.g. ledger).
+    """
     project_dir = Path.cwd() / name
 
     if project_dir.exists():
@@ -310,15 +324,34 @@ def new_project(
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content)
 
-    console.print(f"[green]Created project:[/] {name}/")
+    if not minimal:
+        from hof.cli.commands.add import _ensure_cache, _install_template, _load_registry
+
+        effective_starter = None if (starter or "").lower() == "none" else starter
+        try:
+            _ensure_cache()
+            registry = _load_registry()
+            _install_template("data-app", registry, project_dir, force=True)
+            console.print("[green]Applied data-app platform template.[/]")
+
+            if effective_starter:
+                from hof.cli.commands.add import _install_starter
+
+                _install_starter(effective_starter, registry, project_dir, force=True)
+                console.print(f"[green]Installed starter: {effective_starter}[/]")
+        except Exception as exc:
+            console.print(
+                f"[yellow]Template apply failed ({exc}). Use 'hof add --force' to retry.[/]"
+            )
+
+    console.print(f"\n[green]Created project:[/] {name}/")
     console.print(f"  cd {name}")
     console.print("  hof db migrate")
     console.print("  hof dev")
     console.print("")
+    if minimal:
+        console.print("[dim]To add platform:       hof add --force[/]")
     console.print("[dim]To add modules:        hof add --list[/]")
-    console.print(
-        "[dim]To add design system:  (via hof-os) add git submodule at ./design-system/[/]"
-    )
     console.print("[dim]Local dev:             docker compose up[/]")
 
 

@@ -200,6 +200,12 @@ class ViteManager:
                 '      "@hof-design-system.css": '
                 f'path.resolve(__dirname, "design-systems/{ds_name}.css"),'
             )
+        comp_ts = self.ui_dir.parent / "computation-ts" / "src" / "index.ts"
+        if comp_ts.exists():
+            alias_lines.append(
+                '      "@hofos/computation-formula": '
+                'path.resolve(__dirname, "../computation-ts/src/index.ts"),'
+            )
         alias_block = "\n".join(alias_lines)
 
         build_config.write_text(
@@ -639,6 +645,13 @@ class ViteManager:
                 '      "@hof-design-system.css": '
                 f'path.resolve(__dirname, "design-systems/{ds_name}.css"),\n'
             )
+        comp_ts = self.ui_dir.parent / "computation-ts" / "src" / "index.ts"
+        comp_alias = ""
+        if comp_ts.exists():
+            comp_alias = (
+                '      "@hofos/computation-formula": '
+                'path.resolve(__dirname, "../computation-ts/src/index.ts"),\n'
+            )
         path.write_text(
             'import path from "path";\n'
             'import { defineConfig } from "vite";\n'
@@ -649,7 +662,7 @@ class ViteManager:
             "  plugins: [react(), tailwindcss()],\n"
             "  resolve: {\n"
             "    alias: {\n"
-            '      "@": path.resolve(__dirname, "."),\n' + ds_alias + "    },\n"
+            '      "@": path.resolve(__dirname, "."),\n' + ds_alias + comp_alias + "    },\n"
             "  },\n"
             "  server: {\n"
             "    proxy: {\n"

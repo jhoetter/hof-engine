@@ -287,8 +287,7 @@ class ViteManager:
             "    alias: {\n"
             f"{alias_block}\n"
             "    },\n"
-            '    dedupe: ["react", "react-dom", "lucide-react", '
-            '"i18next", "react-i18next"],\n'
+            f"    dedupe: {json.dumps(['react', 'react-dom'] + _HOF_REACT_REQUIRED_DEPS)},\n"
             "  },\n"
             "  build: {\n"
             f"    rollupOptions: {{ input: {json.dumps(input_obj)} }},\n"
@@ -787,8 +786,7 @@ class ViteManager:
             + comp_alias
             + dev_alias_block
             + "    },\n"
-            '    dedupe: ["react", "react-dom", "lucide-react", '
-            '"i18next", "react-i18next"],\n'
+            f"    dedupe: {json.dumps(['react', 'react-dom'] + _HOF_REACT_REQUIRED_DEPS)},\n"
             "  },\n"
             "  server: {\n"
             "    proxy: {\n"

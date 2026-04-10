@@ -17,6 +17,21 @@ _HOF_ENGINE_DEV_ALIASES: list[tuple[str, str]] = [
     ("@hof-engine/web-session-canvas", "@hof-engine/react"),
 ]
 
+_HOF_REACT_REQUIRED_DEPS: list[str] = [
+    "lucide-react",
+    "i18next",
+    "react-i18next",
+    "ansi_up",
+    "react-markdown",
+    "remark-gfm",
+    "remark-math",
+    "rehype-katex",
+    "rehype-highlight",
+    "katex",
+    "lowlight",
+    "hast-util-to-jsx-runtime",
+]
+
 
 class ViteManager:
     """Manages the Vite dev server for user-defined React components and pages."""
@@ -272,6 +287,8 @@ class ViteManager:
             "    alias: {\n"
             f"{alias_block}\n"
             "    },\n"
+            '    dedupe: ["react", "react-dom", "lucide-react", '
+            '"i18next", "react-i18next"],\n'
             "  },\n"
             "  build: {\n"
             f"    rollupOptions: {{ input: {json.dumps(input_obj)} }},\n"
@@ -657,6 +674,9 @@ class ViteManager:
         hof_react = self._hof_react_version()
         if hof_react is not None:
             deps["@hof-engine/react"] = hof_react
+            for pkg in _HOF_REACT_REQUIRED_DEPS:
+                if pkg not in deps:
+                    deps[pkg] = "*"
 
         for pkg in self._collect_module_npm_deps():
             if pkg not in deps:
@@ -767,6 +787,8 @@ class ViteManager:
             + comp_alias
             + dev_alias_block
             + "    },\n"
+            '    dedupe: ["react", "react-dom", "lucide-react", '
+            '"i18next", "react-i18next"],\n'
             "  },\n"
             "  server: {\n"
             "    proxy: {\n"

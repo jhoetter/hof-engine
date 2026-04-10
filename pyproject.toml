@@ -41,8 +41,8 @@ dependencies = [
     "httpx>=0.27.0",
     "websockets>=14.0",
     # Agent streaming (stream_agent_turn, AgentSegmentStart, ReasoningMode.fallback). Pin matches below;
-    # Pin llm-markdown to the version containing failure_info and AgentRateLimitWait.
-    "llm-markdown[openai,anthropic]>=0.3.18",
+    # run `uv lock` after each llm-markdown release (see llm-markdown docs/versioning.md).
+    "llm-markdown[openai,anthropic]>=0.3.17",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
     "python-multipart>=0.0.9",
@@ -88,6 +88,7 @@ exclude = [
 [tool.hatch.build.targets.wheel.force-include]
 "hof/ui/admin/dist" = "hof/ui/admin/dist"
 "hof-react/dist" = "hof-react/dist"
+"hof-react/locales" = "hof-react/locales"
 "hof-react/package.json" = "hof-react/package.json"
 
 [tool.ruff]

@@ -28,7 +28,7 @@ jobs:
         run: ruff format --check hof/ tests/
 
   hof-react:
-    name: @hof-engine/react (typecheck + tests)
+    name: "@hof-engine/react (typecheck + tests)"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

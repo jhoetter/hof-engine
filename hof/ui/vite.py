@@ -246,7 +246,7 @@ class ViteManager:
 
         cross_module_plugin = (
             "function crossModuleResolve() {\n"
-            "  const re = /(?:\\.\\.\\/)+modules\\/[^/]+\\/ui\\//;\n"
+            "  const re = /(?:\\.\\.\\/)+(?:modules\\/)?[^/]+\\/ui\\//;\n"
             "  return {\n"
             '    name: "cross-module-resolve",\n'
             '    enforce: "pre",\n'
@@ -739,7 +739,7 @@ class ViteManager:
         )
         cross_module_fn = (
             "function crossModuleResolve() {\n"
-            "  const re = /(?:\\.\\.\\/)+modules\\/[^/]+\\/ui\\//;\n"
+            "  const re = /(?:\\.\\.\\/)+(?:modules\\/)?[^/]+\\/ui\\//;\n"
             "  return {\n"
             '    name: "cross-module-resolve",\n'
             '    enforce: "pre",\n'

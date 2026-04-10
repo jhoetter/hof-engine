@@ -496,6 +496,33 @@ class ViteManager:
         if existing != html:
             pages_html_path.write_text(html)
 
+    def _collect_css_import_deps(self) -> list[str]:
+        """Scan ``app.css`` for ``@import`` of npm packages and return their names."""
+        import re
+
+        app_css = self.ui_dir / "app.css"
+        if not app_css.exists():
+            return []
+        try:
+            text = app_css.read_text(encoding="utf-8")
+        except OSError:
+            return []
+        deps: list[str] = []
+        for m in re.finditer(r'@import\s+"([^"]+)"', text):
+            spec = m.group(1)
+            if spec.startswith(".") or spec.startswith("/"):
+                continue
+            if spec == "tailwindcss":
+                continue
+            if spec.startswith("@"):
+                parts = spec.split("/")
+                pkg = "/".join(parts[:2])
+            else:
+                pkg = spec.split("/")[0]
+            if pkg not in deps:
+                deps.append(pkg)
+        return deps
+
     def _collect_module_npm_deps(self) -> list[str]:
         """Return all npm dependencies from installed hof modules.
 
@@ -532,6 +559,10 @@ class ViteManager:
             deps["@hof-engine/react"] = hof_react
 
         for pkg in self._collect_module_npm_deps():
+            if pkg not in deps:
+                deps[pkg] = "*"
+
+        for pkg in self._collect_css_import_deps():
             if pkg not in deps:
                 deps[pkg] = "*"
 

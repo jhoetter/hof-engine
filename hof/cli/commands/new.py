@@ -296,7 +296,9 @@ def get_project_files(name: str, *, slug: str | None = None) -> dict[str, str]:
 def new_project(
     name: str = typer.Argument(help="Project name."),
     starter: str = typer.Option(
-        "blank", "--starter", "-s",
+        "blank",
+        "--starter",
+        "-s",
         help='Starter kit (e.g. ledger, blank). Use "none" to skip.',
     ),
     minimal: bool = typer.Option(
@@ -338,7 +340,9 @@ def new_project(
                 _install_starter(effective_starter, registry, project_dir, force=True)
                 console.print(f"[green]Installed starter: {effective_starter}[/]")
         except Exception as exc:
-            console.print(f"[yellow]Template apply failed ({exc}). Use 'hof add --force' to retry.[/]")
+            console.print(
+                f"[yellow]Template apply failed ({exc}). Use 'hof add --force' to retry.[/]"
+            )
 
     console.print(f"\n[green]Created project:[/] {name}/")
     console.print(f"  cd {name}")

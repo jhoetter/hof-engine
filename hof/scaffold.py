@@ -33,11 +33,6 @@ def get_platform_files(
 
     from hof.cli.commands.add import (
         CACHE_DIR,
-        _copy_file_dereferencing,
-        _ensure_cache,
-        _load_module_meta,
-        _load_registry,
-        _load_template_meta,
         _should_skip_impl_file,
     )
 
@@ -75,7 +70,10 @@ def get_platform_files(
             continue
         mod_meta = json.loads(mod_meta_path.read_text())
         file_spec = mod_meta.get("files", {})
-        pairs = list(file_spec.items()) if isinstance(file_spec, dict) else [(f, f) for f in file_spec]
+        if isinstance(file_spec, dict):
+            pairs = list(file_spec.items())
+        else:
+            pairs = [(f, f) for f in file_spec]
         for dest_rel, src_rel in pairs:
             src = mod_path / src_rel
             if src.exists():

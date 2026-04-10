@@ -454,7 +454,9 @@ def add(
         False, "--list", "-l", help="List available modules and templates."
     ),
     starter: str = typer.Option(
-        "blank", "--starter", "-s",
+        "blank",
+        "--starter",
+        "-s",
         help='Starter kit (e.g. ledger, blank). Use "none" to skip.',
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files."),
@@ -640,9 +642,7 @@ def _install_template(template_name: str, registry: dict, project_root: Path, fo
     console.print(f"\n[green bold]✓ Template '{template_name}' installed.[/]")
 
 
-def _install_starter(
-    starter_name: str, registry: dict, project_root: Path, force: bool
-) -> None:
+def _install_starter(starter_name: str, registry: dict, project_root: Path, force: bool) -> None:
     """Copy starter kit domain files into the project."""
     starters = registry.get("starters", {})
     if starter_name not in starters:

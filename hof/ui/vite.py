@@ -275,8 +275,8 @@ class ViteManager:
             '    enforce: "pre",\n'
             "    resolveId(source, importer) {\n"
             "      if (!importer || !re.test(source)) return null;\n"
-            '      return this.resolve(source.replace(re, "./"), '
-            "importer, { skipSelf: true });\n"
+            '      const cleaned = source.replace(re, "");\n'
+            "      return path.resolve(__dirname, cleaned);\n"
             "    },\n"
             "  };\n"
             "}\n\n"
@@ -772,8 +772,8 @@ class ViteManager:
             '    enforce: "pre",\n'
             "    resolveId(source, importer) {\n"
             "      if (!importer || !re.test(source)) return null;\n"
-            '      return this.resolve(source.replace(re, "./"), '
-            "importer, { skipSelf: true });\n"
+            '      const cleaned = source.replace(re, "");\n'
+            "      return path.resolve(__dirname, cleaned);\n"
             "    },\n"
             "  };\n"
             "}\n\n"

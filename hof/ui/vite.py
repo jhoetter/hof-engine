@@ -75,13 +75,43 @@ class ViteManager:
             return False
         return any(components_dir.glob("*.tsx"))
 
+    def _has_broken_file_refs(self, package_json: Path) -> bool:
+        """Return True if package.json contains ``file:`` deps pointing nowhere."""
+        try:
+            data = json.loads(package_json.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return True
+        for section in ("dependencies", "devDependencies"):
+            for _pkg, ver in (data.get(section) or {}).items():
+                if isinstance(ver, str) and ver.startswith("file:"):
+                    target = (package_json.parent / ver[5:]).resolve()
+                    if not target.exists():
+                        return True
+        return False
+
+    def _has_broken_vite_config(self, vite_config: Path) -> bool:
+        """Return True if vite.config.ts references paths that do not exist."""
+        try:
+            text = vite_config.read_text(encoding="utf-8")
+        except OSError:
+            return True
+        if "../../modules" in text:
+            modules_dir = (vite_config.parent / "../../modules").resolve()
+            if not modules_dir.is_dir():
+                return True
+        if "../../../../../hof-engine" in text:
+            hof_engine_dir = (vite_config.parent / "../../../../../hof-engine").resolve()
+            if not hof_engine_dir.is_dir():
+                return True
+        return False
+
     def ensure_setup(self) -> None:
         """Ensure the UI directory has package.json, node_modules, and entry point."""
         if not self.ui_dir.is_dir():
             return
 
         package_json = self.ui_dir / "package.json"
-        if not package_json.exists():
+        if not package_json.exists() or self._has_broken_file_refs(package_json):
             self._create_package_json(package_json)
 
         node_modules = self.ui_dir / "node_modules"
@@ -89,7 +119,7 @@ class ViteManager:
             self._install_dependencies()
 
         vite_config = self.ui_dir / "vite.config.ts"
-        if not vite_config.exists():
+        if not vite_config.exists() or self._has_broken_vite_config(vite_config):
             self._create_vite_config(vite_config)
 
         tsconfig = self.ui_dir / "tsconfig.json"

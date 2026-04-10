@@ -10,8 +10,10 @@ from hof.core.registry import registry
 
 def test_hof_builtin_browse_web_registered() -> None:
     import hof.agent.builtin_tools as bt
+    import hof.browser.tools as brt
 
     importlib.reload(bt)
+    importlib.reload(brt)
     meta = registry.get_function("hof_builtin_browse_web")
     assert meta is not None
     assert meta.name == "hof_builtin_browse_web"

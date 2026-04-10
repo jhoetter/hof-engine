@@ -145,7 +145,7 @@ def render_function_result(
     con = console or Console()
 
     if fmt == "json":
-        print(json.dumps(value, default=str, ensure_ascii=False))
+        con.print(json.dumps(value, default=str, ensure_ascii=False), highlight=False)
         return
 
     mc = _MAX_COLUMNS if max_columns is None else max(1, max_columns)

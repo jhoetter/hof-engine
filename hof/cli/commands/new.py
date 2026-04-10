@@ -296,7 +296,8 @@ def get_project_files(name: str, *, slug: str | None = None) -> dict[str, str]:
 def new_project(
     name: str = typer.Argument(help="Project name."),
     starter: str = typer.Option(
-        None, "--starter", "-s", help="Starter kit (e.g. ledger, blank)."
+        "blank", "--starter", "-s",
+        help='Starter kit (e.g. ledger, blank). Use "none" to skip.',
     ),
     minimal: bool = typer.Option(
         False, "--minimal", help="Bare skeleton without platform template."
@@ -324,19 +325,20 @@ def new_project(
     if not minimal:
         from hof.cli.commands.add import _ensure_cache, _install_template, _load_registry
 
+        effective_starter = None if (starter or "").lower() == "none" else starter
         try:
             _ensure_cache()
             registry = _load_registry()
             _install_template("data-app", registry, project_dir, force=True)
             console.print("[green]Applied data-app platform template.[/]")
 
-            if starter:
+            if effective_starter:
                 from hof.cli.commands.add import _install_starter
 
-                _install_starter(starter, registry, project_dir, force=True)
-                console.print(f"[green]Installed starter: {starter}[/]")
+                _install_starter(effective_starter, registry, project_dir, force=True)
+                console.print(f"[green]Installed starter: {effective_starter}[/]")
         except Exception as exc:
-            console.print(f"[yellow]Template apply failed ({exc}). Use 'hof add --template data-app --force' to retry.[/]")
+            console.print(f"[yellow]Template apply failed ({exc}). Use 'hof add --force' to retry.[/]")
 
     console.print(f"\n[green]Created project:[/] {name}/")
     console.print(f"  cd {name}")
@@ -344,7 +346,7 @@ def new_project(
     console.print("  hof dev")
     console.print("")
     if minimal:
-        console.print("[dim]To add platform:       hof add --template data-app --force[/]")
+        console.print("[dim]To add platform:       hof add --force[/]")
     console.print("[dim]To add modules:        hof add --list[/]")
     console.print("[dim]Local dev:             docker compose up[/]")
 

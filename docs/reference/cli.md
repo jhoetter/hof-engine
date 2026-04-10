@@ -144,20 +144,26 @@ hof new page <name>         # Scaffold a new React page
 
 ## hof add
 
-Install modules or templates from the hof-components registry.
+Install the data-app platform, starter kits, or individual modules from the hof-components registry.
 
 ```bash
-# List all available modules and templates
+# Install platform + blank starter (default)
+hof add
+
+# Install platform + ledger starter
+hof add --starter ledger
+
+# Install platform without any starter
+hof add --starter none
+
+# List all available modules and starters
 hof add --list
 
 # Install one module into current project
 hof add tasks
 
-# Install a template
-hof add --template business-app
-
 # Overwrite existing files when installing
-hof add tasks --force
+hof add --force
 ```
 
 Artifact source resolution order:

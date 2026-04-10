@@ -67,6 +67,13 @@ def _tool_names_from_openai_specs(tools: list[Any] | None) -> set[str]:
 def test_plan_discover_explore_text_then_clarify_tools(monkeypatch) -> None:
     """First plan_discover round uses explore allowlist; text does not emit ``final`` yet."""
     importlib.reload(importlib.import_module("hof.agent.builtin_tools"))
+    from hof.functions import function as hof_function, registry
+
+    if registry.get_function("list_expenses") is None:
+        @hof_function(name="list_expenses", tool_summary="List expenses")
+        def _list_expenses() -> list:
+            return []
+
     configure_agent(
         AgentPolicy(
             allowlist_read=frozenset({"list_expenses"}),

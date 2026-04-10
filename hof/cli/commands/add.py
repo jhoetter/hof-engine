@@ -443,6 +443,9 @@ def _install_module(module_name: str, registry: dict, project_root: Path, force:
     console.print(f"\n[green bold]✓ Module '{module_name}' installed.[/]")
 
 
+_DEFAULT_TEMPLATE = "data-app"
+
+
 @app.callback(invoke_without_command=True)
 def add(
     ctx: typer.Context,
@@ -450,15 +453,13 @@ def add(
     list_modules: bool = typer.Option(
         False, "--list", "-l", help="List available modules and templates."
     ),
-    template: str = typer.Option(
-        None, "--template", "-t", help="Scaffold a project from a template (default: data-app)."
-    ),
     starter: str = typer.Option(
-        None, "--starter", "-s", help="Install a starter kit (e.g. ledger, blank)."
+        "blank", "--starter", "-s",
+        help='Starter kit (e.g. ledger, blank). Use "none" to skip.',
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files."),
 ) -> None:
-    """Add modules, templates, or starters from hof-components into the current project."""
+    """Add the data-app platform, starter kits, or individual modules from hof-components."""
     if ctx.invoked_subcommand is not None:
         return
 
@@ -479,21 +480,15 @@ def add(
         )
         raise typer.Exit(1)
 
-    if template:
-        _install_template(template, registry, project_root, force)
-        if starter:
-            _install_starter(starter, registry, project_root, force)
+    if module_name:
+        _install_module(module_name, registry, project_root, force)
         return
 
-    if starter:
-        _install_starter(starter, registry, project_root, force)
-        return
+    effective_starter = None if (starter or "").lower() == "none" else starter
 
-    if not module_name:
-        console.print("[red]Provide a module name, --list, --template <name>, or --starter <name>.[/]")
-        raise typer.Exit(1)
-
-    _install_module(module_name, registry, project_root, force)
+    _install_template(_DEFAULT_TEMPLATE, registry, project_root, force)
+    if effective_starter:
+        _install_starter(effective_starter, registry, project_root, force)
 
 
 def _print_list(registry: dict) -> None:

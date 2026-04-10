@@ -17,12 +17,13 @@ __all__ = ["get_project_files", "get_platform_files"]
 
 
 def get_platform_files(
-    name: str, *, slug: str | None = None, starter: str | None = None
+    name: str, *, slug: str | None = None, starter: str | None = "blank"
 ) -> dict[str, str]:
     """Return all files for a complete data-app project.
 
     Combines skeleton files from ``get_project_files`` with the data-app
-    platform template and optional starter kit.
+    platform template and a starter kit (defaults to ``blank``).
+    Pass ``starter=None`` to skip the starter.
     """
     import json
     import os

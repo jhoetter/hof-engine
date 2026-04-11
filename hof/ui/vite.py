@@ -799,6 +799,10 @@ class ViteManager:
             f"    dedupe: {json.dumps(['react', 'react-dom'] + _HOF_REACT_REQUIRED_DEPS)},\n"
             "  },\n"
             "  server: {\n"
+            f"    port: {USER_VITE_PORT},\n"
+            "    hmr: {\n"
+            f"      clientPort: {USER_VITE_PORT},\n"
+            "    },\n"
             "    proxy: {\n"
             '      "/api": "http://localhost:8001",\n'
             "    },\n"
@@ -846,8 +850,6 @@ class ViteManager:
         return None
 
     def _install_dependencies(self) -> None:
-        subprocess.run(
-            ["npm", "install"],
-            cwd=str(self.ui_dir),
-            check=True,
-        )
+        lockfile = self.ui_dir / "package-lock.json"
+        cmd = ["npm", "ci"] if lockfile.exists() else ["npm", "install"]
+        subprocess.run(cmd, cwd=str(self.ui_dir), check=True)

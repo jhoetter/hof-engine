@@ -156,7 +156,7 @@ RUN python -c "from pathlib import Path; from hof.config import load_config; \\
 EXPOSE 8001
 CMD ["sh", "-c", "python -m hof.db.ensure_db && hof db migrate && \\
     python -m uvicorn hof.api.server:create_app \\
-    --factory --host 0.0.0.0 --port 8001"]
+    --factory --host 0.0.0.0 --port 8001 --workers 2"]
 """,
     "docker-compose.yml": """# Local development — start Postgres + Redis,
 # then run "hof dev" on the host.

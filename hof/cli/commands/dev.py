@@ -109,9 +109,7 @@ def _docker_compose_prefix() -> list[str]:
     return ["docker-compose"]
 
 
-def _docker_compose_cmd(
-    project_root: Path, compose_file: Path, *args: str
-) -> list[str]:
+def _docker_compose_cmd(project_root: Path, compose_file: Path, *args: str) -> list[str]:
     return [*_docker_compose_prefix(), "-f", str(compose_file), *args]
 
 
@@ -322,9 +320,7 @@ def dev(
         ]
         if reload:
             uvicorn_cmd.append("--reload")
-            uvicorn_cmd.extend(
-                _uvicorn_reload_exclude_args(project_root, config.ui_dir)
-            )
+            uvicorn_cmd.extend(_uvicorn_reload_exclude_args(project_root, config.ui_dir))
 
         processes.append(subprocess.Popen(uvicorn_cmd, cwd=str(project_root), env=env))
 

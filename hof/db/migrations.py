@@ -117,6 +117,40 @@ def _ensure_env_py_postgres_uuid_autogen(project_root: Path) -> None:
     )
 
 
+def _ensure_env_py_combined_hooks(project_root: Path) -> None:
+    """Upgrade env.py from the single UUID hook to the combined dispatcher.
+
+    Older env.py files import only ``process_revision_directives_postgres_uuid_using``.
+    This patcher replaces that with the combined ``process_revision_directives`` which
+    also strips spurious SERIAL PK nullable ops and suppresses empty revisions.
+    """
+    env_py = project_root / "migrations" / "env.py"
+    if not env_py.is_file():
+        return
+    text = env_py.read_text()
+
+    old_import = "from hof.db.alembic_hooks import process_revision_directives_postgres_uuid_using"
+    new_import = "from hof.db.alembic_hooks import process_revision_directives"
+    old_ref = "process_revision_directives_postgres_uuid_using"
+    new_ref = "process_revision_directives"
+
+    if old_import not in text:
+        return
+    if (
+        f"import {new_ref}\n" in text
+        or f"import {new_ref} " in text
+        or f"import {new_ref}," in text
+    ):
+        return
+
+    text = text.replace(old_import, new_import)
+    text = text.replace(old_ref, new_ref)
+    env_py.write_text(text)
+    logger.info(
+        "Updated migrations/env.py: switched to combined process_revision_directives hook.",
+    )
+
+
 def _upgrade_or_restamp(alembic_cfg: AlembicConfig, config: Config) -> None:
     """Run ``alembic upgrade head``, recovering from stale revision stamps.
 
@@ -153,6 +187,7 @@ def run_migrations(project_root: Path, config: Config, *, dry_run: bool = False)
     """Apply pending migrations, then autogenerate new ones if models changed."""
     alembic_cfg = _get_alembic_config(project_root, config)
     _ensure_env_py_postgres_uuid_autogen(project_root)
+    _ensure_env_py_combined_hooks(project_root)
 
     script = ScriptDirectory.from_config(alembic_cfg)
     # No revision files yet (e.g. after ``hof db reset`` cleared ``versions/``): autogenerate
@@ -226,7 +261,7 @@ from alembic import context
 config = context.config
 
 from hof.db.engine import Base
-from hof.db.alembic_hooks import process_revision_directives_postgres_uuid_using
+from hof.db.alembic_hooks import process_revision_directives
 import hof.flows.models  # noqa: F401 — register flow execution tables
 target_metadata = Base.metadata
 
@@ -237,7 +272,7 @@ def run_migrations_offline():
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
-        process_revision_directives=process_revision_directives_postgres_uuid_using,
+        process_revision_directives=process_revision_directives,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -253,7 +288,7 @@ def run_migrations_online():
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            process_revision_directives=process_revision_directives_postgres_uuid_using,
+            process_revision_directives=process_revision_directives,
         )
         with context.begin_transaction():
             context.run_migrations()

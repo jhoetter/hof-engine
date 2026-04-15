@@ -140,8 +140,17 @@ class ViteManager:
 
         package_json = self.ui_dir / "package.json"
         regenerated_pkg = False
-        if not package_json.exists() or self._has_broken_file_refs(package_json):
+        if not package_json.exists():
             self._create_package_json(package_json)
+            regenerated_pkg = True
+            lock = self.ui_dir / "package-lock.json"
+            if lock.exists():
+                lock.unlink()
+            nm = self.ui_dir / "node_modules"
+            if nm.is_dir():
+                shutil.rmtree(nm, ignore_errors=True)
+        elif self._has_broken_file_refs(package_json):
+            self._repair_package_json(package_json)
             regenerated_pkg = True
             lock = self.ui_dir / "package-lock.json"
             if lock.exists():
@@ -716,6 +725,57 @@ class ViteManager:
             },
         }
         path.write_text(json.dumps(package, indent=2))
+
+    def _repair_package_json(self, path: Path) -> None:
+        """Fix broken ``file:`` refs in an existing package.json, preserving all other deps.
+
+        This avoids the destructive full-regeneration path that drops deps the
+        project actually needs (e.g. @blocknote/*, @xyflow/react, cmdk, …).
+        Only the broken entries are patched; everything else is kept as-is.
+        """
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            self._create_package_json(path)
+            return
+
+        hof_react = self._hof_react_version()
+
+        for section in ("dependencies", "devDependencies"):
+            section_data = data.get(section)
+            if not section_data or not isinstance(section_data, dict):
+                continue
+            for pkg, ver in list(section_data.items()):
+                if not isinstance(ver, str) or not ver.startswith("file:"):
+                    continue
+                target = (path.parent / ver[5:]).resolve()
+                if target.exists():
+                    continue
+                if pkg == "@hof-engine/react" and hof_react is not None:
+                    section_data[pkg] = hof_react
+                else:
+                    section_data[pkg] = "*"
+
+        deps = data.setdefault("dependencies", {})
+        if "react" not in deps:
+            deps["react"] = "^19.0.0"
+        if "react-dom" not in deps:
+            deps["react-dom"] = "^19.0.0"
+        if hof_react is not None:
+            if "@hof-engine/react" not in deps:
+                deps["@hof-engine/react"] = hof_react
+            for pkg in _HOF_REACT_REQUIRED_DEPS:
+                if pkg not in deps:
+                    deps[pkg] = "*"
+
+        for pkg in self._collect_module_npm_deps():
+            if pkg not in deps:
+                deps[pkg] = "*"
+        for pkg in self._collect_css_import_deps():
+            if pkg not in deps:
+                deps[pkg] = "*"
+
+        path.write_text(json.dumps(data, indent=2))
 
     def _create_vite_config(self, path: Path) -> None:
         ds_css = self._resolve_design_system_css()

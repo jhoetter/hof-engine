@@ -197,9 +197,23 @@ class ParameterInfo:
 
 
 def _extract_parameters(fn: Callable) -> list[ParameterInfo]:
+    """Extract explicit parameters from ``fn``'s signature.
+
+    ``*args`` and ``**kwargs`` are intentionally excluded: they represent the
+    "accept anything else" contract rather than named inputs and are handled
+    by the HTTP route via ``extra="allow"`` on the generated Pydantic schema.
+    Treating them as named required fields caused every request to
+    ``@function``s with ``**kwargs`` (e.g. ``update_project``, ``complete_fru``)
+    to fail with ``422 Field required`` at the ``kwargs`` field.
+    """
     sig = inspect.signature(fn)
     params = []
     for param_name, param in sig.parameters.items():
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
         params.append(
             ParameterInfo(
                 name=param_name,

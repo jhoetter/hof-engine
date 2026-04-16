@@ -187,6 +187,40 @@ class TestFunctionsRoutes:
         assert response.status_code == 200
         assert "duration_ms" in response.json()
 
+    def test_call_function_with_var_keyword_accepts_extras(self, client):
+        """Regression: ``**kwargs`` must not trigger ``422 Field required``.
+
+        Previously the schema treated ``**kwargs`` as a required parameter,
+        so every call like ``update_project(id, domain=...)`` failed before
+        reaching the function body. Extras should instead pass through.
+        """
+
+        @function
+        def update_thing(id: str, **kwargs) -> dict:
+            return {"id": id, "extras": dict(kwargs)}
+
+        response = client.post(
+            "/api/functions/update_thing",
+            json={"id": "x", "domain": "acme.com", "dns_mode": "manual"},
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()["result"]
+        assert result["id"] == "x"
+        assert result["extras"] == {"domain": "acme.com", "dns_mode": "manual"}
+
+    def test_call_function_with_var_keyword_still_requires_named_params(self, client):
+        """Named required params remain required even when ``**kwargs`` is present."""
+
+        @function
+        def needs_id(id: str, **kwargs) -> dict:
+            return {"id": id}
+
+        response = client.post(
+            "/api/functions/needs_id",
+            json={"domain": "acme.com"},
+        )
+        assert response.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # Flows routes

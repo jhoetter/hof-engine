@@ -22,7 +22,14 @@ ADMIN_VITE_PORT = int(os.environ.get("HOF_ADMIN_VITE_PORT", "0"))
 USER_VITE_PORT = int(os.environ.get("HOF_USER_VITE_PORT", "0"))
 
 # Vite may still be binding when the API is already up; httpx raises Timeout on slow connects.
-_VITE_PROXY_ERRORS = (httpx.ConnectError, httpx.TimeoutException)
+# RemoteProtocolError happens when Vite restarts/disconnects mid-request (HMR reloads, crashes).
+_VITE_PROXY_ERRORS = (
+    httpx.ConnectError,
+    httpx.TimeoutException,
+    httpx.RemoteProtocolError,
+    httpx.ReadError,
+    httpx.WriteError,
+)
 
 # httpx defaults to 5s; first Vite compile / large graphs often exceed that. Without a
 # generous timeout, TimeoutException maps to 503 "App not ready" (see _VITE_PROXY_ERRORS).

@@ -336,9 +336,7 @@ class ViteManager:
             shown = sources[:3]
             extra = f" (+{len(sources) - 3} more)" if len(sources) > 3 else ""
             lines.append(f"  - {pkg}\n      imported by: {', '.join(shown)}{extra}")
-        lines.append(
-            "\nAdd them to ui/package.json under 'dependencies' and re-run the build."
-        )
+        lines.append("\nAdd them to ui/package.json under 'dependencies' and re-run the build.")
         raise RuntimeError("\n".join(lines))
 
     @staticmethod

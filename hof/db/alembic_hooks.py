@@ -19,6 +19,7 @@ import sqlalchemy as sa
 # Hook 1: VARCHAR → UUID USING clause
 # ---------------------------------------------------------------------------
 
+
 def process_revision_directives_postgres_uuid_using(context, revision, directives) -> None:
     """Inject ``postgresql_using`` when autogenerate alters String/VARCHAR → UUID.
 
@@ -82,6 +83,7 @@ def process_revision_directives_postgres_uuid_using(context, revision, directive
 # Hook 2: Strip spurious ALTER COLUMN id nullable ops (SERIAL PK drift)
 # ---------------------------------------------------------------------------
 
+
 def strip_serial_pk_nullable_ops(directives) -> None:
     """Drop ``ALTER COLUMN … id DROP NOT NULL`` that autogenerate emits for SERIAL PKs.
 
@@ -128,6 +130,7 @@ def strip_serial_pk_nullable_ops(directives) -> None:
 # Hook 3: Suppress empty revisions
 # ---------------------------------------------------------------------------
 
+
 def _suppress_empty_revision(directives) -> None:
     """Clear *directives* when autogenerate finds nothing to change."""
     if not directives:
@@ -141,6 +144,7 @@ def _suppress_empty_revision(directives) -> None:
 # ---------------------------------------------------------------------------
 # Combined dispatcher — use this in env.py
 # ---------------------------------------------------------------------------
+
 
 def process_revision_directives(context, revision, directives) -> None:
     """Combined ``process_revision_directives`` for all hof autogenerate fixes.

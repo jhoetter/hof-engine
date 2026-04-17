@@ -652,3 +652,95 @@ class TestEnsureSetup:
         assert (ui_dir / "tsconfig.json").exists()
         assert (ui_dir / "index.html").exists()
         assert (ui_dir / "_hof_entry.tsx").exists()
+
+
+class TestHofReactRequiredDeps:
+    def test_derives_from_hof_react_package_json(self):
+        from hof.ui.vite import _hof_react_required_deps
+
+        deps = _hof_react_required_deps()
+        # ``react`` and ``react-dom`` are always filtered (added explicitly elsewhere).
+        assert "react" not in deps
+        assert "react-dom" not in deps
+        # When hof-react is on disk the result should at minimum contain the
+        # peer deps i18next and lucide-react.
+        assert "i18next" in deps
+        assert "lucide-react" in deps
+
+    def test_falls_back_when_hof_react_missing(self, monkeypatch, tmp_path):
+        from hof.ui import vite as vite_mod
+
+        monkeypatch.setattr(vite_mod, "_hof_react_dir", lambda: tmp_path / "missing")
+        deps = vite_mod._hof_react_required_deps()
+        assert deps == vite_mod._HOF_REACT_REQUIRED_DEPS_FALLBACK
+
+
+class TestPreflightCheckImports:
+    def _setup_minimal(self, ui_dir: Path) -> None:
+        (ui_dir / "package.json").write_text(
+            json.dumps({"dependencies": {"react": "^19.0.0", "react-dom": "^19.0.0"}})
+        )
+
+    def test_passes_when_all_imports_declared(self, ui_dir, manager):
+        self._setup_minimal(ui_dir)
+        pages = ui_dir / "pages"
+        pages.mkdir()
+        (pages / "index.tsx").write_text(
+            'import React from "react";\nexport default function I(){return null;}\n'
+        )
+        manager._preflight_check_imports()  # no raise
+
+    def test_raises_for_missing_top_level_pkg(self, ui_dir, manager):
+        self._setup_minimal(ui_dir)
+        pages = ui_dir / "pages"
+        pages.mkdir()
+        (pages / "docs.tsx").write_text(
+            'import { marked } from "marked";\nimport mermaid from "mermaid";\n'
+        )
+        with pytest.raises(RuntimeError) as exc:
+            manager._preflight_check_imports()
+        msg = str(exc.value)
+        assert "marked" in msg
+        assert "mermaid" in msg
+        assert "package.json" in msg
+
+    def test_raises_for_missing_scoped_pkg(self, ui_dir, manager):
+        self._setup_minimal(ui_dir)
+        pages = ui_dir / "pages"
+        pages.mkdir()
+        (pages / "x.tsx").write_text('import { foo } from "@blocknote/core";\n')
+        with pytest.raises(RuntimeError) as exc:
+            manager._preflight_check_imports()
+        assert "@blocknote/core" in str(exc.value)
+
+    def test_ignores_relative_and_alias_and_virtual_imports(self, ui_dir, manager):
+        self._setup_minimal(ui_dir)
+        pages = ui_dir / "pages"
+        pages.mkdir()
+        (pages / "x.tsx").write_text(
+            'import { a } from "./local";\n'
+            'import { b } from "../sibling";\n'
+            'import { c } from "@/lib/util";\n'
+            'import data from "virtual:spreadsheet-docs-en";\n'
+            'import fs from "node:fs";\n'
+        )
+        manager._preflight_check_imports()  # no raise
+
+    def test_treats_hof_engine_react_as_always_present(self, ui_dir, manager):
+        self._setup_minimal(ui_dir)
+        pages = ui_dir / "pages"
+        pages.mkdir()
+        (pages / "x.tsx").write_text(
+            'import { useHofFunction } from "@hof-engine/react";\n'
+            'import { WebSessionCanvas } from "@hof-engine/web-session-canvas";\n'
+        )
+        manager._preflight_check_imports()  # no raise
+
+    def test_silently_skips_when_no_package_json(self, ui_dir, manager):
+        # No package.json on disk: don't crash, just no-op.
+        manager._preflight_check_imports()
+
+    def test_silently_skips_when_no_scan_roots(self, ui_dir, manager):
+        # package.json exists but no pages/components/lib/entry files.
+        self._setup_minimal(ui_dir)
+        manager._preflight_check_imports()

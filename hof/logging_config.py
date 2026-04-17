@@ -16,6 +16,24 @@ from datetime import UTC
 from typing import Any
 
 
+class _NoisyLibFilter(logging.Filter):
+    """Handler-level filter that drops INFO/DEBUG from noisy third-party loggers.
+
+    Setting logger levels alone is insufficient because libraries like asyncssh
+    create child loggers with explicit levels, bypassing the parent setting.
+    A handler-level filter cannot be circumvented.
+    """
+
+    _PREFIXES = ("asyncssh", "httpx", "httpcore", "hcloud", "asyncio")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        name = record.name
+        for prefix in self._PREFIXES:
+            if name == prefix or name.startswith(prefix + "."):
+                return record.levelno >= logging.WARNING
+        return True
+
+
 def configure_logging(*, debug: bool = False, app_name: str = "hof") -> None:
     """Configure the root logger and hof-specific loggers.
 
@@ -30,14 +48,19 @@ def configure_logging(*, debug: bool = False, app_name: str = "hof") -> None:
     else:
         _configure_prod_logging(level, app_name)
 
-    # Agent / tool loop (hof.agent.stream, hof.agent.tooling) uses the same level as root.
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(_NoisyLibFilter())
+
     logging.getLogger("hof.agent").setLevel(level)
 
-    # Silence noisy third-party loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO if debug else logging.WARNING)
     logging.getLogger("celery").setLevel(logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("asyncssh").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+    logging.getLogger("hcloud").setLevel(logging.WARNING)
 
 
 # ---------------------------------------------------------------------------

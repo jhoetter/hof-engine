@@ -9,7 +9,7 @@ import inspect
 from typing import Any
 
 import sqlalchemy as sa
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 # Fields that users must never set directly (managed by the framework)
 _SYSTEM_FIELDS = frozenset({"id", "created_at", "updated_at"})
@@ -94,6 +94,9 @@ def build_function_input_schema(metadata: Any) -> type[BaseModel]:
     """Build a Pydantic model for function call requests.
 
     Uses the ParameterInfo list already extracted by the @function decorator.
+    If the underlying function declares ``**kwargs`` the generated model sets
+    ``extra="allow"`` so unknown fields flow through to the function instead of
+    being rejected or silently dropped.
     """
     py_type_map = {
         "str": str,
@@ -133,5 +136,20 @@ def build_function_input_schema(metadata: Any) -> type[BaseModel]:
             else:
                 fields[field_name] = (py_type | None, default_val)
 
+    accepts_var_keyword = False
+    fn = getattr(metadata, "fn", None)
+    if fn is not None:
+        try:
+            sig = inspect.signature(fn)
+        except (TypeError, ValueError):
+            sig = None
+        if sig is not None:
+            accepts_var_keyword = any(
+                p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            )
+
     model_name = f"{metadata.name.replace('_', ' ').title().replace(' ', '')}InputSchema"
-    return create_model(model_name, **fields)
+    model_kwargs: dict[str, Any] = dict(fields)
+    if accepts_var_keyword:
+        model_kwargs["__config__"] = ConfigDict(extra="allow", populate_by_name=True)
+    return create_model(model_name, **model_kwargs)

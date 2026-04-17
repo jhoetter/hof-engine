@@ -25,7 +25,11 @@ _HOF_ENGINE_DEV_ALIASES: list[tuple[str, str]] = [
     ),
 ]
 
-_HOF_REACT_REQUIRED_DEPS: list[str] = [
+# Fallback list used only when hof-react/package.json cannot be read (e.g. the
+# package is not present on disk). The runtime path always prefers the live
+# values from hof-react's manifest via ``_hof_react_required_deps()`` so this
+# list does not need to be kept in sync with hof-react itself.
+_HOF_REACT_REQUIRED_DEPS_FALLBACK: list[str] = [
     "lucide-react",
     "i18next",
     "react-i18next",
@@ -39,6 +43,39 @@ _HOF_REACT_REQUIRED_DEPS: list[str] = [
     "lowlight",
     "hast-util-to-jsx-runtime",
 ]
+
+
+def _hof_react_dir() -> Path:
+    """Path to the bundled hof-react package directory (next to this module)."""
+    return Path(__file__).resolve().parent.parent.parent / "hof-react"
+
+
+def _hof_react_required_deps() -> list[str]:
+    """Return the npm packages hof-react needs from the host project.
+
+    Derived live from ``hof-react/package.json`` (``peerDependencies`` plus
+    ``dependencies``) so adding a new dep to hof-react automatically flows
+    through to scaffolded host package.json files without a code change here.
+
+    ``react`` and ``react-dom`` are filtered out — they are added explicitly
+    elsewhere with a pinned major version so the fallback never silently
+    drifts.
+    """
+    pkg = _hof_react_dir() / "package.json"
+    try:
+        data = json.loads(pkg.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return list(_HOF_REACT_REQUIRED_DEPS_FALLBACK)
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for section in ("peerDependencies", "dependencies"):
+        for name in (data.get(section) or {}).keys():
+            if name in ("react", "react-dom") or name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+    return names or list(_HOF_REACT_REQUIRED_DEPS_FALLBACK)
 
 
 class ViteManager:
@@ -164,6 +201,12 @@ class ViteManager:
             self._install_dependencies()
 
         vite_config = self.ui_dir / "vite.config.ts"
+        # Production builds run via ``_vite.build.config.ts`` (see
+        # ``_build_with_inputs``), so this file is only consulted for ``vite
+        # dev`` / ``vite preview``. We keep it valid by detecting broken
+        # relative paths and rewriting it from defaults — the user's existing
+        # dev server config is the only thing lost, which is acceptable for
+        # the typical scaffolded-then-deployed workflow.
         if not vite_config.exists() or self._has_broken_vite_config(vite_config):
             self._create_vite_config(vite_config)
 
@@ -204,6 +247,7 @@ class ViteManager:
         if not self.ui_dir.is_dir():
             return
         self.ensure_setup()
+        self._preflight_check_imports()
 
         inputs: list[str] = []
         if self._has_components():
@@ -221,6 +265,124 @@ class ViteManager:
             )
         else:
             self._build_with_inputs(inputs)
+
+    def _preflight_check_imports(self) -> None:
+        """Fail fast if pages/components import npm packages not in package.json.
+
+        Vite/Rollup will eventually surface this as a "Could not resolve import"
+        error after pulling all dependencies and parsing every module — that
+        full pipeline takes minutes and the resulting message buries the actual
+        cause. Catch the most common case (a top-level package import without a
+        matching entry in ``package.json``) up front so the error is fast,
+        scoped, and points at the file you need to edit.
+
+        This is best-effort: it only flags clearly missing top-level packages.
+        Aliases (``@/foo``), relative imports, and node built-ins are ignored.
+        """
+        package_json = self.ui_dir / "package.json"
+        if not package_json.is_file():
+            return
+        try:
+            data = json.loads(package_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+
+        declared: set[str] = set()
+        for section in ("dependencies", "devDependencies", "peerDependencies"):
+            for name in (data.get(section) or {}).keys():
+                declared.add(name)
+
+        scan_roots: list[Path] = []
+        for sub in ("pages", "components", "lib"):
+            d = self.ui_dir / sub
+            if d.is_dir():
+                scan_roots.append(d)
+        for entry in ("_hof_entry.tsx", "_hof_pages_entry.tsx"):
+            p = self.ui_dir / entry
+            if p.is_file():
+                scan_roots.append(p)
+        if not scan_roots:
+            return
+
+        imports = self._collect_npm_imports(scan_roots)
+
+        # Built-in/aliased identifiers we never expect to find in package.json.
+        ignored_prefixes = (
+            "@/",
+            "node:",
+            "virtual:",
+            "@hofos/",  # workspace-only packages, resolved by aliases
+            "@hof-design-system.css",
+        )
+        # ``@hof-engine/react`` (and its subpaths) is wired up via the
+        # _hof-engine_ Python install + file: ref injection. Treat it as
+        # always-available rather than expecting an explicit declaration.
+        always_present = {"@hof-engine/react", "@hof-engine/web-session-canvas"}
+
+        missing: dict[str, set[str]] = {}
+        for pkg, sources in imports.items():
+            if pkg in declared or pkg in always_present:
+                continue
+            if any(pkg.startswith(p) for p in ignored_prefixes):
+                continue
+            missing[pkg] = sources
+
+        if not missing:
+            return
+
+        lines = ["Missing npm dependencies (declared imports without package.json entry):"]
+        for pkg in sorted(missing):
+            sources = sorted(missing[pkg])
+            shown = sources[:3]
+            extra = f" (+{len(sources) - 3} more)" if len(sources) > 3 else ""
+            lines.append(f"  - {pkg}\n      imported by: {', '.join(shown)}{extra}")
+        lines.append(
+            "\nAdd them to ui/package.json under 'dependencies' and re-run the build."
+        )
+        raise RuntimeError("\n".join(lines))
+
+    @staticmethod
+    def _collect_npm_imports(roots: list[Path]) -> dict[str, set[str]]:
+        """Walk *roots* and return ``{pkg: {file, ...}}`` for every top-level import.
+
+        Top-level means: not relative (``./``, ``../``), not an absolute path,
+        not a single-letter alias like ``@/``. Scoped packages (``@scope/name``)
+        are normalized to ``@scope/name``.
+        """
+        import re
+
+        files: list[Path] = []
+        for root in roots:
+            if root.is_file():
+                files.append(root)
+            else:
+                files.extend(root.rglob("*.tsx"))
+                files.extend(root.rglob("*.ts"))
+
+        # Match `from "<spec>"` or `from '<spec>'` and bare `import "<spec>"`.
+        spec_re = re.compile(
+            r"""(?:from|import)\s+(?:[^"';]*?\s+from\s+)?["']([^"']+)["']""",
+            re.MULTILINE,
+        )
+        result: dict[str, set[str]] = {}
+        for f in files:
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for m in spec_re.finditer(text):
+                spec = m.group(1)
+                if not spec or spec.startswith((".", "/")):
+                    continue
+                if spec.startswith("@"):
+                    parts = spec.split("/", 2)
+                    if len(parts) < 2:
+                        continue
+                    pkg = "/".join(parts[:2])
+                else:
+                    pkg = spec.split("/", 1)[0]
+                result.setdefault(pkg, set()).add(str(f))
+        return result
 
     def _build_with_inputs(self, inputs: list[str]) -> None:
         """Run vite build with explicit rollup input entries."""
@@ -305,7 +467,7 @@ class ViteManager:
             "    alias: {\n"
             f"{alias_block}\n"
             "    },\n"
-            f"    dedupe: {json.dumps(['react', 'react-dom'] + _HOF_REACT_REQUIRED_DEPS)},\n"
+            f"    dedupe: {json.dumps(['react', 'react-dom'] + _hof_react_required_deps())},\n"
             "  },\n"
             "  build: {\n"
             f"    rollupOptions: {{ input: {json.dumps(input_obj)} }},\n"
@@ -691,7 +853,7 @@ class ViteManager:
         hof_react = self._hof_react_version()
         if hof_react is not None:
             deps["@hof-engine/react"] = hof_react
-            for pkg in _HOF_REACT_REQUIRED_DEPS:
+            for pkg in _hof_react_required_deps():
                 if pkg not in deps:
                     deps[pkg] = "*"
 
@@ -764,7 +926,7 @@ class ViteManager:
         if hof_react is not None:
             if "@hof-engine/react" not in deps:
                 deps["@hof-engine/react"] = hof_react
-            for pkg in _HOF_REACT_REQUIRED_DEPS:
+            for pkg in _hof_react_required_deps():
                 if pkg not in deps:
                     deps[pkg] = "*"
 
@@ -856,7 +1018,7 @@ class ViteManager:
             + comp_alias
             + dev_alias_block
             + "    },\n"
-            f"    dedupe: {json.dumps(['react', 'react-dom'] + _HOF_REACT_REQUIRED_DEPS)},\n"
+            f"    dedupe: {json.dumps(['react', 'react-dom'] + _hof_react_required_deps())},\n"
             "  },\n"
             "  server: {\n"
             f"    port: {USER_VITE_PORT},\n"
@@ -904,7 +1066,7 @@ class ViteManager:
         Docker) where the hof-react directory isn't present — the package
         is not published to npm so we can't fall back to a registry version.
         """
-        hof_react_dir = Path(__file__).resolve().parent.parent.parent / "hof-react"
+        hof_react_dir = _hof_react_dir()
         if (hof_react_dir / "dist").exists():
             return f"file:{hof_react_dir}"
         return None

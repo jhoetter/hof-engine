@@ -233,12 +233,18 @@ class ViteManager:
 
         self.ensure_setup()
 
+        # Stream Vite's stdout to /dev/null (its progress lines are noisy
+        # and the host shell already prints "User UI on port N"), but
+        # keep stderr on the dev terminal so resolve / config / plugin
+        # errors are immediately visible. Without this, a Vite startup
+        # crash silently leaves the user-vite port unbound and the host
+        # FastAPI proxy returns 503 ("App not ready") with no indication
+        # of why — costly to debug.
         self.process = subprocess.Popen(
             ["npx", "vite", "--port", str(port), "--strictPort"],
             cwd=str(self.ui_dir),
             env=env,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
         )
         return self.process
 

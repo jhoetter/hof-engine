@@ -400,13 +400,16 @@ def _start_admin_vite(
         )
 
     console.print(f"  [cyan]Admin UI[/] (Vite) on port {ADMIN_VITE_PORT}")
+    # See `hof.ui.vite.ViteManager.start_dev_server` for the rationale:
+    # silence stdout (noisy progress) but keep stderr on the dev
+    # terminal so resolve / config / plugin errors don't get swallowed
+    # and surface as a confusing 503 from the host FastAPI proxy.
     processes.append(
         subprocess.Popen(
             ["npx", "vite", "--port", str(ADMIN_VITE_PORT), "--strictPort"],
             cwd=str(ADMIN_UI_DIR),
             env=env,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
         )
     )
 

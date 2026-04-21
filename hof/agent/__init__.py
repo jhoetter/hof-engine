@@ -51,6 +51,7 @@ from hof.agent.policy import (
     try_get_agent_policy,
 )
 from hof.agent.sandbox.config import SandboxConfig
+from hof.agent.subagent import iter_subagent_chat_stream
 from hof.agent.stream import (
     collect_agent_chat_from_stream,
     default_attachments_system_note,
@@ -107,6 +108,7 @@ __all__ = [
     "iter_agent_resume_plan_clarification_stream",
     "iter_agent_resume_stream",
     "iter_agent_resume_web_session_stream",
+    "iter_subagent_chat_stream",
     "normalize_conversation_state_for_storage",
     "try_get_agent_policy",
     "validate_conversation_state",

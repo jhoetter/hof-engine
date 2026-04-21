@@ -78,6 +78,17 @@ def set_sandbox_run(
     )
 
 
+def adopt_sandbox_run(state: SandboxRunState) -> contextvars.Token[SandboxRunState | None]:
+    """Bind ``state`` to the current ContextVar without creating a new state.
+
+    Used on resume: after a turn paused on ``awaiting_confirmation`` we deferred the
+    release of the terminal session for the next turn. The next turn must reuse the
+    *same* :class:`SandboxRunState` object (the one carrying ``terminal_session``)
+    rather than allocate a fresh one which would discard the bound container.
+    """
+    return _sandbox_run.set(state)
+
+
 def reset_sandbox_run(token: contextvars.Token[SandboxRunState | None]) -> None:
     _sandbox_run.reset(token)
 

@@ -28,8 +28,10 @@ from hof.agent.policy import (
 )
 from hof.agent.sandbox.constants import HOF_BUILTIN_TERMINAL_EXEC
 from hof.agent.sandbox.context import (
+    adopt_sandbox_run,
     bind_sandbox_run,
     get_sandbox_run,
+    get_sandbox_run_for_bind,
     release_bound_terminal_session,
     reset_sandbox_run,
     set_sandbox_run,
@@ -128,33 +130,88 @@ def _args_wire_emit_cap_chars(name: str) -> int:
     return 2000
 
 
+def _has_sandbox_required_pendings(run_id: str, policy: AgentPolicy) -> bool:
+    """True if any pending mutation for ``run_id`` is in ``policy.sandbox_required``.
+
+    Called from ``_maybe_wrap_sandbox.finally`` to decide whether the sandbox
+    terminal session must be kept alive across an ``awaiting_confirmation`` pause.
+    Uses persisted run + pending state because the agent loop has already
+    yielded and ``open_pending_ids`` is no longer in this stack frame.
+    """
+    required = policy.sandbox_required
+    if not required:
+        return False
+    run = load_agent_run(run_id)
+    if not run:
+        return False
+    open_ids = run.get("open_pending_ids")
+    if not isinstance(open_ids, list) or not open_ids:
+        return False
+    for pid in open_ids:
+        try:
+            p = load_pending(str(pid))
+        except Exception:
+            continue
+        if not p:
+            continue
+        fname = str(p.get("function_name") or "")
+        if fname and fname in required:
+            return True
+    return False
+
+
 def _maybe_wrap_sandbox(
     policy: AgentPolicy,
     run_id: str,
     loop_gen: Iterator[dict[str, Any]],
     chat_attachments: list[dict[str, str]] | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Bind sandbox terminal session to this run (release container when the loop ends)."""
+    """Bind sandbox terminal session to this run (release container when the loop ends).
+
+    When the loop ends with sandbox-required mutations still pending (i.e. the
+    user must approve a tool that reads from ``/workspace``), defer the release
+    so the next turn can resume against the same container. The next turn's
+    call to this wrapper detects and reuses the persisted ``SandboxRunState``.
+    """
     sc = policy.sandbox.with_env_overrides() if policy.sandbox is not None else None
     if sc is not None and sc.enabled:
-        token = set_sandbox_run(
-            run_id=run_id,
-            user_id=run_id,
-            policy=policy,
-            chat_attachments=chat_attachments,
-        )
-        st = get_sandbox_run()
-        if st is not None:
-            bind_sandbox_run(run_id, st)
+        existing = get_sandbox_run_for_bind(run_id)
+        if existing is not None:
+            # Resume after deferred release: reuse the same state object so the
+            # bound terminal_session (and its container's /workspace) survives.
+            if chat_attachments is not None and existing.chat_attachments is None:
+                existing.chat_attachments = chat_attachments
+            token = adopt_sandbox_run(existing)
             logger.info(
-                "sandbox: bound run_id=%s (thread-safe table + ContextVar)",
+                "sandbox: reusing run_id=%s (deferred from previous turn)",
                 run_id,
             )
+        else:
+            token = set_sandbox_run(
+                run_id=run_id,
+                user_id=run_id,
+                policy=policy,
+                chat_attachments=chat_attachments,
+            )
+            st = get_sandbox_run()
+            if st is not None:
+                bind_sandbox_run(run_id, st)
+                logger.info(
+                    "sandbox: bound run_id=%s (thread-safe table + ContextVar)",
+                    run_id,
+                )
         try:
             yield from loop_gen
         finally:
-            release_bound_terminal_session(run_id=run_id)
-            unbind_sandbox_run(run_id)
+            if _has_sandbox_required_pendings(run_id, policy):
+                logger.info(
+                    "sandbox: deferring release run_id=%s "
+                    "(sandbox-required mutations pending)",
+                    run_id,
+                )
+            else:
+                release_bound_terminal_session(run_id=run_id)
+                unbind_sandbox_run(run_id)
             try:
                 reset_sandbox_run(token)
             except ValueError:
@@ -3864,6 +3921,26 @@ def _run_agent_resume_stream(
                 exc_info=True,
             )
             inbox_id_snapshot = set()
+
+    # Defense in depth: if a previous turn deferred the sandbox release because a
+    # sandbox-required mutation is being confirmed now, re-bind the existing state
+    # to the ContextVar so functions that use ``get_sandbox_run()`` (rather than
+    # ``resolve_sandbox_run_state(get_tool_execution_run_id())``) still resolve.
+    _resume_sandbox_token = None
+    _existing_sandbox = get_sandbox_run_for_bind(rid)
+    if _existing_sandbox is not None:
+        try:
+            _resume_sandbox_token = adopt_sandbox_run(_existing_sandbox)
+            logger.info(
+                "sandbox: rebinding ContextVar for resume run_id=%s "
+                "(executing %d confirmed mutation(s))",
+                rid,
+                n_confirm,
+            )
+        except Exception:
+            logger.debug("sandbox: adopt_sandbox_run failed on resume", exc_info=True)
+            _resume_sandbox_token = None
+
     try:
         for pid in open_ids:
             confirm = by_id[pid]

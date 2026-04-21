@@ -56,6 +56,12 @@ class AgentExtension:
 
     allowlist_read: frozenset[str] = frozenset()
     allowlist_mutation: frozenset[str] = frozenset()
+    #: Mutation tools whose execution depends on the agent sandbox being alive
+    #: (e.g. they read files from ``/workspace``). When any such mutation is
+    #: pending after ``awaiting_confirmation``, the engine defers releasing the
+    #: terminal session so the workspace is still populated when the user
+    #: resumes the run via ``agent_resume_mutations``.
+    sandbox_required: frozenset[str] = frozenset()
 
     tool_internal_rationale: dict[str, str] = field(default_factory=dict)
     tool_when_to_use: dict[str, str] = field(default_factory=dict)
@@ -153,6 +159,7 @@ class MergedExtensions:
 
     allowlist_read: frozenset[str]
     allowlist_mutation: frozenset[str]
+    sandbox_required: frozenset[str]
 
     tool_internal_rationale: dict[str, str]
     tool_when_to_use: dict[str, str]
@@ -188,6 +195,7 @@ def merge_extensions(
 
     read = set(base_read)
     mutation = set(base_mutation)
+    sandbox_required: set[str] = set()
     rationale = dict(base_rationale)
     when_to_use = dict(base_when_to_use)
     related: dict[str, list[str]] = {k: list(v) for k, v in base_related_tools.items()}
@@ -206,6 +214,7 @@ def merge_extensions(
     for ext in extensions:
         read |= ext.allowlist_read
         mutation |= ext.allowlist_mutation
+        sandbox_required |= ext.sandbox_required
 
         rationale.update(ext.tool_internal_rationale)
         when_to_use.update(ext.tool_when_to_use)
@@ -239,6 +248,7 @@ def merge_extensions(
     return MergedExtensions(
         allowlist_read=frozenset(read),
         allowlist_mutation=frozenset(mutation),
+        sandbox_required=frozenset(sandbox_required),
         tool_internal_rationale=rationale,
         tool_when_to_use=when_to_use,
         tool_related_tools=related,

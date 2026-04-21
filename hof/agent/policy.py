@@ -300,6 +300,14 @@ class AgentPolicy:
     # inbox review — optional streamed turn.
     web_session_barrier_summary_user_message: str = DEFAULT_WEB_SESSION_BARRIER_SUMMARY_USER_MESSAGE
     web_session_barrier_summary_mode: InboxReviewSummaryMode = "llm_stream"
+    # Mutation tool names whose execution depends on the agent sandbox being alive
+    # (e.g. they read files from ``/workspace``). When any of these is pending after
+    # ``awaiting_confirmation``, the engine defers releasing the terminal session so
+    # the workspace is still populated when the user resumes via
+    # ``agent_resume_mutations``. Domain modules declare these via
+    # ``AgentExtension.sandbox_required``; merge into this set in the app's
+    # ``configure_agent`` call.
+    sandbox_required: frozenset[str] = frozenset()
     # Short hint for streamed tool_call events (UI); keep concise.
     tool_internal_rationale: dict[str, str] = field(default_factory=dict)
     # Merged into OpenAI tool descriptions and hof fn describe.

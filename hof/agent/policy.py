@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -20,6 +20,15 @@ AttachmentsSystemNoteFn = Callable[[list[dict[str, str]]], str]
 # Args: ``TerminalSession``, normalized attachments (``object_key``, optional ``filename`` /
 # ``content_type``).
 SandboxStageChatAttachmentsFn = Callable[[Any, list[dict[str, str]]], None]
+
+# Pre-dispatch tool-call guard. Receives the parsed argument mapping for a
+# pending tool call; returns ``None`` to allow the call, or a non-empty string
+# to refuse it. The string is forwarded to the LLM as the tool's error result
+# so it can re-route on the next turn (typically by calling a different tool).
+# Domain extensions register validators via
+# :class:`hof.agent.extensions.AgentExtension.tool_pre_call_validators` and the
+# merge step folds them into :attr:`AgentPolicy.tool_pre_call_validators`.
+ToolPreCallValidatorFn = Callable[[Mapping[str, Any]], str | None]
 
 
 @dataclass(frozen=True)
@@ -340,19 +349,30 @@ class AgentPolicy:
     # thread; client resumes with ``iter_agent_resume_web_session_stream``. Set ``False`` or
     # ``HOF_BROWSER_ASYNC=0`` for synchronous full poll (debug).
     browser_async: bool = True
+    # Pre-dispatch tool-call guards. ``tool_name -> [validator, ...]``. Each
+    # validator inspects the call's parsed arguments and either returns
+    # ``None`` (allow) or a non-empty string (refuse with that error message
+    # surfaced to the LLM as the tool's error result). Validators run in
+    # registration order; the first non-None response wins. Used by domain
+    # modules to harden routing decisions that the system prompt cannot
+    # reliably enforce on its own — e.g. blocking ``hof_builtin_browse_web``
+    # for office-document tasks. Domain modules contribute validators via
+    # :class:`hof.agent.extensions.AgentExtension.tool_pre_call_validators`.
+    tool_pre_call_validators: dict[str, list[ToolPreCallValidatorFn]] = field(default_factory=dict)
 
     def effective_allowlist(self) -> frozenset[str]:
         sc = self.sandbox.with_env_overrides() if self.sandbox is not None else None
+        browser_visible = self.browser is not None and self.browser.expose_to_parent
         if sc is not None and sc.enabled and sc.terminal_only_dispatch:
             term = frozenset({HOF_BUILTIN_TERMINAL_EXEC})
             out = frozenset(sc.builtins_when_terminal_only) | term
             # Browser runs in Browser Use Cloud (not the sandbox shell); still expose it here
             # so terminal-only apps can browse without disabling HOF_SANDBOX_TERMINAL_ONLY.
-            if self.browser is not None:
+            if browser_visible:
                 out = out | frozenset({HOF_BUILTIN_BROWSE_WEB})
             return out
         base = frozenset(self.allowlist_read | self.allowlist_mutation | BUILTIN_AGENT_TOOL_NAMES)
-        if self.browser is not None:
+        if browser_visible:
             base = base | frozenset({HOF_BUILTIN_BROWSE_WEB})
         if sc is not None and sc.enabled and not sc.terminal_only_dispatch:
             return base | frozenset({HOF_BUILTIN_TERMINAL_EXEC})
@@ -366,7 +386,7 @@ class AgentPolicy:
         The terminal transport tool is never listed.
         """
         base = frozenset(self.allowlist_read | self.allowlist_mutation | BUILTIN_AGENT_TOOL_NAMES)
-        if self.browser is not None:
+        if self.browser is not None and self.browser.expose_to_parent:
             base = base | frozenset({HOF_BUILTIN_BROWSE_WEB})
         sc = self.sandbox.with_env_overrides() if self.sandbox is not None else None
         if sc is not None and sc.enabled and sc.terminal_only_dispatch:
@@ -376,6 +396,29 @@ class AgentPolicy:
     def rationale_for(self, function_name: str) -> str | None:
         key = (function_name or "").strip()
         return self.tool_internal_rationale.get(key)
+
+    def validate_tool_call(self, name: str, args: Mapping[str, Any]) -> str | None:
+        """Run registered pre-dispatch validators for a tool call.
+
+        Returns the first non-None refusal string, or ``None`` if every
+        registered validator (or no validators at all) allows the call.
+
+        ``args`` is the parsed argument mapping for the call. Validators are
+        expected to be cheap and side-effect-free — they exist to gate
+        routing decisions, not to perform real work.
+        """
+        validators = self.tool_pre_call_validators.get(name)
+        if not validators:
+            return None
+        safe_args: Mapping[str, Any] = args if isinstance(args, Mapping) else {}
+        for validator in validators:
+            try:
+                refusal = validator(safe_args)
+            except Exception:  # validators must never break the agent loop
+                continue
+            if refusal:
+                return refusal
+        return None
 
 
 _policy: AgentPolicy | None = None

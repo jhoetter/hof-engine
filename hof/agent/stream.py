@@ -3050,6 +3050,74 @@ def _run_agent_llm_tool_loop(
                             "arguments_chars": len(args_wire),
                         },
                     )
+                    # Pre-dispatch validators (registered by domain extensions
+                    # via ``AgentExtension.tool_pre_call_validators``). If any
+                    # validator refuses the call, surface the refusal as the
+                    # tool's error result and skip dispatch — the LLM will see
+                    # the message in its next turn and re-route. This is the
+                    # only enforcement layer that survives the LLM ignoring
+                    # the system prompt + tool descriptions, so it's where
+                    # routing rules like "use dispatch_office_agent, not
+                    # browse, for office documents" are actually enforced.
+                    refusal: str | None = None
+                    if policy.tool_pre_call_validators:
+                        try:
+                            parsed_for_guard = json.loads(args_wire) if args_wire else {}
+                            if not isinstance(parsed_for_guard, dict):
+                                parsed_for_guard = {}
+                        except json.JSONDecodeError:
+                            parsed_for_guard = {}
+                        refusal = policy.validate_tool_call(name, parsed_for_guard)
+                    if refusal:
+                        err_payload = {
+                            "error": "tool_call_refused",
+                            "message": refusal,
+                            "tool": name,
+                        }
+                        raw_refusal = json.dumps(err_payload)
+                        tex_refusal = ToolExecResult(
+                            raw_json=raw_refusal,
+                            summary=refusal[:200],
+                            ok=False,
+                            status_code=400,
+                            parsed_data=err_payload,
+                        )
+                        tr_refusal: dict[str, Any] = {
+                            "type": "tool_result",
+                            "name": name,
+                            "summary": tex_refusal.summary,
+                            "tool_call_id": tid,
+                            "ok": tex_refusal.ok,
+                            "status_code": tex_refusal.status_code,
+                            "data": tex_refusal.parsed_data,
+                        }
+                        yield tr_refusal
+                        oa_messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tid,
+                                "content": format_tool_result_for_model(name, raw_refusal),
+                            },
+                        )
+                        logger.info(
+                            "agent_chat tool_call_refused run_id=%s round=%d name=%s "
+                            "tool_call_id=%s reason_chars=%d",
+                            run_id,
+                            rounds,
+                            name,
+                            tid,
+                            len(refusal),
+                        )
+                        _agent_stream_debug_append(
+                            {
+                                "kind": "tool_call_refused",
+                                "run_id": run_id,
+                                "round": rounds,
+                                "name": name,
+                                "reason_chars": len(refusal),
+                            },
+                        )
+                        continue
                     if (
                         name == _HOF_BUILTIN_PRESENT_PLAN_CLARIFICATION
                         and agent_chat_mode == "plan_discover"
@@ -3678,9 +3746,21 @@ def _run_agent_chat_stream(
     policy: AgentPolicy,
     mode: str | None = None,
     plan_text: str | None = None,
+    max_rounds: int | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Yield NDJSON-shaped dicts."""
-    max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = _agent_limits()
+    """Yield NDJSON-shaped dicts.
+
+    ``max_rounds`` overrides the process-wide ``agent_max_rounds`` from
+    :func:`_agent_limits` (default 10). Used by sub-agent hosts that
+    need a larger per-call tool-round budget without bumping the
+    process-wide cap.
+    """
+    config_max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = (
+        _agent_limits()
+    )
+    effective_max_rounds = (
+        max_rounds if max_rounds is not None and max_rounds > 0 else config_max_rounds
+    )
 
     norm_fn = policy.normalize_attachments or default_normalize_attachments
     att_norm, att_err = norm_fn(attachments)
@@ -3797,7 +3877,7 @@ def _run_agent_chat_stream(
             run_id,
             lm_backend=lm_backend,
             reasoning=reasoning,
-            max_rounds=max_rounds,
+            max_rounds=effective_max_rounds,
             max_tool_output_chars=max_tool_output_chars,
             max_cli_line_chars=max_cli_line_chars,
             final_extras=final_extras,

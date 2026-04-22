@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import importlib
 import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from hof.agent.policy import (
     InboxScanAfterInboxResumeFn,
@@ -36,6 +38,12 @@ from hof.agent.policy import (
     MutationPreviewFn,
     VerifyInboxWatchFn,
 )
+
+#: Callable that inspects a pending tool call's arguments and either returns
+#: ``None`` to allow it to proceed, or a non-empty string to refuse the call.
+#: The string is surfaced to the LLM as the tool's error result so it can
+#: re-plan on the next turn (typically by calling a different tool).
+ToolPreCallValidator = Callable[[Mapping[str, Any]], str | None]
 
 logger = logging.getLogger("hof.agent.extensions")
 
@@ -76,6 +84,27 @@ class AgentExtension:
     inbox_scan_after_mutations: InboxScanAfterMutationsFn | None = None
     inbox_scan_after_inbox_resume: InboxScanAfterInboxResumeFn | None = None
     verify_inbox_watch: VerifyInboxWatchFn | None = None
+
+    #: Pre-dispatch tool-call guards. Mapping ``tool_name -> validator``. The
+    #: stream layer invokes the validator with the call's parsed argument
+    #: mapping just before dispatching. Return ``None`` to allow the call,
+    #: or a non-empty string to refuse it; the string is sent back to the
+    #: LLM as the tool's error result so it can re-route on the next turn.
+    #:
+    #: Multiple extensions may register a validator for the same tool; they
+    #: are evaluated in registration order and the *first* non-None response
+    #: wins.
+    tool_pre_call_validators: dict[str, ToolPreCallValidator] = field(default_factory=dict)
+
+    #: Domain @function names that should be exposed as first-class LLM tools
+    #: even when the agent runs in ``terminal_only_dispatch`` mode (where
+    #: domain @functions are normally hidden behind ``hof_builtin_terminal_exec``
+    #: + curl). Use this for sub-agent dispatchers and other tools the LLM must
+    #: be able to pick directly without prose-only routing instructions.
+    #:
+    #: Merged into :attr:`hof.agent.sandbox.config.SandboxConfig.builtins_when_terminal_only`
+    #: by the application before constructing the runtime :class:`AgentPolicy`.
+    terminal_only_passthrough_tools: frozenset[str] = frozenset()
 
     system_prompt_section: str = ""
 
@@ -175,6 +204,16 @@ class MergedExtensions:
     inbox_scan_after_inbox_resume: InboxScanAfterInboxResumeFn | None
     verify_inbox_watch: VerifyInboxWatchFn | None
 
+    #: Per-tool list of pre-dispatch validators (append-merged across
+    #: extensions). Evaluated in registration order; first non-None wins.
+    tool_pre_call_validators: dict[str, list[ToolPreCallValidator]]
+
+    #: Union of all :attr:`AgentExtension.terminal_only_passthrough_tools`
+    #: across registered extensions. The application unions this into its
+    #: :class:`SandboxConfig.builtins_when_terminal_only` so the LLM can pick
+    #: domain dispatch tools directly in terminal-only mode.
+    terminal_only_passthrough_tools: frozenset[str]
+
     system_prompt_sections: list[str]
 
 
@@ -209,6 +248,10 @@ def merge_extensions(
     inbox_resume: InboxScanAfterInboxResumeFn | None = None
     verify_watch: VerifyInboxWatchFn | None = None
 
+    pre_call_validators: dict[str, list[ToolPreCallValidator]] = {}
+
+    passthrough_tools: set[str] = set()
+
     prompt_sections: list[str] = []
 
     for ext in extensions:
@@ -242,6 +285,11 @@ def merge_extensions(
         if ext.verify_inbox_watch is not None:
             verify_watch = ext.verify_inbox_watch
 
+        for tool_name, validator in ext.tool_pre_call_validators.items():
+            pre_call_validators.setdefault(tool_name, []).append(validator)
+
+        passthrough_tools |= ext.terminal_only_passthrough_tools
+
         if ext.system_prompt_section:
             prompt_sections.append(ext.system_prompt_section)
 
@@ -260,5 +308,7 @@ def merge_extensions(
         inbox_scan_after_mutations=inbox_scan,
         inbox_scan_after_inbox_resume=inbox_resume,
         verify_inbox_watch=verify_watch,
+        tool_pre_call_validators=pre_call_validators,
+        terminal_only_passthrough_tools=frozenset(passthrough_tools),
         system_prompt_sections=prompt_sections,
     )

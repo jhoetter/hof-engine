@@ -46,3 +46,12 @@ class BrowserConfig:
     #: Keys to list in the system prompt (e.g. app constant names). End-users map values via
     #: ``browser_sensitive_data_fn``; the model references ``<secret:key>`` in tasks.
     sensitive_keys_for_prompt: tuple[str, ...] = ()
+    #: When ``True`` (default), ``hof_builtin_browse_web`` is exposed on the
+    #: parent agent's tool list whenever this config is attached to the policy.
+    #: Set ``False`` for "router" parent agents that should delegate live web
+    #: browsing to a sub-agent (the sub-agent attaches its own
+    #: :class:`BrowserConfig` with ``expose_to_parent=True`` so it can browse
+    #: directly). Affects both
+    #: :meth:`hof.agent.policy.AgentPolicy.effective_allowlist` and
+    #: :meth:`hof.agent.policy.AgentPolicy.skills_catalog_allowlist`.
+    expose_to_parent: bool = True

@@ -56,6 +56,20 @@ export type HofAgentMessagesProps = {
   assistantMarkdownTableRenderer?: AssistantMarkdownTableRenderer;
   /** When set, markdown tables in assistant blocks after a matching tool get a custom renderer (or bundle with fallback). */
   afterToolTableRenderer?: AfterToolTableRendererFn;
+  /**
+   * Tool names whose call/result cards must NOT render in the chat.
+   *
+   * Used by domain modules to keep mechanically necessary "wait /
+   * poll" tool calls (e.g. `wait_for_office_agent_session`,
+   * `wait_for_web_agent_session`) out of the user-facing transcript:
+   * the model still calls them in the loop, but the loading banner
+   * + tool card simply don't appear. Pre-tool-call mutations (terminal
+   * exec, approval rows) are unaffected.
+   *
+   * Names are matched exactly against the wire `name` field — no
+   * normalization. Pass an empty/undefined set to render everything.
+   */
+  silentToolNames?: ReadonlySet<string>;
 };
 
 /** Where to insert plan / clarification elements: anchored to the discovery run (or run before ``[plan:execute]``). */
@@ -96,6 +110,7 @@ export function HofAgentMessages({
   toolResultRenderer,
   assistantMarkdownTableRenderer,
   afterToolTableRenderer,
+  silentToolNames,
 }: HofAgentMessagesProps) {
   const { t } = useTranslation("hofEngine", HOF_REACT_I18N_OPTS);
   const {
@@ -291,6 +306,7 @@ export function HofAgentMessages({
               toolResultActions={toolResultActions}
               toolResultRenderer={toolResultRenderer}
               afterToolTableRenderer={afterToolTableRenderer}
+              silentToolNames={silentToolNames}
             />
           ) : null}
         </div>
@@ -306,6 +322,7 @@ export function HofAgentMessages({
     mutationOutcomeByPendingId,
     toolResultActions,
     toolResultRenderer,
+    silentToolNames,
   ]);
 
   const planRunAnchorIdx = findPlanRunAnchorIndex(thread, planRunId);
@@ -382,6 +399,7 @@ export function HofAgentMessages({
             toolResultActions={toolResultActions}
             toolResultRenderer={toolResultRenderer}
             afterToolTableRenderer={afterToolTableRenderer}
+            silentToolNames={silentToolNames}
           />
         </div>
       );

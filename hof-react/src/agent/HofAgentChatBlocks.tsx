@@ -812,6 +812,7 @@ export function RunBlocksList({
   toolResultActions,
   toolResultRenderer,
   afterToolTableRenderer,
+  silentToolNames,
 }: {
   blocks: LiveBlock[];
   barrier: ApprovalBarrier | null;
@@ -824,6 +825,13 @@ export function RunBlocksList({
   toolResultActions?: ToolResultActionsRenderer;
   toolResultRenderer?: ToolResultRendererFn;
   afterToolTableRenderer?: AfterToolTableRendererFn;
+  /**
+   * Tool wire names whose tool_call / tool_result cards should be
+   * skipped at render time (mechanically necessary "wait/poll" calls
+   * that would otherwise show a misleading loading banner). The model
+   * still calls them; we just don't paint a card.
+   */
+  silentToolNames?: ReadonlySet<string>;
 }) {
   const segments = segmentLiveBlocks(
     dropRedundantModelPhaseBeforeAssistant(blocks),
@@ -844,6 +852,9 @@ export function RunBlocksList({
     <div className="space-y-3">
       {segments.map((seg, segIdx) => {
         if (seg.type === "tool_group") {
+          if (silentToolNames?.has(seg.call.name)) {
+            return null;
+          }
           const pid = seg.mutation?.pending_id?.trim() ?? "";
           let showApproval = false;
           let approvalItemsForMutation: {
@@ -944,6 +955,12 @@ export function RunBlocksList({
           return null;
         }
         if (b.kind === "web_session") {
+          return null;
+        }
+        if (
+          (b.kind === "tool_call" || b.kind === "tool_result") &&
+          silentToolNames?.has(b.name)
+        ) {
           return null;
         }
         const precedingTool = postToolInfoMap?.get(b.id);

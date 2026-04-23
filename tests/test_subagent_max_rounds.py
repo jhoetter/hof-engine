@@ -54,9 +54,7 @@ def test_subagent_max_rounds_resolution_logic() -> None:
     assert _resolve_effective_max_rounds(2, config_max) == 2
 
 
-def _resolve_effective_max_rounds(
-    explicit: int | None, config_value: int
-) -> int:
+def _resolve_effective_max_rounds(explicit: int | None, config_value: int) -> int:
     """Mirror of the resolution expression in ``_run_agent_chat_stream``.
 
     Kept here so the rule is asserted by tests even if the production

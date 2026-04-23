@@ -205,8 +205,7 @@ def _maybe_wrap_sandbox(
         finally:
             if _has_sandbox_required_pendings(run_id, policy):
                 logger.info(
-                    "sandbox: deferring release run_id=%s "
-                    "(sandbox-required mutations pending)",
+                    "sandbox: deferring release run_id=%s (sandbox-required mutations pending)",
                     run_id,
                 )
             else:
@@ -3755,9 +3754,7 @@ def _run_agent_chat_stream(
     need a larger per-call tool-round budget without bumping the
     process-wide cap.
     """
-    config_max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = (
-        _agent_limits()
-    )
+    config_max_rounds, max_tool_output_chars, _max_model_text, max_cli_line_chars = _agent_limits()
     effective_max_rounds = (
         max_rounds if max_rounds is not None and max_rounds > 0 else config_max_rounds
     )

@@ -103,9 +103,9 @@ def test_validator_refuses_call_and_surfaces_error_to_model(monkeypatch) -> None
     assert data.get("error") == "tool_call_refused"
     assert "Office document" in (data.get("message") or "")
 
-    assert all(
-        e.get("type") != "tool_call_dispatch" for e in events
-    ), "underlying tool must not have dispatched"
+    assert all(e.get("type") != "tool_call_dispatch" for e in events), (
+        "underlying tool must not have dispatched"
+    )
 
     assert any(e.get("type") == "run_start" for e in events)
 

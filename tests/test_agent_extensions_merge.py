@@ -81,13 +81,9 @@ def test_passthrough_tools_dedupes_across_extensions() -> None:
             ),
             AgentExtension(
                 name="b",
-                terminal_only_passthrough_tools=frozenset(
-                    {"shared_tool", "b_only"}
-                ),
+                terminal_only_passthrough_tools=frozenset({"shared_tool", "b_only"}),
             ),
         ],
         **_empty_merge_kwargs(),
     )
-    assert merged.terminal_only_passthrough_tools == frozenset(
-        {"shared_tool", "b_only"}
-    )
+    assert merged.terminal_only_passthrough_tools == frozenset({"shared_tool", "b_only"})

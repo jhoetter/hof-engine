@@ -317,6 +317,11 @@ def dev(
             host,
             "--port",
             str(port),
+            # Cap graceful shutdown so a stuck WebSocket can never block a
+            # reload (the bare-/ws reconnect storm pattern would otherwise
+            # wedge `--reload` indefinitely; observed on hof-os data-app).
+            "--timeout-graceful-shutdown",
+            "5",
         ]
         if reload:
             uvicorn_cmd.append("--reload")

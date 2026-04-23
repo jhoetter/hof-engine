@@ -29,6 +29,19 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def register_router(router, *, prefix: str = "", tags=None) -> None:
+    """Mount a user-defined FastAPI router into the auto-generated app.
+
+    Re-exported from :mod:`hof.api.extensions` for convenience. Call at
+    module import time (most naturally inside a ``functions/*.py`` shim,
+    which is imported during discovery). See the module docstring there
+    for the full contract.
+    """
+    from hof.api.extensions import register_router as _register
+
+    _register(router, prefix=prefix, tags=tags)
+
+
 def emit_computation_event(channel_id: str, event: dict) -> None:
     """Emit a progress event to an SSE channel.
 
@@ -59,6 +72,7 @@ __all__ = [
     "node",
     "human_node",
     "function",
+    "register_router",
     "cron",
     "types",
     "registry",

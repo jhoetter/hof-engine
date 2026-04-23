@@ -113,6 +113,20 @@ def create_app() -> FastAPI:
     app.include_router(ws_router, tags=["realtime"])
     app.include_router(docs_router, prefix="/api/docs", tags=["docs"])
 
+    # User-defined routers registered by starters via
+    # `hof.api.extensions.register_router(...)`. These are mounted after the
+    # built-in API routers and before the user-pages catch-all so any prefix
+    # beginning with `/api/` is reachable without colliding with the SPA shell
+    # (`_mount_user_pages` registers `/{path:path}` last).
+    from hof.api.extensions import registered_routers
+
+    for entry in registered_routers():
+        app.include_router(
+            entry.router,
+            prefix=entry.prefix,
+            tags=list(entry.tags) if entry.tags else None,
+        )
+
     @app.get("/api/health")
     async def health():
         from hof.core.registry import registry

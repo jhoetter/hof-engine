@@ -41,6 +41,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import APIRouter
 
@@ -54,6 +55,14 @@ class RegisteredRouter:
     router: APIRouter
     prefix: str = ""
     tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RegisteredMiddleware:
+    """A Starlette/FastAPI middleware queued for inclusion."""
+
+    middleware_class: type
+    options: dict[str, Any]
 
 
 _REGISTERED: list[RegisteredRouter] = []
@@ -97,9 +106,47 @@ def clear_registered_routers() -> None:
     _REGISTERED.clear()
 
 
+_REGISTERED_MIDDLEWARE: list[RegisteredMiddleware] = []
+
+
+def register_middleware(middleware_class: type, **options: Any) -> None:
+    """Queue a Starlette/FastAPI middleware for the auto-generated app.
+
+    Mirrors ``register_router``: call at module import time from a
+    starter (typically a ``functions/*.py`` shim) and the middleware
+    will be installed on the FastAPI app right after CORS, before any
+    route handlers run.
+
+    Order: middlewares are installed in registration order, but
+    Starlette executes them in reverse — i.e. the *first* registered
+    middleware is the *outermost* layer (runs first on the way in,
+    last on the way out). This matches FastAPI's documented behaviour
+    for ``app.add_middleware``.
+    """
+    entry = RegisteredMiddleware(middleware_class=middleware_class, options=options)
+    _REGISTERED_MIDDLEWARE.append(entry)
+    logger.debug(
+        "Registered middleware: %s options=%r", middleware_class.__name__, options
+    )
+
+
+def registered_middlewares() -> tuple[RegisteredMiddleware, ...]:
+    """Read-only snapshot of registered middlewares, in registration order."""
+    return tuple(_REGISTERED_MIDDLEWARE)
+
+
+def clear_registered_middlewares() -> None:
+    """Reset the middleware registry (used by tests)."""
+    _REGISTERED_MIDDLEWARE.clear()
+
+
 __all__ = [
     "RegisteredRouter",
+    "RegisteredMiddleware",
     "register_router",
     "registered_routers",
     "clear_registered_routers",
+    "register_middleware",
+    "registered_middlewares",
+    "clear_registered_middlewares",
 ]

@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 USER_VITE_PORT = 5175
+VITE_BUILD_MAX_OLD_SPACE_MB = 4096
 
 
 _FAVICON_CANDIDATES = ("favicon.svg", "favicon.ico", "favicon.png", "favicon.webp")
@@ -77,6 +78,16 @@ def _hof_react_required_deps() -> list[str]:
             seen.add(name)
             names.append(name)
     return names or list(_HOF_REACT_REQUIRED_DEPS_FALLBACK)
+
+
+def _vite_build_env() -> dict[str, str]:
+    """Return an environment with enough Node heap for large Vite bundles."""
+    env = os.environ.copy()
+    node_options = env.get("NODE_OPTIONS", "")
+    if "--max-old-space-size" not in node_options:
+        build_heap = f"--max-old-space-size={VITE_BUILD_MAX_OLD_SPACE_MB}"
+        env["NODE_OPTIONS"] = f"{node_options} {build_heap}".strip()
+    return env
 
 
 def _js_regex_package_name(name: str) -> str:
@@ -457,6 +468,7 @@ class ViteManager:
                 ["npx", "vite", "build"],
                 cwd=str(self.ui_dir),
                 check=True,
+                env=_vite_build_env(),
             )
         else:
             self._build_with_inputs(inputs)
@@ -681,6 +693,7 @@ class ViteManager:
                 ["npx", "vite", "build", "--config", "_vite.build.config.ts"],
                 cwd=str(self.ui_dir),
                 check=True,
+                env=_vite_build_env(),
             )
         finally:
             build_config.unlink(missing_ok=True)

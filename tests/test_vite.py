@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hof.ui.vite import USER_VITE_PORT, ViteManager
+from hof.ui.vite import USER_VITE_PORT, VITE_BUILD_MAX_OLD_SPACE_MB, ViteManager
 
 
 @pytest.fixture
@@ -191,6 +191,10 @@ class TestBuildWithInputs:
             assert cmd == ["npx", "vite", "build", "--config", "_vite.build.config.ts"]
             assert kwargs["cwd"] == str(ui_dir)
             assert kwargs["check"] is True
+            assert (
+                f"--max-old-space-size={VITE_BUILD_MAX_OLD_SPACE_MB}"
+                in kwargs["env"]["NODE_OPTIONS"]
+            )
             build_config_path = ui_dir / "_vite.build.config.ts"
             captured["content"] = build_config_path.read_text()
             return MagicMock(returncode=0)
@@ -300,6 +304,34 @@ class TestBuildWithInputs:
         assert '{ find: "@", replacement: path.resolve(__dirname, ".") }' not in content
         assert content.index("sisterProductAtAliasPlugin()") < content.index("hostAtAliasPlugin()")
         assert "path.join(product.aliasRoot, source.slice(2))" in content
+
+    def test_build_uses_larger_node_heap_for_single_input(self, manager, ui_dir, monkeypatch):
+        from unittest.mock import patch
+
+        monkeypatch.setenv("NODE_OPTIONS", "--trace-warnings")
+        monkeypatch.setattr(manager, "ensure_setup", lambda: None)
+        monkeypatch.setattr(manager, "_preflight_check_imports", lambda: None)
+        monkeypatch.setattr(manager, "_has_components", lambda: True)
+        monkeypatch.setattr(manager, "has_pages", lambda: False)
+
+        captured: dict[str, object] = {}
+
+        def mock_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["env"] = kwargs["env"]
+            assert kwargs["cwd"] == str(ui_dir)
+            assert kwargs["check"] is True
+            return MagicMock(returncode=0)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            manager.build()
+
+        assert captured["cmd"] == ["npx", "vite", "build"]
+        env = captured["env"]
+        assert isinstance(env, dict)
+        assert env["NODE_OPTIONS"] == (
+            f"--trace-warnings --max-old-space-size={VITE_BUILD_MAX_OLD_SPACE_MB}"
+        )
 
 
 class TestCreatePackageJson:

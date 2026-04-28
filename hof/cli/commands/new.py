@@ -134,7 +134,8 @@ dependencies = [
 [tool.hatch.build.targets.wheel]
 packages = ["."]
 """,
-    "Dockerfile": """FROM python:3.11-slim
+    "Dockerfile": """# syntax=docker/dockerfile:1.7
+FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl git && \\
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \\
@@ -149,7 +150,8 @@ COPY pyproject.toml .
 RUN pip install .
 
 COPY . .
-RUN python -c "from pathlib import Path; from hof.config import load_config; \\
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \\
+    python -c "from pathlib import Path; from hof.config import load_config; \\
     from hof.ui.vite import ViteManager; c = load_config(Path('.'), strict=False); \\
     ViteManager(Path(c.ui_dir), app_name=c.app_name, project_root=Path('.')).build()"
 

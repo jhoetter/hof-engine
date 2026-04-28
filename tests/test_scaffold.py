@@ -66,6 +66,13 @@ def test_dockerfile_uses_github_token():
     assert "hof-engine" in files["Dockerfile"]
 
 
+def test_dockerfile_uses_buildkit_npm_cache():
+    files = get_project_files("test-project")
+    dockerfile = files["Dockerfile"]
+    assert "# syntax=docker/dockerfile:1.7" in dockerfile
+    assert "--mount=type=cache,target=/root/.npm,sharing=locked" in dockerfile
+
+
 def test_dockerfile_cmd_uses_uvicorn():
     files = get_project_files("test-project")
     assert "uvicorn" in files["Dockerfile"]

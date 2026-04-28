@@ -302,7 +302,16 @@ def _manual_chunks_source() -> str:
         '    if (packageName.startsWith("@vitejs/") || packageName === "vite") {\n'
         '      return "vendor-vite";\n'
         "    }\n"
-        '    return hofChunkName("vendor", packageName);\n'
+        '    if (packageName.startsWith("@blocknote/")) {\n'
+        '      return "vendor-blocknote";\n'
+        "    }\n"
+        '    if (packageName.startsWith("@officeai/") || packageName === "pdfjs-dist") {\n'
+        '      return "vendor-officeai";\n'
+        "    }\n"
+        '    if (packageName.startsWith("@mailai/") || packageName.startsWith("@collabai/") || packageName.startsWith("@driveai/") || packageName.startsWith("@pagesai/")) {\n'
+        '      return hofChunkName("vendor", packageName);\n'
+        "    }\n"
+        '    return undefined;\n'
         "  }\n\n"
         "  const sisterMatch = normalized.match(/\\/(mailai|collabai|pagesai|officeai)\\//);\n"
         "  if (sisterMatch) {\n"

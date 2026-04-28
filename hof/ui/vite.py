@@ -186,10 +186,21 @@ def _sister_product_at_alias_plugin_source(ui_dir: Path) -> str:
     products = _sister_original_roots(ui_dir)
     return (
         "function sisterProductAtAliasPlugin() {\n"
-        f"  const products = {json.dumps(products)}.map((product) => ({{\n"
-        "    sourceRoot: path.resolve(__dirname, product.sourceRoot),\n"
-        "    aliasRoot: path.resolve(__dirname, product.aliasRoot),\n"
-        "  }));\n"
+        "  const sourceRootsFor = (root) => {\n"
+        "    try {\n"
+        "      const realRoot = fs.realpathSync(root);\n"
+        "      return realRoot === root ? [root] : [root, realRoot];\n"
+        "    } catch {\n"
+        "      return [root];\n"
+        "    }\n"
+        "  };\n"
+        f"  const products = {json.dumps(products)}.map((product) => {{\n"
+        "    const sourceRoot = path.resolve(__dirname, product.sourceRoot);\n"
+        "    return {\n"
+        "      sourceRoots: sourceRootsFor(sourceRoot),\n"
+        "      aliasRoot: path.resolve(__dirname, product.aliasRoot),\n"
+        "    };\n"
+        "  });\n"
         '  const sourceExts = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs"];\n'
         "  const existingSourceFile = (base) => {\n"
         "    for (const ext of sourceExts) {\n"
@@ -215,12 +226,41 @@ def _sister_product_at_alias_plugin_source(ui_dir: Path) -> str:
         "      const importerPath = path.isAbsolute(importer) ? importer : "
         "path.resolve(__dirname, importer);\n"
         "      for (const product of products) {\n"
-        "        if (!pathInRoot(importerPath, product.sourceRoot)) continue;\n"
+        "        if (!product.sourceRoots.some((root) => pathInRoot(importerPath, root))) "
+        "continue;\n"
         "        const resolved = existingSourceFile("
         "path.join(product.aliasRoot, source.slice(2)));\n"
         "        if (resolved) return resolved;\n"
         "      }\n"
         "      return null;\n"
+        "    },\n"
+        "  };\n"
+        "}\n\n"
+    )
+
+
+def _host_at_alias_plugin_source() -> str:
+    return (
+        "function hostAtAliasPlugin() {\n"
+        '  const sourceExts = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs"];\n'
+        "  const existingSourceFile = (base) => {\n"
+        "    for (const ext of sourceExts) {\n"
+        "      const candidate = base + ext;\n"
+        "      if (fs.existsSync(candidate)) return candidate;\n"
+        "    }\n"
+        '    const indexBase = path.join(base, "index");\n'
+        "    for (const ext of sourceExts.slice(1)) {\n"
+        "      const candidate = indexBase + ext;\n"
+        "      if (fs.existsSync(candidate)) return candidate;\n"
+        "    }\n"
+        "    return null;\n"
+        "  };\n"
+        "  return {\n"
+        '    name: "host-at-alias",\n'
+        '    enforce: "pre",\n'
+        "    resolveId(source) {\n"
+        '      if (!source.startsWith("@/")) return null;\n'
+        "      return existingSourceFile(path.resolve(__dirname, source.slice(2)));\n"
         "    },\n"
         "  };\n"
         "}\n\n"
@@ -544,10 +584,7 @@ class ViteManager:
         input_obj = {Path(p).stem: p for p in inputs}
         build_config = self.ui_dir / "_vite.build.config.ts"
         ds_css = self._resolve_design_system_css()
-        alias_lines = [
-            *_sister_import_pre_alias_lines(self.ui_dir),
-            '      { find: "@", replacement: path.resolve(__dirname, ".") },',
-        ]
+        alias_lines = []
         if ds_css:
             ds_name = Path(ds_css).stem
             alias_lines.append(
@@ -597,6 +634,7 @@ class ViteManager:
         )
 
         sister_at_plugin = _sister_product_at_alias_plugin_source(self.ui_dir)
+        host_at_plugin = _host_at_alias_plugin_source()
 
         cross_module_plugin = (
             "function crossModuleResolve() {\n"
@@ -621,10 +659,11 @@ class ViteManager:
             'import tailwindcss from "@tailwindcss/vite";\n'
             + docs_plugin
             + sister_at_plugin
+            + host_at_plugin
             + cross_module_plugin
             + "export default defineConfig({\n"
             "  plugins: [spreadsheetDocsPlugin(), sisterProductAtAliasPlugin(), "
-            "crossModuleResolve(), react(), tailwindcss()],\n"
+            "hostAtAliasPlugin(), crossModuleResolve(), react(), tailwindcss()],\n"
             "  resolve: {\n"
             "    alias: [\n"
             f"{alias_block}\n"
@@ -1104,10 +1143,7 @@ class ViteManager:
 
     def _create_vite_config(self, path: Path) -> None:
         ds_css = self._resolve_design_system_css()
-        alias_lines = [
-            *_sister_import_pre_alias_lines(self.ui_dir),
-            '      { find: "@", replacement: path.resolve(__dirname, ".") },',
-        ]
+        alias_lines = []
         if ds_css:
             ds_name = Path(ds_css).stem
             alias_lines.append(
@@ -1170,6 +1206,7 @@ class ViteManager:
             "}\n\n"
         )
         sister_at_plugin = _sister_product_at_alias_plugin_source(self.ui_dir)
+        host_at_plugin = _host_at_alias_plugin_source()
 
         path.write_text(
             'import path from "path";\n'
@@ -1178,10 +1215,11 @@ class ViteManager:
             'import tailwindcss from "@tailwindcss/vite";\n'
             + docs_fn
             + sister_at_plugin
+            + host_at_plugin
             + cross_module_fn
             + "export default defineConfig({\n"
             "  plugins: [spreadsheetDocsPlugin(), sisterProductAtAliasPlugin(), "
-            "crossModuleResolve(), react(), tailwindcss()],\n"
+            "hostAtAliasPlugin(), crossModuleResolve(), react(), tailwindcss()],\n"
             "  resolve: {\n"
             "    alias: [\n"
             f"{alias_block}\n"

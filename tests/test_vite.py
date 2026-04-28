@@ -202,7 +202,10 @@ class TestBuildWithInputs:
         assert 'import path from "path";' in content
         assert "resolve:" in content
         assert "alias:" in content
-        assert '{ find: "@", replacement: path.resolve(__dirname, ".") }' in content
+        assert "hostAtAliasPlugin()" in content
+        assert '{ find: "@", replacement: path.resolve(__dirname, ".") }' not in content
+        assert "sisterProductAtAliasPlugin()" in content
+        assert content.index("sisterProductAtAliasPlugin()") < content.index("hostAtAliasPlugin()")
         assert not (ui_dir / "_vite.build.config.ts").exists()
 
     def test_temp_build_config_includes_sister_import_aliases(self, manager, ui_dir):
@@ -256,11 +259,47 @@ class TestBuildWithInputs:
         assert r"{ find: /^@mailai\/ui$/," in content
         assert 'path.resolve(__dirname, "mailai/vendor/mailai-ui/index.ts")' in content
         assert "sisterProductAtAliasPlugin()" in content
-        assert "sourceRoot: path.resolve(__dirname, product.sourceRoot)" in content
+        assert "sourceRoots: sourceRootsFor(sourceRoot)" in content
         assert "aliasRoot: path.resolve(__dirname, product.aliasRoot)" in content
         assert '"sourceRoot": "mailai/original"' in content
         assert '"aliasRoot": "mailai/original/app"' in content
         assert "preserveSymlinks: true" in content
+
+    def test_pagesai_local_at_import_resolves_before_host_fallback(self, manager, ui_dir):
+        from unittest.mock import patch
+
+        stubs = ui_dir / "sister-import-stubs"
+        stubs.mkdir()
+        (stubs / "stub-manifest.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "@pagesai/original",
+                        "path": "pagesai-original",
+                        "trampoline": {
+                            "kind": "subpath",
+                            "stagedRoot": "../../pagesai/original",
+                        },
+                    },
+                ]
+            )
+        )
+        captured: dict[str, str] = {}
+
+        def mock_run(_cmd, **_kwargs):
+            captured["content"] = (ui_dir / "_vite.build.config.ts").read_text()
+            return MagicMock(returncode=0)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            manager._build_with_inputs(["index.html"])
+
+        content = captured["content"]
+        assert '"sourceRoot": "pagesai/original"' in content
+        assert '"aliasRoot": "pagesai/original"' in content
+        assert "hostAtAliasPlugin()" in content
+        assert '{ find: "@", replacement: path.resolve(__dirname, ".") }' not in content
+        assert content.index("sisterProductAtAliasPlugin()") < content.index("hostAtAliasPlugin()")
+        assert "path.join(product.aliasRoot, source.slice(2))" in content
 
 
 class TestCreatePackageJson:

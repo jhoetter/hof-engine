@@ -154,7 +154,12 @@ def create_app() -> FastAPI:
 
 def _mount_user_ui(app: FastAPI, project_root: Path, config: Any) -> None:
     """Serve user-defined React components — proxy to Vite in dev, static in prod."""
-    user_ui_dist = project_root / config.ui_dir / "dist"
+    user_ui_dist_root = project_root / config.ui_dir / "dist"
+    user_ui_dist = (
+        user_ui_dist_root / "iframe"
+        if (user_ui_dist_root / "iframe").is_dir()
+        else user_ui_dist_root
+    )
 
     if USER_VITE_PORT:
         import re as _re
@@ -272,7 +277,10 @@ def _mount_user_pages(app: FastAPI, project_root: Path, config: Any) -> None:
     Pages live in ui/pages/*.tsx and are rendered as a standalone SPA at /.
     This catch-all is registered last so /api/*, /admin/*, /user-ui/* take priority.
     """
-    user_ui_dist = project_root / config.ui_dir / "dist"
+    user_ui_dist_root = project_root / config.ui_dir / "dist"
+    user_pages_dist = (
+        user_ui_dist_root / "app" if (user_ui_dist_root / "app").is_dir() else user_ui_dist_root
+    )
 
     if USER_VITE_PORT:
         _proxy = httpx.AsyncClient(
@@ -318,10 +326,10 @@ def _mount_user_pages(app: FastAPI, project_root: Path, config: Any) -> None:
             except _VITE_PROXY_ERRORS:
                 return Response(content="App not ready", status_code=503)
 
-    elif user_ui_dist.is_dir():
-        _static = StaticFiles(directory=str(user_ui_dist))
-        _pages_html = user_ui_dist / "_pages.html"
-        _index_html = user_ui_dist / "index.html"
+    elif user_pages_dist.is_dir():
+        _static = StaticFiles(directory=str(user_pages_dist))
+        _pages_html = user_pages_dist / "_pages.html"
+        _index_html = user_pages_dist / "index.html"
         _spa_shell = _pages_html if _pages_html.exists() else _index_html
 
         @app.api_route("/{path:path}", methods=["GET", "HEAD"])

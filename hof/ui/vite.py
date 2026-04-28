@@ -622,9 +622,33 @@ class ViteManager:
 
     def _build_with_inputs(self, inputs: list[str]) -> None:
         """Run vite build with explicit rollup input entries."""
+        input_obj = {Path(p).stem: p for p in inputs}
+        if set(inputs) == {"index.html", "_pages.html"} and len(inputs) == 2:
+            self._run_vite_build(
+                {"index": "index.html"},
+                out_dir="dist/iframe",
+                base="/user-ui/",
+            )
+            self._run_vite_build(
+                {"_pages": "_pages.html"},
+                out_dir="dist/app",
+                base="/",
+            )
+            return
+
+        base = "/user-ui/" if inputs == ["index.html"] else None
+        self._run_vite_build(input_obj, base=base)
+
+    def _run_vite_build(
+        self,
+        input_obj: dict[str, str],
+        *,
+        out_dir: str | None = None,
+        base: str | None = None,
+    ) -> None:
+        """Run one Vite build with an isolated Rollup input map."""
         import json
 
-        input_obj = {Path(p).stem: p for p in inputs}
         build_config = self.ui_dir / "_vite.build.config.ts"
         ds_css = self._resolve_design_system_css()
         alias_lines = []
@@ -696,39 +720,43 @@ class ViteManager:
             "}\n\n"
         )
 
+        base_line = f"  base: {json.dumps(base)},\n" if base else ""
+        out_dir_line = f"    outDir: {json.dumps(out_dir)},\n" if out_dir else ""
         build_config.write_text(
             'import path from "path";\n'
-            'import { defineConfig } from "vite";\n'
-            'import react from "@vitejs/plugin-react";\n'
-            'import tailwindcss from "@tailwindcss/vite";\n'
+            + 'import { defineConfig } from "vite";\n'
+            + 'import react from "@vitejs/plugin-react";\n'
+            + 'import tailwindcss from "@tailwindcss/vite";\n'
             + docs_plugin
             + sister_at_plugin
             + host_at_plugin
             + manual_chunks
             + cross_module_plugin
             + "export default defineConfig({\n"
-            "  plugins: [spreadsheetDocsPlugin(), sisterProductAtAliasPlugin(), "
-            "hostAtAliasPlugin(), crossModuleResolve(), react(), tailwindcss()],\n"
-            "  resolve: {\n"
-            "    alias: [\n"
-            f"{alias_block}\n"
-            "    ],\n"
-            f"    dedupe: {json.dumps(['react', 'react-dom'] + _hof_react_required_deps())},\n"
-            "    preserveSymlinks: true,\n"
-            "  },\n"
-            "  build: {\n"
-            "    reportCompressedSize: false,\n"
-            "    sourcemap: false,\n"
-            "    rollupOptions: {\n"
-            f"      input: {json.dumps(input_obj)},\n"
-            "      output: {\n"
-            "        manualChunks: hofManualChunks,\n"
-            '        chunkFileNames: "assets/[name]-[hash].js",\n'
-            '        entryFileNames: "assets/[name]-[hash].js",\n'
-            "      },\n"
-            "    },\n"
-            "  },\n"
-            "});\n"
+            + base_line
+            + "  plugins: [spreadsheetDocsPlugin(), sisterProductAtAliasPlugin(), "
+            + "hostAtAliasPlugin(), crossModuleResolve(), react(), tailwindcss()],\n"
+            + "  resolve: {\n"
+            + "    alias: [\n"
+            + f"{alias_block}\n"
+            + "    ],\n"
+            + f"    dedupe: {json.dumps(['react', 'react-dom'] + _hof_react_required_deps())},\n"
+            + "    preserveSymlinks: true,\n"
+            + "  },\n"
+            + "  build: {\n"
+            + out_dir_line
+            + "    reportCompressedSize: false,\n"
+            + "    sourcemap: false,\n"
+            + "    rollupOptions: {\n"
+            + f"      input: {json.dumps(input_obj)},\n"
+            + "      output: {\n"
+            + "        manualChunks: hofManualChunks,\n"
+            + '        chunkFileNames: "assets/[name]-[hash].js",\n'
+            + '        entryFileNames: "assets/[name]-[hash].js",\n'
+            + "      },\n"
+            + "    },\n"
+            + "  },\n"
+            + "});\n"
         )
         try:
             subprocess.run(

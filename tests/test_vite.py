@@ -199,7 +199,7 @@ class TestBuildWithInputs:
     def test_temp_build_config_includes_at_alias(self, manager, ui_dir):
         from unittest.mock import patch
 
-        captured: dict[str, str] = {}
+        captured: list[str] = []
 
         def mock_run(cmd, **kwargs):
             assert cmd == ["npx", "vite", "build", "--config", "_vite.build.config.ts"]
@@ -210,13 +210,22 @@ class TestBuildWithInputs:
                 in kwargs["env"]["NODE_OPTIONS"]
             )
             build_config_path = ui_dir / "_vite.build.config.ts"
-            captured["content"] = build_config_path.read_text()
+            captured.append(build_config_path.read_text())
             return MagicMock(returncode=0)
 
         with patch("subprocess.run", side_effect=mock_run):
             manager._build_with_inputs(["index.html", "_pages.html"])
 
-        content = captured["content"]
+        assert len(captured) == 2
+        iframe_content, app_content = captured
+        assert 'base: "/user-ui/"' in iframe_content
+        assert 'outDir: "dist/iframe"' in iframe_content
+        assert 'input: {"index": "index.html"}' in iframe_content
+        assert 'base: "/"' in app_content
+        assert 'outDir: "dist/app"' in app_content
+        assert 'input: {"_pages": "_pages.html"}' in app_content
+
+        content = iframe_content
         assert 'import path from "path";' in content
         assert "resolve:" in content
         assert "alias:" in content

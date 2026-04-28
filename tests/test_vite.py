@@ -363,6 +363,46 @@ class TestBuildWithInputs:
         )
 
 
+class TestBundleSummary:
+    def test_writes_summary_from_vite_manifest(self, manager, ui_dir):
+        dist = ui_dir / "dist"
+        manifest_dir = dist / "app" / ".vite"
+        assets_dir = dist / "app" / "assets"
+        manifest_dir.mkdir(parents=True)
+        assets_dir.mkdir(parents=True)
+        (assets_dir / "index-12345678.js").write_text("console.log('hello');")
+        (assets_dir / "index-12345678.css").write_text(".x{color:red}")
+        (manifest_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "_pages.html": {
+                        "file": "assets/index-12345678.js",
+                        "css": ["assets/index-12345678.css"],
+                    }
+                }
+            )
+        )
+
+        summary = manager._write_bundle_summary()
+
+        assert summary is not None
+        assert (dist / ".bundle-summary.json").exists()
+        assert summary["groups"][0]["name"] == "app"
+        assert {chunk["kind"] for chunk in summary["chunks"]} == {"script", "style"}
+
+    def test_bundle_log_line_includes_groups_and_lazy_blocknote(self, manager, ui_dir):
+        summary = {
+            "groups": [{"name": "app", "totalGzipBytes": 2048}],
+            "chunks": [{"name": "vendor-react-12345678.js", "kind": "script", "gzipBytes": 1024}],
+        }
+
+        line = manager._format_bundle_log_line(summary)
+
+        assert line.startswith("[bundle] app 2 kB")
+        assert "vendor-react 1 kB" in line
+        assert "vendor-blocknote 0 kB (lazy)" in line
+
+
 class TestCreatePackageJson:
     def test_creates_package_json(self, manager, ui_dir):
         pkg_path = ui_dir / "package.json"

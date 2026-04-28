@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import shutil
@@ -10,6 +11,8 @@ from pathlib import Path
 
 USER_VITE_PORT = 5175
 VITE_BUILD_MAX_OLD_SPACE_MB = 4096
+BUNDLE_SUMMARY_FILENAME = ".bundle-summary.json"
+BUNDLE_SUMMARY_EXTENSIONS = {".css", ".js"}
 
 
 _FAVICON_CANDIDATES = ("favicon.svg", "favicon.ico", "favicon.png", "favicon.webp")
@@ -503,6 +506,9 @@ class ViteManager:
             )
         else:
             self._build_with_inputs(inputs)
+        summary = self._write_bundle_summary()
+        if summary:
+            print(self._format_bundle_log_line(summary))
 
     def _preflight_check_imports(self) -> None:
         """Fail fast if pages/components import npm packages not in package.json.
@@ -745,6 +751,7 @@ class ViteManager:
             + "  },\n"
             + "  build: {\n"
             + out_dir_line
+            + "    manifest: true,\n"
             + "    reportCompressedSize: false,\n"
             + "    sourcemap: false,\n"
             + "    rollupOptions: {\n"
@@ -767,6 +774,169 @@ class ViteManager:
             )
         finally:
             build_config.unlink(missing_ok=True)
+
+    def _write_bundle_summary(self) -> dict | None:
+        """Write a compact bundle-size summary after Vite has produced ``dist``."""
+        dist_dir = self.ui_dir / "dist"
+        if not dist_dir.is_dir():
+            return None
+
+        chunks = self._collect_bundle_chunks(dist_dir)
+        if not chunks:
+            return None
+
+        groups: dict[str, dict[str, int | str]] = {}
+        for chunk in chunks:
+            group = str(chunk["group"])
+            item = groups.setdefault(
+                group,
+                {"name": group, "totalBytes": 0, "totalGzipBytes": 0, "chunkCount": 0},
+            )
+            item["totalBytes"] = int(item["totalBytes"]) + int(chunk["bytes"])
+            item["totalGzipBytes"] = int(item["totalGzipBytes"]) + int(chunk["gzipBytes"])
+            item["chunkCount"] = int(item["chunkCount"]) + 1
+
+        summary = {
+            "version": 1,
+            "generatedBy": "hof-engine ViteManager",
+            "totalBytes": sum(int(c["bytes"]) for c in chunks),
+            "totalGzipBytes": sum(int(c["gzipBytes"]) for c in chunks),
+            "groups": sorted(groups.values(), key=lambda g: str(g["name"])),
+            "chunks": chunks,
+        }
+        (dist_dir / BUNDLE_SUMMARY_FILENAME).write_text(json.dumps(summary, indent=2))
+        return summary
+
+    def _collect_bundle_chunks(self, dist_dir: Path) -> list[dict[str, int | str]]:
+        manifest_chunks = self._collect_manifest_bundle_chunks(dist_dir)
+        if manifest_chunks:
+            return manifest_chunks
+        return self._collect_filesystem_bundle_chunks(dist_dir)
+
+    def _collect_manifest_bundle_chunks(self, dist_dir: Path) -> list[dict[str, int | str]]:
+        seen: set[Path] = set()
+        chunks: list[dict[str, int | str]] = []
+        patterns = (
+            "manifest.json",
+            ".vite/manifest.json",
+            "*/manifest.json",
+            "*/.vite/manifest.json",
+        )
+        manifests = sorted({path for pattern in patterns for path in dist_dir.glob(pattern)})
+        for manifest in manifests:
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            group = self._bundle_group_for_manifest(dist_dir, manifest)
+            for entry in data.values():
+                if not isinstance(entry, dict):
+                    continue
+                refs: list[str] = []
+                file_ref = entry.get("file")
+                if isinstance(file_ref, str):
+                    refs.append(file_ref)
+                css_refs = entry.get("css")
+                if isinstance(css_refs, list):
+                    refs.extend(ref for ref in css_refs if isinstance(ref, str))
+                for ref in refs:
+                    base = (
+                        manifest.parent.parent
+                        if manifest.parent.name == ".vite"
+                        else manifest.parent
+                    )
+                    path = base / ref
+                    if (
+                        path.suffix not in BUNDLE_SUMMARY_EXTENSIONS
+                        or path in seen
+                        or not path.is_file()
+                    ):
+                        continue
+                    seen.add(path)
+                    chunks.append(self._bundle_chunk_for_file(dist_dir, path, group))
+        return sorted(chunks, key=lambda c: str(c["path"]))
+
+    def _collect_filesystem_bundle_chunks(self, dist_dir: Path) -> list[dict[str, int | str]]:
+        chunks: list[dict[str, int | str]] = []
+        for path in sorted(dist_dir.rglob("*")):
+            if (
+                path.is_file()
+                and path.suffix in BUNDLE_SUMMARY_EXTENSIONS
+                and BUNDLE_SUMMARY_FILENAME not in path.parts
+                and ".vite" not in path.parts
+            ):
+                group = self._bundle_group_for_file(dist_dir, path)
+                chunks.append(self._bundle_chunk_for_file(dist_dir, path, group))
+        return chunks
+
+    @staticmethod
+    def _bundle_group_for_manifest(dist_dir: Path, manifest: Path) -> str:
+        base = manifest.parent.parent if manifest.parent.name == ".vite" else manifest.parent
+        try:
+            rel = base.relative_to(dist_dir)
+        except ValueError:
+            return "root"
+        return rel.parts[0] if rel.parts else "root"
+
+    @staticmethod
+    def _bundle_group_for_file(dist_dir: Path, path: Path) -> str:
+        try:
+            rel = path.relative_to(dist_dir)
+        except ValueError:
+            return "root"
+        return rel.parts[0] if len(rel.parts) > 1 else "root"
+
+    @staticmethod
+    def _bundle_chunk_for_file(dist_dir: Path, path: Path, group: str) -> dict[str, int | str]:
+        data = path.read_bytes()
+        rel = path.relative_to(dist_dir).as_posix()
+        return {
+            "group": group,
+            "name": path.name,
+            "path": rel,
+            "kind": "style" if path.suffix == ".css" else "script",
+            "bytes": len(data),
+            "gzipBytes": len(gzip.compress(data)),
+        }
+
+    @staticmethod
+    def _format_bundle_log_line(summary: dict) -> str:
+        groups = {
+            str(group["name"]): int(group["totalGzipBytes"])
+            for group in summary.get("groups", [])
+            if isinstance(group, dict)
+        }
+        parts = [f"{name} {ViteManager._kb(size)}" for name, size in sorted(groups.items())]
+        chunks = [
+            chunk
+            for chunk in summary.get("chunks", [])
+            if isinstance(chunk, dict) and str(chunk.get("kind")) == "script"
+        ]
+        top_chunks = sorted(chunks, key=lambda c: int(c.get("gzipBytes", 0)), reverse=True)[:4]
+        parts.extend(
+            f"{ViteManager._display_chunk_name(str(chunk.get('name', 'chunk')))} "
+            f"{ViteManager._kb(int(chunk.get('gzipBytes', 0)))}"
+            for chunk in top_chunks
+        )
+        if not any("blocknote" in str(chunk.get("name", "")).lower() for chunk in chunks):
+            parts.append("vendor-blocknote 0 kB (lazy)")
+        return "[bundle] " + " / ".join(parts)
+
+    @staticmethod
+    def _display_chunk_name(name: str) -> str:
+        stem = Path(name).stem
+        parts = stem.split("-")
+        if (
+            len(parts) > 1
+            and len(parts[-1]) >= 8
+            and all(c in "0123456789abcdef" for c in parts[-1].lower())
+        ):
+            return "-".join(parts[:-1])
+        return stem
+
+    @staticmethod
+    def _kb(size: int) -> str:
+        return f"{round(size / 1024)} kB"
 
     def stop(self) -> None:
         """Stop the Vite dev server."""
@@ -1344,6 +1514,7 @@ class ViteManager:
             "    preserveSymlinks: true,\n"
             "  },\n"
             "  build: {\n"
+            "    manifest: true,\n"
             "    reportCompressedSize: false,\n"
             "    sourcemap: false,\n"
             "    rollupOptions: {\n"

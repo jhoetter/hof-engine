@@ -792,7 +792,7 @@ wheels = [
 
 [[package]]
 name = "hof-engine"
-version = "0.1.111"
+version = "0.1.112"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },

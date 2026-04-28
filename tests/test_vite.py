@@ -202,8 +202,65 @@ class TestBuildWithInputs:
         assert 'import path from "path";' in content
         assert "resolve:" in content
         assert "alias:" in content
-        assert '"@": path.resolve(__dirname, ".")' in content
+        assert '{ find: "@", replacement: path.resolve(__dirname, ".") }' in content
         assert not (ui_dir / "_vite.build.config.ts").exists()
+
+    def test_temp_build_config_includes_sister_import_aliases(self, manager, ui_dir):
+        from unittest.mock import patch
+
+        stubs = ui_dir / "sister-import-stubs"
+        stubs.mkdir()
+        (stubs / "stub-manifest.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "@mailai/pages",
+                        "path": "mailai-pages",
+                        "trampoline": {
+                            "kind": "subpath",
+                            "stagedRoot": "../../mailai/pages",
+                        },
+                    },
+                    {
+                        "name": "@mailai/ui",
+                        "path": "mailai-ui",
+                        "trampoline": {
+                            "kind": "entry",
+                            "stagedRoot": "../../mailai/vendor/mailai-ui",
+                            "entry": "index.ts",
+                        },
+                    },
+                    {
+                        "name": "@mailai/original",
+                        "path": "mailai-original",
+                        "trampoline": {
+                            "kind": "subpath",
+                            "stagedRoot": "../../mailai/original",
+                        },
+                    },
+                ]
+            )
+        )
+        captured: dict[str, str] = {}
+
+        def mock_run(_cmd, **_kwargs):
+            captured["content"] = (ui_dir / "_vite.build.config.ts").read_text()
+            return MagicMock(returncode=0)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            manager._build_with_inputs(["index.html"])
+
+        content = captured["content"]
+        assert r"{ find: /^@mailai\/pages\/(.*)$/," in content
+        assert 'path.resolve(__dirname, "mailai/pages/$1")' in content
+        assert r"{ find: /^@mailai\/ui$/," in content
+        assert 'path.resolve(__dirname, "mailai/vendor/mailai-ui/index.ts")' in content
+        assert "sisterProductAtAliasPlugin()" in content
+        assert "sourceRoot: path.resolve(__dirname, product.sourceRoot)" in content
+        assert "aliasRoot: path.resolve(__dirname, product.aliasRoot)" in content
+        assert '"sourceRoot": "mailai/original"' in content
+        assert '"aliasRoot": "mailai/original/app"' in content
+        assert "preserveSymlinks: true" in content
 
 
 class TestCreatePackageJson:

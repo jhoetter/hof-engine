@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -76,6 +77,154 @@ def _hof_react_required_deps() -> list[str]:
             seen.add(name)
             names.append(name)
     return names or list(_HOF_REACT_REQUIRED_DEPS_FALLBACK)
+
+
+def _js_regex_package_name(name: str) -> str:
+    """Escape a package name for a JavaScript regex literal delimited by ``/``."""
+    return name.replace("/", "\\/")
+
+
+def _manifest_relative_target(stub_subdir: str, staged_root: str, entry: str | None = None) -> str:
+    rel = Path("sister-import-stubs") / stub_subdir / staged_root
+    if entry:
+        rel /= entry
+    return Path(os.path.normpath(rel)).as_posix()
+
+
+def _sister_import_pre_alias_lines(ui_dir: Path) -> list[str]:
+    """Return exact aliases that must run before the host ``@`` alias."""
+    for product in _sister_original_roots(ui_dir):
+        if product["sourceRoot"] == "mailai/original":
+            inbox_target = "mailai/original/app/components/Inbox.tsx"
+            return [
+                "      { find: /^@\\/components\\/Inbox$/, "
+                f'replacement: path.resolve(__dirname, "{inbox_target}") }},'
+            ]
+    return []
+
+
+def _sister_import_alias_lines(ui_dir: Path) -> list[str]:
+    """Return Vite alias entries derived from sister-import stub metadata.
+
+    The data-app ships ``ui/sister-import-stubs/stub-manifest.json`` so npm can
+    install phantom packages.  When present, the same metadata can drive
+    build-time aliases and keep ``ViteManager.build()`` aligned with the
+    checked-in dev ``vite.config.ts``.
+    """
+    manifest = ui_dir / "sister-import-stubs" / "stub-manifest.json"
+    try:
+        entries = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(entries, list):
+        return []
+
+    lines: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        subdir = entry.get("path")
+        trampoline = entry.get("trampoline")
+        if not isinstance(name, str) or not isinstance(subdir, str):
+            continue
+        if not isinstance(trampoline, dict):
+            continue
+        kind = trampoline.get("kind")
+        staged_root = trampoline.get("stagedRoot")
+        if kind not in {"subpath", "entry"} or not isinstance(staged_root, str):
+            continue
+        escaped_name = _js_regex_package_name(name)
+        if kind == "subpath":
+            target = _manifest_relative_target(subdir, staged_root, "$1")
+            lines.append(
+                f"      {{ find: /^{escaped_name}\\/(.*)$/, "
+                f"replacement: path.resolve(__dirname, {json.dumps(target)}) }},"
+            )
+            continue
+        entry_file = trampoline.get("entry")
+        if not isinstance(entry_file, str):
+            continue
+        target = _manifest_relative_target(subdir, staged_root, entry_file)
+        lines.append(
+            f"      {{ find: /^{escaped_name}$/, "
+            f"replacement: path.resolve(__dirname, {json.dumps(target)}) }},"
+        )
+    return lines
+
+
+def _sister_original_roots(ui_dir: Path) -> list[dict[str, str]]:
+    manifest = ui_dir / "sister-import-stubs" / "stub-manifest.json"
+    try:
+        entries = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(entries, list):
+        return []
+
+    products: list[dict[str, str]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        subdir = entry.get("path")
+        trampoline = entry.get("trampoline")
+        if not isinstance(name, str) or not isinstance(subdir, str):
+            continue
+        if not name.endswith("/original") or not isinstance(trampoline, dict):
+            continue
+        staged_root = trampoline.get("stagedRoot")
+        if not isinstance(staged_root, str):
+            continue
+        source_root = _manifest_relative_target(subdir, staged_root)
+        alias_root = f"{source_root}/app" if name == "@mailai/original" else source_root
+        products.append({"sourceRoot": source_root, "aliasRoot": alias_root})
+    return products
+
+
+def _sister_product_at_alias_plugin_source(ui_dir: Path) -> str:
+    products = _sister_original_roots(ui_dir)
+    return (
+        "function sisterProductAtAliasPlugin() {\n"
+        f"  const products = {json.dumps(products)}.map((product) => ({{\n"
+        "    sourceRoot: path.resolve(__dirname, product.sourceRoot),\n"
+        "    aliasRoot: path.resolve(__dirname, product.aliasRoot),\n"
+        "  }));\n"
+        '  const sourceExts = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs"];\n'
+        "  const existingSourceFile = (base) => {\n"
+        "    for (const ext of sourceExts) {\n"
+        "      const candidate = base + ext;\n"
+        "      if (fs.existsSync(candidate)) return candidate;\n"
+        "    }\n"
+        '    const indexBase = path.join(base, "index");\n'
+        "    for (const ext of sourceExts.slice(1)) {\n"
+        "      const candidate = indexBase + ext;\n"
+        "      if (fs.existsSync(candidate)) return candidate;\n"
+        "    }\n"
+        "    return null;\n"
+        "  };\n"
+        "  const pathInRoot = (filePath, root) => {\n"
+        "    const withSep = root.endsWith(path.sep) ? root : `${root}${path.sep}`;\n"
+        "    return filePath === root || filePath.startsWith(withSep);\n"
+        "  };\n"
+        "  return {\n"
+        '    name: "sister-product-at-alias",\n'
+        '    enforce: "pre",\n'
+        "    resolveId(source, importer) {\n"
+        '      if (!importer || !source.startsWith("@/")) return null;\n'
+        "      const importerPath = path.isAbsolute(importer) ? importer : "
+        "path.resolve(__dirname, importer);\n"
+        "      for (const product of products) {\n"
+        "        if (!pathInRoot(importerPath, product.sourceRoot)) continue;\n"
+        "        const resolved = existingSourceFile("
+        "path.join(product.aliasRoot, source.slice(2)));\n"
+        "        if (resolved) return resolved;\n"
+        "      }\n"
+        "      return null;\n"
+        "    },\n"
+        "  };\n"
+        "}\n\n"
+    )
 
 
 class ViteManager:
@@ -395,23 +544,28 @@ class ViteManager:
         input_obj = {Path(p).stem: p for p in inputs}
         build_config = self.ui_dir / "_vite.build.config.ts"
         ds_css = self._resolve_design_system_css()
-        alias_lines = ['      "@": path.resolve(__dirname, "."),']
+        alias_lines = [
+            *_sister_import_pre_alias_lines(self.ui_dir),
+            '      { find: "@", replacement: path.resolve(__dirname, ".") },',
+        ]
         if ds_css:
             ds_name = Path(ds_css).stem
             alias_lines.append(
-                '      "@hof-design-system.css": '
-                f'path.resolve(__dirname, "design-systems/{ds_name}.css"),'
+                '      { find: "@hof-design-system.css", '
+                f'replacement: path.resolve(__dirname, "design-systems/{ds_name}.css") }},'
             )
         comp_ts = self.ui_dir.parent / "computation-ts" / "src" / "index.ts"
         if comp_ts.exists():
             alias_lines.append(
-                '      "@hofos/computation-formula": '
-                'path.resolve(__dirname, "../computation-ts/src/index.ts"),'
+                '      { find: "@hofos/computation-formula", '
+                'replacement: path.resolve(__dirname, "../computation-ts/src/index.ts") },'
             )
         for dev_alias, target_pkg in _HOF_ENGINE_DEV_ALIASES:
             alias_lines.append(
-                f'      "{dev_alias}": path.resolve(__dirname, "node_modules/{target_pkg}"),'
+                f'      {{ find: "{dev_alias}", replacement: path.resolve(__dirname, '
+                f'"node_modules/{target_pkg}") }},'
             )
+        alias_lines.extend(_sister_import_alias_lines(self.ui_dir))
         alias_block = "\n".join(alias_lines)
 
         docs_plugin = (
@@ -442,6 +596,8 @@ class ViteManager:
             "}\n\n"
         )
 
+        sister_at_plugin = _sister_product_at_alias_plugin_source(self.ui_dir)
+
         cross_module_plugin = (
             "function crossModuleResolve() {\n"
             "  const re = /(?:\\.\\.\\/)+(?:modules\\/)?[^/]+\\/ui\\//;\n"
@@ -464,14 +620,17 @@ class ViteManager:
             'import react from "@vitejs/plugin-react";\n'
             'import tailwindcss from "@tailwindcss/vite";\n'
             + docs_plugin
+            + sister_at_plugin
             + cross_module_plugin
             + "export default defineConfig({\n"
-            "  plugins: [spreadsheetDocsPlugin(), crossModuleResolve(), react(), tailwindcss()],\n"
+            "  plugins: [spreadsheetDocsPlugin(), sisterProductAtAliasPlugin(), "
+            "crossModuleResolve(), react(), tailwindcss()],\n"
             "  resolve: {\n"
-            "    alias: {\n"
+            "    alias: [\n"
             f"{alias_block}\n"
-            "    },\n"
+            "    ],\n"
             f"    dedupe: {json.dumps(['react', 'react-dom'] + _hof_react_required_deps())},\n"
+            "    preserveSymlinks: true,\n"
             "  },\n"
             "  build: {\n"
             f"    rollupOptions: {{ input: {json.dumps(input_obj)} }},\n"
@@ -945,25 +1104,29 @@ class ViteManager:
 
     def _create_vite_config(self, path: Path) -> None:
         ds_css = self._resolve_design_system_css()
-        ds_alias = ""
+        alias_lines = [
+            *_sister_import_pre_alias_lines(self.ui_dir),
+            '      { find: "@", replacement: path.resolve(__dirname, ".") },',
+        ]
         if ds_css:
             ds_name = Path(ds_css).stem
-            ds_alias = (
-                '      "@hof-design-system.css": '
-                f'path.resolve(__dirname, "design-systems/{ds_name}.css"),\n'
+            alias_lines.append(
+                '      { find: "@hof-design-system.css", '
+                f'replacement: path.resolve(__dirname, "design-systems/{ds_name}.css") }},'
             )
         comp_ts = self.ui_dir.parent / "computation-ts" / "src" / "index.ts"
-        comp_alias = ""
         if comp_ts.exists():
-            comp_alias = (
-                '      "@hofos/computation-formula": '
-                'path.resolve(__dirname, "../computation-ts/src/index.ts"),\n'
+            alias_lines.append(
+                '      { find: "@hofos/computation-formula", '
+                'replacement: path.resolve(__dirname, "../computation-ts/src/index.ts") },'
             )
-        dev_alias_block = ""
         for dev_alias, target_pkg in _HOF_ENGINE_DEV_ALIASES:
-            dev_alias_block += (
-                f'      "{dev_alias}": path.resolve(__dirname, "node_modules/{target_pkg}"),\n'
+            alias_lines.append(
+                f'      {{ find: "{dev_alias}", replacement: path.resolve(__dirname, '
+                f'"node_modules/{target_pkg}") }},'
             )
+        alias_lines.extend(_sister_import_alias_lines(self.ui_dir))
+        alias_block = "\n".join(alias_lines)
         docs_fn = (
             'import fs from "node:fs";\n'
             "function spreadsheetDocsPlugin() {\n"
@@ -1006,23 +1169,25 @@ class ViteManager:
             "  };\n"
             "}\n\n"
         )
+        sister_at_plugin = _sister_product_at_alias_plugin_source(self.ui_dir)
+
         path.write_text(
             'import path from "path";\n'
             'import { defineConfig } from "vite";\n'
             'import react from "@vitejs/plugin-react";\n'
             'import tailwindcss from "@tailwindcss/vite";\n'
             + docs_fn
+            + sister_at_plugin
             + cross_module_fn
             + "export default defineConfig({\n"
-            "  plugins: [spreadsheetDocsPlugin(), crossModuleResolve(), react(), tailwindcss()],\n"
+            "  plugins: [spreadsheetDocsPlugin(), sisterProductAtAliasPlugin(), "
+            "crossModuleResolve(), react(), tailwindcss()],\n"
             "  resolve: {\n"
-            "    alias: {\n"
-            '      "@": path.resolve(__dirname, "."),\n'
-            + ds_alias
-            + comp_alias
-            + dev_alias_block
-            + "    },\n"
+            "    alias: [\n"
+            f"{alias_block}\n"
+            "    ],\n"
             f"    dedupe: {json.dumps(['react', 'react-dom'] + _hof_react_required_deps())},\n"
+            "    preserveSymlinks: true,\n"
             "  },\n"
             "  server: {\n"
             f"    port: {USER_VITE_PORT},\n"

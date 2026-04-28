@@ -125,9 +125,7 @@ def register_middleware(middleware_class: type, **options: Any) -> None:
     """
     entry = RegisteredMiddleware(middleware_class=middleware_class, options=options)
     _REGISTERED_MIDDLEWARE.append(entry)
-    logger.debug(
-        "Registered middleware: %s options=%r", middleware_class.__name__, options
-    )
+    logger.debug("Registered middleware: %s options=%r", middleware_class.__name__, options)
 
 
 def registered_middlewares() -> tuple[RegisteredMiddleware, ...]:

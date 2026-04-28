@@ -117,7 +117,8 @@ class TestGenerateEntryPoint:
         manager._generate_entry_point()
         content = (ui_dir / "_hof_entry.tsx").read_text()
         assert "MyWidget" in content
-        assert "./components/MyWidget" in content
+        assert 'React.lazy(() => import("./components/MyWidget")' in content
+        assert "import { MyWidget" not in content
 
     def test_entry_registers_component_in_registry(self, manager, ui_dir):
         (ui_dir / "components" / "ReviewForm.tsx").write_text(
@@ -125,7 +126,9 @@ class TestGenerateEntryPoint:
         )
         manager._generate_entry_point()
         content = (ui_dir / "_hof_entry.tsx").read_text()
-        assert '"ReviewForm": ReviewForm' in content
+        assert '"ReviewForm": React.lazy' in content
+        assert "default: mod.ReviewForm" in content
+        assert "<Suspense fallback={<RouteLoader />}" in content
 
     def test_entry_has_message_listener(self, manager, ui_dir):
         (ui_dir / "components" / "Comp.tsx").write_text("export function Comp() { return null; }\n")
@@ -180,6 +183,17 @@ class TestCreateViteConfig:
         # Should NOT have base: "/user-ui/" (that was the bug we fixed)
         assert 'base: "/user-ui/"' not in content
 
+    def test_vite_config_splits_large_build_chunks(self, manager, ui_dir):
+        config_path = ui_dir / "vite.config.ts"
+        manager._create_vite_config(config_path)
+        content = config_path.read_text()
+        assert "function hofManualChunks(id)" in content
+        assert "manualChunks: hofManualChunks" in content
+        assert "chunkFileNames" in content
+        assert "entryFileNames" in content
+        assert "reportCompressedSize: false" in content
+        assert "sourcemap: false" in content
+
 
 class TestBuildWithInputs:
     def test_temp_build_config_includes_at_alias(self, manager, ui_dir):
@@ -210,6 +224,12 @@ class TestBuildWithInputs:
         assert '{ find: "@", replacement: path.resolve(__dirname, ".") }' not in content
         assert "sisterProductAtAliasPlugin()" in content
         assert content.index("sisterProductAtAliasPlugin()") < content.index("hostAtAliasPlugin()")
+        assert "function hofManualChunks(id)" in content
+        assert "manualChunks: hofManualChunks" in content
+        assert "chunkFileNames" in content
+        assert "entryFileNames" in content
+        assert "reportCompressedSize: false" in content
+        assert "sourcemap: false" in content
         assert not (ui_dir / "_vite.build.config.ts").exists()
 
     def test_temp_build_config_includes_sister_import_aliases(self, manager, ui_dir):
@@ -692,6 +712,9 @@ class TestGeneratePagesEntry:
         manager._generate_pages_entry()
         content = (ui_dir / "_hof_pages_entry.tsx").read_text()
         assert "function App()" in content
+        assert 'React.lazy(() => import("./pages/index"))' in content
+        assert 'React.lazy(() => import("./pages/about"))' in content
+        assert "<Suspense fallback={<RouteLoader />}" in content
         assert 'path: "/"' in content
         assert 'path: "/about"' in content
         assert "ShellRouter" not in content
@@ -719,6 +742,8 @@ class TestGeneratePagesEntry:
         content = (ui_dir / "_hof_pages_entry.tsx").read_text()
         assert "ShellRouter" in content
         assert "LayoutProvider" in content
+        assert 'React.lazy(() => import("./pages/settings"))' in content
+        assert "<Suspense fallback={<RouteLoader />}" in content
         assert 'path: "/"' in content
         assert 'path: "/settings"' in content
         assert "function App()" not in content

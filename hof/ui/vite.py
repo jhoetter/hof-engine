@@ -278,6 +278,37 @@ def _host_at_alias_plugin_source() -> str:
     )
 
 
+def _manual_chunks_source() -> str:
+    return (
+        "function hofChunkName(prefix, raw) {\n"
+        '  return `${prefix}-${raw.replace(/^@/, "").replace(/[^A-Za-z0-9_-]+/g, "-")}`;\n'
+        "}\n\n"
+        "function hofManualChunks(id) {\n"
+        '  const normalized = id.split(path.sep).join("/");\n'
+        '  const nodeModules = "/node_modules/";\n'
+        "  const nodeIndex = normalized.lastIndexOf(nodeModules);\n"
+        "  if (nodeIndex >= 0) {\n"
+        "    const packagePath = normalized.slice(nodeIndex + nodeModules.length);\n"
+        '    const segments = packagePath.split("/");\n'
+        '    const packageName = packagePath.startsWith("@")\n'
+        '      ? segments.slice(0, 2).join("/")\n'
+        "      : segments[0];\n"
+        '    if (["react", "react-dom", "scheduler"].includes(packageName)) {\n'
+        '      return "vendor-react";\n'
+        "    }\n"
+        '    if (packageName.startsWith("@vitejs/") || packageName === "vite") {\n'
+        '      return "vendor-vite";\n'
+        "    }\n"
+        '    return hofChunkName("vendor", packageName);\n'
+        "  }\n\n"
+        "  const sisterMatch = normalized.match(/\\/(mailai|collabai|pagesai|officeai)\\//);\n"
+        "  if (sisterMatch) {\n"
+        "    return `sister-${sisterMatch[1]}`;\n"
+        "  }\n"
+        "}\n\n"
+    )
+
+
 class ViteManager:
     """Manages the Vite dev server for user-defined React components and pages."""
 
@@ -647,6 +678,7 @@ class ViteManager:
 
         sister_at_plugin = _sister_product_at_alias_plugin_source(self.ui_dir)
         host_at_plugin = _host_at_alias_plugin_source()
+        manual_chunks = _manual_chunks_source()
 
         cross_module_plugin = (
             "function crossModuleResolve() {\n"
@@ -672,6 +704,7 @@ class ViteManager:
             + docs_plugin
             + sister_at_plugin
             + host_at_plugin
+            + manual_chunks
             + cross_module_plugin
             + "export default defineConfig({\n"
             "  plugins: [spreadsheetDocsPlugin(), sisterProductAtAliasPlugin(), "
@@ -684,7 +717,16 @@ class ViteManager:
             "    preserveSymlinks: true,\n"
             "  },\n"
             "  build: {\n"
-            f"    rollupOptions: {{ input: {json.dumps(input_obj)} }},\n"
+            "    reportCompressedSize: false,\n"
+            "    sourcemap: false,\n"
+            "    rollupOptions: {\n"
+            f"      input: {json.dumps(input_obj)},\n"
+            "      output: {\n"
+            "        manualChunks: hofManualChunks,\n"
+            '        chunkFileNames: "assets/[name]-[hash].js",\n'
+            '        entryFileNames: "assets/[name]-[hash].js",\n'
+            "      },\n"
+            "    },\n"
             "  },\n"
             "});\n"
         )
@@ -731,7 +773,6 @@ class ViteManager:
         components_dir = self.ui_dir / "components"
         tsx_files = sorted(components_dir.glob("*.tsx")) if components_dir.is_dir() else []
 
-        imports: list[str] = []
         registry_entries: list[str] = []
 
         for f in tsx_files:
@@ -740,22 +781,26 @@ class ViteManager:
             if kind is None:
                 continue
             if kind == "default":
-                imports.append(f'import {stem} from "./components/{stem}";')
+                loader = f'React.lazy(() => import("./components/{stem}"))'
             else:
-                imports.append(f'import {{ {stem} }} from "./components/{stem}";')
-            registry_entries.append(f'  "{stem}": {stem},')
-
-        imports_block = "\n".join(imports) + "\n" if imports else ""
+                loader = (
+                    f'React.lazy(() => import("./components/{stem}")'
+                    f".then((mod) => ({{ default: mod.{stem} }})))"
+                )
+            registry_entries.append(f'  "{stem}": {loader},')
 
         not_found_msg = "Component ${componentName} not found"
         loaded_keys = "Object.keys(components)"
 
         entry = (
-            'import React from "react";\n'
+            'import React, { Suspense } from "react";\n'
             'import { createRoot } from "react-dom/client";\n'
-            + imports_block
             + "\n"
-            + "const components: Record<string, React.ComponentType<any>> = {\n"
+            + "function RouteLoader() {\n"
+            + "  return <div style={{ padding: '1rem' }}>Loading...</div>;\n"
+            + "}\n\n"
+            + "type HofComponent = React.LazyExoticComponent<React.ComponentType<any>>;\n\n"
+            + "const components: Record<string, HofComponent> = {\n"
             + "\n".join(registry_entries)
             + "\n};\n\n"
             + "// Listen for render requests from the parent (admin UI)\n"
@@ -779,7 +824,9 @@ class ViteManager:
             + "  };\n"
             + "\n"
             + "  createRoot(target).render(\n"
-            + "    React.createElement(Component, { ...props, onComplete })\n"
+            + "    <Suspense fallback={<RouteLoader />}>\n"
+            + "      <Component {...props} onComplete={onComplete} />\n"
+            + "    </Suspense>\n"
             + "  );\n"
             + "\n"
             + "  window.parent.postMessage({ type: 'hof:ready' }, '*');\n"
@@ -857,23 +904,25 @@ class ViteManager:
         if not tsx_files:
             return
 
-        imports: list[str] = []
+        page_loaders: list[str] = []
         route_entries: list[str] = []
 
         for f in tsx_files:
             stem = f.stem
             var_name = f"Page_{stem.replace('-', '_')}"
-            imports.append(f'import {var_name} from "./pages/{stem}";')
+            page_loaders.append(f'const {var_name} = React.lazy(() => import("./pages/{stem}"));')
             route_path = "/" if stem == "index" else f"/{stem}"
-            route_entries.append(f'  {{ path: "{route_path}", component: {var_name} }},')
+            route_entries.append(
+                f'  {{ path: "{route_path}", component: {var_name} as React.ComponentType }},'
+            )
 
         has_auth_provider = (self.ui_dir / "components" / "AuthProvider.tsx").is_file()
         use_shell = self._has_shell_router()
 
         if use_shell:
-            entry = self._pages_entry_with_shell(imports, route_entries, has_auth_provider)
+            entry = self._pages_entry_with_shell(page_loaders, route_entries, has_auth_provider)
         else:
-            entry = self._pages_entry_bare(imports, route_entries, has_auth_provider)
+            entry = self._pages_entry_bare(page_loaders, route_entries, has_auth_provider)
 
         entry_path = self.ui_dir / "_hof_pages_entry.tsx"
         existing = entry_path.read_text() if entry_path.exists() else ""
@@ -882,57 +931,72 @@ class ViteManager:
 
     def _pages_entry_with_shell(
         self,
-        page_imports: list[str],
+        page_loaders: list[str],
         route_entries: list[str],
         has_auth_provider: bool,
     ) -> str:
         """Generate entry that delegates to ShellRouter + LayoutProvider."""
         imports: list[str] = [
             'import "./app.css";',
-            'import React from "react";',
+            'import React, { Suspense } from "react";',
             'import { createRoot } from "react-dom/client";',
             'import { ShellRouter } from "./ShellRouter";',
             'import { LayoutProvider } from "./components/LayoutContext";',
         ]
-        imports.extend(page_imports)
 
         if has_auth_provider:
             imports.append('import { AuthProvider } from "./components/AuthProvider";')
 
+        loaders_block = "\n".join(page_loaders) + "\n"
         routes_block = "const routes = [\n" + "\n".join(route_entries) + "\n];\n"
+        fallback = (
+            "function RouteLoader() {\n"
+            "  return <div style={{ padding: '1rem' }}>Loading...</div>;\n"
+            "}\n"
+        )
 
-        inner = "      <ShellRouter routes={routes} />"
+        shell = "<ShellRouter routes={routes} />"
         if has_auth_provider:
-            inner = (
-                "      <AuthProvider>\n"
-                "        <ShellRouter routes={routes} />\n"
-                "      </AuthProvider>"
+            shell = (
+                "<AuthProvider>\n          <ShellRouter routes={routes} />\n        </AuthProvider>"
             )
 
         render_block = (
             'createRoot(document.getElementById("hof-root")!).render(\n'
             "  <React.StrictMode>\n"
-            "    <LayoutProvider>\n" + inner + "\n"
+            "    <LayoutProvider>\n"
+            "      <Suspense fallback={<RouteLoader />}>\n"
+            f"        {shell}\n"
+            "      </Suspense>\n"
             "    </LayoutProvider>\n"
             "  </React.StrictMode>\n"
             ");\n"
         )
 
-        return "\n".join(imports) + "\n\n" + routes_block + "\n" + render_block
+        return (
+            "\n".join(imports)
+            + "\n\n"
+            + loaders_block
+            + "\n"
+            + routes_block
+            + "\n"
+            + fallback
+            + "\n"
+            + render_block
+        )
 
     def _pages_entry_bare(
         self,
-        page_imports: list[str],
+        page_loaders: list[str],
         route_entries: list[str],
         has_auth_provider: bool,
     ) -> str:
         """Generate a minimal inline-router entry (no shell layout)."""
         imports: list[str] = [
             'import "./app.css";',
-            'import React, { useState, useEffect } from "react";',
+            'import React, { Suspense, useState, useEffect } from "react";',
             'import { createRoot } from "react-dom/client";',
         ]
-        imports.extend(page_imports)
 
         if has_auth_provider:
             imports.append('import { AuthProvider } from "./components/AuthProvider";')
@@ -943,9 +1007,14 @@ class ViteManager:
         return (
             "\n".join(imports)
             + "\n\n"
+            + "\n".join(page_loaders)
+            + "\n\n"
             + "const routes: { path: string; component: React.ComponentType }[] = [\n"
             + "\n".join(route_entries)
             + "\n];\n\n"
+            + "function RouteLoader() {\n"
+            + "  return <div style={{ padding: '1rem' }}>Loading...</div>;\n"
+            + "}\n\n"
             + "function App() {\n"
             + "  const [path, setPath] = useState(window.location.pathname);\n"
             + "\n"
@@ -966,7 +1035,11 @@ class ViteManager:
             + "  }\n"
             + "\n"
             + "  const Page = match.component;\n"
-            + "  return <Page />;\n"
+            + "  return (\n"
+            + "    <Suspense fallback={<RouteLoader />}>\n"
+            + "      <Page />\n"
+            + "    </Suspense>\n"
+            + "  );\n"
             + "}\n\n"
             + 'createRoot(document.getElementById("hof-root")!).render(\n'
             + "  <React.StrictMode>\n"
@@ -1220,6 +1293,7 @@ class ViteManager:
         )
         sister_at_plugin = _sister_product_at_alias_plugin_source(self.ui_dir)
         host_at_plugin = _host_at_alias_plugin_source()
+        manual_chunks = _manual_chunks_source()
 
         path.write_text(
             'import path from "path";\n'
@@ -1229,6 +1303,7 @@ class ViteManager:
             + docs_fn
             + sister_at_plugin
             + host_at_plugin
+            + manual_chunks
             + cross_module_fn
             + "export default defineConfig({\n"
             "  plugins: [spreadsheetDocsPlugin(), sisterProductAtAliasPlugin(), "
@@ -1239,6 +1314,17 @@ class ViteManager:
             "    ],\n"
             f"    dedupe: {json.dumps(['react', 'react-dom'] + _hof_react_required_deps())},\n"
             "    preserveSymlinks: true,\n"
+            "  },\n"
+            "  build: {\n"
+            "    reportCompressedSize: false,\n"
+            "    sourcemap: false,\n"
+            "    rollupOptions: {\n"
+            "      output: {\n"
+            "        manualChunks: hofManualChunks,\n"
+            '        chunkFileNames: "assets/[name]-[hash].js",\n'
+            '        entryFileNames: "assets/[name]-[hash].js",\n'
+            "      },\n"
+            "    },\n"
             "  },\n"
             "  server: {\n"
             f"    port: {USER_VITE_PORT},\n"

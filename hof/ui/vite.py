@@ -10,7 +10,27 @@ import subprocess
 from pathlib import Path
 
 USER_VITE_PORT = 5175
-VITE_BUILD_MAX_OLD_SPACE_MB = 4096
+
+
+def _vite_build_heap_default() -> int:
+    """Resolve the Node old-space-size cap for `vite build`.
+
+    Override via ``HOF_VITE_BUILD_MAX_OLD_SPACE_MB`` on cells with little RAM
+    and no swap (e.g. CX22 with 3.7 GB and 0 swap), where the default 4 GB
+    heap can be oom-killed by the kernel mid-`rendering chunks…`.
+    """
+    raw = os.environ.get("HOF_VITE_BUILD_MAX_OLD_SPACE_MB")
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return 4096
+
+
+VITE_BUILD_MAX_OLD_SPACE_MB = _vite_build_heap_default()
 BUNDLE_SUMMARY_FILENAME = ".bundle-summary.json"
 BUNDLE_SUMMARY_EXTENSIONS = {".css", ".js"}
 
@@ -308,10 +328,15 @@ def _manual_chunks_source() -> str:
         '    if (packageName.startsWith("@officeai/") || packageName === "pdfjs-dist") {\n'
         '      return "vendor-officeai";\n'
         "    }\n"
-        '    if (packageName.startsWith("@mailai/") || packageName.startsWith("@collabai/") || packageName.startsWith("@driveai/") || packageName.startsWith("@pagesai/")) {\n'
+        "    if (\n"
+        '      packageName.startsWith("@mailai/") ||\n'
+        '      packageName.startsWith("@collabai/") ||\n'
+        '      packageName.startsWith("@driveai/") ||\n'
+        '      packageName.startsWith("@pagesai/")\n'
+        "    ) {\n"
         '      return hofChunkName("vendor", packageName);\n'
         "    }\n"
-        '    return undefined;\n'
+        "    return undefined;\n"
         "  }\n\n"
         "  const sisterMatch = normalized.match(/\\/(mailai|collabai|pagesai|officeai)\\//);\n"
         "  if (sisterMatch) {\n"

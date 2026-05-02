@@ -409,9 +409,18 @@ def _start_admin_vite(
     # silence stdout (noisy progress) but keep stderr on the dev
     # terminal so resolve / config / plugin errors don't get swallowed
     # and surface as a confusing 503 from the host FastAPI proxy.
+    vite_host = os.environ.get("HOF_VITE_DEV_HOST", "127.0.0.1")
     processes.append(
         subprocess.Popen(
-            ["npx", "vite", "--port", str(ADMIN_VITE_PORT), "--strictPort"],
+            [
+                "npx",
+                "vite",
+                "--host",
+                vite_host,
+                "--port",
+                str(ADMIN_VITE_PORT),
+                "--strictPort",
+            ],
             cwd=str(ADMIN_UI_DIR),
             env=env,
             stdout=subprocess.DEVNULL,

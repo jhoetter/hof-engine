@@ -508,8 +508,18 @@ class ViteManager:
         # crash silently leaves the user-vite port unbound and the host
         # FastAPI proxy returns 503 ("App not ready") with no indication
         # of why — costly to debug.
+        merged = {**os.environ, **(env or {})}
+        vite_host = merged.get("HOF_VITE_DEV_HOST", "127.0.0.1")
         self.process = subprocess.Popen(
-            ["npx", "vite", "--port", str(port), "--strictPort"],
+            [
+                "npx",
+                "vite",
+                "--host",
+                vite_host,
+                "--port",
+                str(port),
+                "--strictPort",
+            ],
             cwd=str(self.ui_dir),
             env=env,
             stdout=subprocess.DEVNULL,
@@ -1560,12 +1570,16 @@ class ViteManager:
             "    },\n"
             "  },\n"
             "  server: {\n"
+            '    host: "127.0.0.1",\n'
             f"    port: {USER_VITE_PORT},\n"
+            "    strictPort: true,\n"
             "    hmr: {\n"
+            '      host: "127.0.0.1",\n'
+            f"      port: {USER_VITE_PORT},\n"
             f"      clientPort: {USER_VITE_PORT},\n"
             "    },\n"
             "    proxy: {\n"
-            '      "/api": "http://localhost:8001",\n'
+            '      "/api": "http://127.0.0.1:8001",\n'
             "    },\n"
             "    fs: {\n"
             '      allow: [".."],\n'

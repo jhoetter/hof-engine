@@ -21,6 +21,11 @@ ADMIN_UI_DIR = Path(__file__).resolve().parent.parent / "ui" / "admin"
 ADMIN_VITE_PORT = int(os.environ.get("HOF_ADMIN_VITE_PORT", "0"))
 USER_VITE_PORT = int(os.environ.get("HOF_USER_VITE_PORT", "0"))
 
+# Vite + httpx on macOS: ``localhost`` can resolve to IPv6 first while Node binds ``127.0.0.1``
+# only (or the reverse), causing refused sockets, flaky proxies, or very long waits. Use the
+# IPv4 loopback for dev proxies unless overridden (e.g. containers where 127.0.0.1 is wrong).
+_VITE_DEV_HOST = (os.environ.get("HOF_VITE_DEV_HOST") or "127.0.0.1").strip()
+
 # Vite may still be binding when the API is already up; httpx raises Timeout on slow connects.
 # RemoteProtocolError happens when Vite restarts/disconnects mid-request (HMR reloads, crashes).
 _VITE_PROXY_ERRORS = (
@@ -31,9 +36,11 @@ _VITE_PROXY_ERRORS = (
     httpx.WriteError,
 )
 
-# httpx defaults to 5s; first Vite compile / large graphs often exceed that. Without a
-# generous timeout, TimeoutException maps to 503 "App not ready" (see _VITE_PROXY_ERRORS).
-_VITE_PROXY_TIMEOUT = httpx.Timeout(120.0)
+# Split the timeout so a wedged Vite (CPU starved by sister Vite servers, etc.) cannot
+# hang :3000 for two minutes. Vite is on localhost — if it's accepting sockets at all the
+# connect is instant, so a short connect cap returns 503 fast when Vite is down. Reads
+# stay generous because first compile / cold transforms still take real time.
+_VITE_PROXY_TIMEOUT = httpx.Timeout(connect=3.0, read=120.0, write=10.0, pool=10.0)
 
 
 def create_app() -> FastAPI:
@@ -165,7 +172,7 @@ def _mount_user_ui(app: FastAPI, project_root: Path, config: Any) -> None:
         import re as _re
 
         _proxy = httpx.AsyncClient(
-            base_url=f"http://localhost:{USER_VITE_PORT}",
+            base_url=f"http://{_VITE_DEV_HOST}:{USER_VITE_PORT}",
             timeout=_VITE_PROXY_TIMEOUT,
         )
 
@@ -221,7 +228,7 @@ def _mount_admin_ui(app: FastAPI) -> None:
 
     if ADMIN_VITE_PORT:
         _proxy = httpx.AsyncClient(
-            base_url=f"http://localhost:{ADMIN_VITE_PORT}",
+            base_url=f"http://{_VITE_DEV_HOST}:{ADMIN_VITE_PORT}",
             timeout=_VITE_PROXY_TIMEOUT,
         )
 
@@ -284,7 +291,7 @@ def _mount_user_pages(app: FastAPI, project_root: Path, config: Any) -> None:
 
     if USER_VITE_PORT:
         _proxy = httpx.AsyncClient(
-            base_url=f"http://localhost:{USER_VITE_PORT}",
+            base_url=f"http://{_VITE_DEV_HOST}:{USER_VITE_PORT}",
             timeout=_VITE_PROXY_TIMEOUT,
         )
 
